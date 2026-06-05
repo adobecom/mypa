@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, KeyboardEvent } from 'react'
-import { Sparkles, ArrowUp } from 'lucide-react'
+import { Sparkles, ArrowUp, Square } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage } from '../../../../../../shared/types'
@@ -11,6 +11,7 @@ interface Props {
   onSend: (msg: string) => void
   sendDisabled?: boolean
   error?: string | null
+  onStop?: () => void
 }
 
 export default function ChatThread({
@@ -19,7 +20,8 @@ export default function ChatThread({
   streamingContent,
   onSend,
   sendDisabled,
-  error
+  error,
+  onStop
 }: Props): React.ReactElement {
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -96,13 +98,19 @@ export default function ChatThread({
           onKeyDown={handleKey}
           disabled={sendDisabled || streaming}
         />
-        <button
-          className="chat-send-btn"
-          onClick={handleSend}
-          disabled={!input.trim() || sendDisabled || streaming}
-        >
-          <ArrowUp size={13} />
-        </button>
+        {streaming && onStop ? (
+          <button className="chat-stop-btn" onClick={onStop} title="Stop">
+            <Square size={13} />
+          </button>
+        ) : (
+          <button
+            className="chat-send-btn"
+            onClick={handleSend}
+            disabled={!input.trim() || sendDisabled || streaming}
+          >
+            <ArrowUp size={13} />
+          </button>
+        )}
       </div>
     </div>
   )

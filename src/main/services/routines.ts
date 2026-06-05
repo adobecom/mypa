@@ -131,7 +131,8 @@ export async function handleRunMessage(
       (full) => {
         fullResponse = full
       },
-      run.raw_output ?? undefined
+      run.raw_output ?? undefined,
+      runId
     )
     const toSave = segments.filter((s) => s.trim())
     for (const seg of toSave.length > 0 ? toSave : [fullResponse]) {

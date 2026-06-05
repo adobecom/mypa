@@ -73,7 +73,12 @@ function RoutineAiSetup({
   )
 }
 
-export default function RoutinesManager(): React.ReactElement {
+interface Props {
+  editRoutineId?: string | null
+  onEditHandled?: () => void
+}
+
+export default function RoutinesManager({ editRoutineId, onEditHandled }: Props): React.ReactElement {
   const [routines, setRoutines] = useState<Routine[]>([])
   const [showForm, setShowForm] = useState(false)
   const [showAiSetup, setShowAiSetup] = useState(false)
@@ -86,6 +91,15 @@ export default function RoutinesManager(): React.ReactElement {
   useEffect(() => {
     api.routines.getAll().then((r) => { setRoutines(r); setLoading(false) })
   }, [])
+
+  useEffect(() => {
+    if (!editRoutineId || routines.length === 0) return
+    const routine = routines.find((r) => r.id === editRoutineId)
+    if (routine) {
+      setEditing(routine)
+      onEditHandled?.()
+    }
+  }, [editRoutineId, routines])
 
   const handleCreate = async (data: Omit<Routine, 'id' | 'created_at'>) => {
     const r = await api.routines.create(data)

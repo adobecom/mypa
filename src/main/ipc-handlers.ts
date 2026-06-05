@@ -17,13 +17,13 @@ import { testServer, getServerStatus, connectAllServers } from './services/mcp'
 import { startDeviceFlow, pollDeviceFlow, startPkceFlow } from './services/oauth'
 import { executeRoutine, handleRunMessage } from './services/routines'
 import { createPlanDraft, confirmPlanDraft, updatePlanItemStatus, deletePlanItem, handlePlanMessage } from './services/plan'
-import { generateRoutineSetup } from './services/claude'
+import { generateRoutineSetup, cancelStream } from './services/claude'
 import { refreshSchedules } from './services/cron'
 import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, McpServerConfig } from '@shared/types'
 
 export function registerIpcHandlers(
   getWidgetWin: () => BrowserWindow | null,
-  openMainWindow: () => void
+  openMainWindow: () => BrowserWindow
 ): void {
 
   // ─── Plan ─────────────────────────────────────────────────────────────────
@@ -54,6 +54,10 @@ export function registerIpcHandlers(
 
   ipcMain.handle('plan:get-thread', async (_e, itemId: string) => {
     return dbGetPlanThread(itemId)
+  })
+
+  ipcMain.handle('plan:cancel-stream', (_e, itemId: string) => {
+    cancelStream(itemId)
   })
 
   // ─── Routines ──────────────────────────────────────────────────────────────
@@ -112,6 +116,10 @@ export function registerIpcHandlers(
     return generateRoutineSetup(intent, servers)
   })
 
+  ipcMain.handle('routines:cancel-stream', (_e, runId: string) => {
+    cancelStream(runId)
+  })
+
   // ─── Config ────────────────────────────────────────────────────────────────
 
   ipcMain.handle('config:get', async () => {
@@ -149,8 +157,18 @@ export function registerIpcHandlers(
 
   // ─── System ────────────────────────────────────────────────────────────────
 
-  ipcMain.handle('system:open-main-window', async () => {
-    openMainWindow()
+  ipcMain.handle('system:open-main-window', async (_e, routineId?: string) => {
+    const win = openMainWindow()
+    if (routineId) {
+      const send = (): void => win.webContents.send('navigate:edit-routine', routineId)
+      const url = win.webContents.getURL()
+      const ready = url !== '' && url !== 'about:blank' && !win.webContents.isLoading()
+      if (ready) {
+        send()
+      } else {
+        win.webContents.once('did-finish-load', send)
+      }
+    }
   })
 
   ipcMain.handle('system:get-badge-count', async () => {

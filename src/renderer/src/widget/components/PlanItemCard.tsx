@@ -69,6 +69,12 @@ export default function PlanItemCard({
     }
   }
 
+  const handleStop = async () => {
+    await api.plan.cancelStream(item.id)
+    setStreaming(false)
+    setStreamContent('')
+  }
+
   const handleSend = async (msg: string) => {
     setChatError(null)
     setStreaming(true)
@@ -104,6 +110,7 @@ export default function PlanItemCard({
               streaming={streaming}
               streamingContent={streamContent}
               onSend={handleSend}
+              onStop={handleStop}
               sendDisabled={streaming}
               error={chatError}
             />

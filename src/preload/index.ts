@@ -9,7 +9,8 @@ const api: IpcApi = {
     updateStatus: (id, status) => ipcRenderer.invoke('plan:update-status', id, status),
     delete: (id) => ipcRenderer.invoke('plan:delete', id),
     sendMessage: (itemId, message) => ipcRenderer.invoke('plan:send-message', itemId, message),
-    getThread: (itemId) => ipcRenderer.invoke('plan:get-thread', itemId)
+    getThread: (itemId) => ipcRenderer.invoke('plan:get-thread', itemId),
+    cancelStream: (itemId) => ipcRenderer.invoke('plan:cancel-stream', itemId)
   },
   routines: {
     getAll: () => ipcRenderer.invoke('routines:get-all'),
@@ -22,7 +23,8 @@ const api: IpcApi = {
     getThread: (runId) => ipcRenderer.invoke('routines:get-thread', runId),
     sendMessage: (runId, message) => ipcRenderer.invoke('routines:send-message', runId, message),
     updateRunStatus: (runId, status) => ipcRenderer.invoke('routines:update-run-status', runId, status),
-    generateSetup: (intent) => ipcRenderer.invoke('routines:generate-setup', intent)
+    generateSetup: (intent) => ipcRenderer.invoke('routines:generate-setup', intent),
+    cancelStream: (runId) => ipcRenderer.invoke('routines:cancel-stream', runId)
   },
   config: {
     get: () => ipcRenderer.invoke('config:get'),
@@ -36,7 +38,7 @@ const api: IpcApi = {
     startPkce: (provider: 'notion' | 'linear') => ipcRenderer.invoke('oauth:start-pkce', provider)
   },
   system: {
-    openMainWindow: () => ipcRenderer.invoke('system:open-main-window'),
+    openMainWindow: (routineId?: string) => ipcRenderer.invoke('system:open-main-window', routineId),
     getBadgeCount: () => ipcRenderer.invoke('system:get-badge-count'),
     getWindowType: () => {
       // Determined by the HTML file loaded

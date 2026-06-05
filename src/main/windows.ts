@@ -43,8 +43,10 @@ export function createWidgetWindow(): BrowserWindow {
 
   // Hide instead of close when user closes
   widgetWin.on('close', (e) => {
-    e.preventDefault()
-    widgetWin?.hide()
+    if (!isQuitting) {
+      e.preventDefault()
+      widgetWin?.hide()
+    }
   })
 
   widgetWin.on('blur', () => {

@@ -198,7 +198,6 @@ html, body, #root {
   display: flex;
   align-items: center;
   gap: 9px;
-  -webkit-app-region: no-drag;
   position: relative;
 }
 

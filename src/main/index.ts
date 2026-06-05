@@ -73,7 +73,7 @@ async function main(): Promise<void> {
   // Register IPC handlers
   registerIpcHandlers(
     () => getWidgetWindow(),
-    () => openOrFocusMainWindow()
+    openOrFocusMainWindow
   )
 
   // Connect MCP servers
@@ -89,6 +89,8 @@ async function main(): Promise<void> {
   app.on('before-quit', () => {
     setQuitting()
     stopScheduler()
+    disconnectAllServers()
+    destroyTray()
   })
 
   win.show()

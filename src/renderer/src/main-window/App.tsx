@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Zap, List, Settings as SettingsIcon } from 'lucide-react'
 import LogoMark from '../LogoMark'
 import AmbientBackground from '../AmbientBackground'
@@ -16,6 +16,14 @@ const NAV: { id: Page; icon: React.ReactNode; label: string }[] = [
 
 export default function App(): React.ReactElement {
   const [page, setPage] = useState<Page>('routines')
+  const [editRoutineId, setEditRoutineId] = useState<string | null>(null)
+
+  useEffect(() => {
+    return window.electron.on('navigate:edit-routine', (id) => {
+      setPage('routines')
+      setEditRoutineId(id as string)
+    })
+  }, [])
 
   return (
     <div style={{ position: 'relative', height: '100vh', overflow: 'hidden', background: 'var(--bg-base)' }}>
@@ -42,7 +50,12 @@ export default function App(): React.ReactElement {
         </aside>
 
         <main className="main-content">
-          {page === 'routines' && <RoutinesManager />}
+          {page === 'routines' && (
+            <RoutinesManager
+              editRoutineId={editRoutineId}
+              onEditHandled={() => setEditRoutineId(null)}
+            />
+          )}
           {page === 'logs' && <RunLogs />}
           {page === 'settings' && <Settings />}
         </main>

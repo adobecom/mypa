@@ -1,6 +1,7 @@
 import { execFile, execSync, spawn } from 'child_process'
 import { existsSync } from 'fs'
 import { promisify } from 'util'
+import cron from 'node-cron'
 import { readConfig } from './config'
 import type { PlanDraft, PlanItemTiming, ChatMessage, McpServerStatus, RoutineAction, RoutineSetupDraft } from '@shared/types'
 
@@ -22,6 +23,8 @@ function getClaude(): string {
   if (!_claudeBin) _claudeBin = findClaude()
   return _claudeBin
 }
+
+const activeStreams = new Map<string, { proc: import('child_process').ChildProcess; killed: boolean }>()
 
 function modelArgs(): string[] {
   const model = readConfig().claude.model
@@ -67,7 +70,8 @@ function parseStreamEvent(line: string, full: string, onChunk: (chunk: string) =
 async function runClaudeStream(
   systemPrompt: string,
   messages: { role: string; content: string }[],
-  onChunk: (chunk: string) => void
+  onChunk: (chunk: string) => void,
+  streamId?: string
 ): Promise<string> {
   const history = messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')
   const fullPrompt = `${systemPrompt}\n\n${history}`
@@ -84,6 +88,9 @@ async function runClaudeStream(
     let buf = ''
     let stderr = ''
 
+    const entry = { proc, killed: false }
+    if (streamId) activeStreams.set(streamId, entry)
+
     proc.stderr?.on('data', (data: Buffer) => { stderr += data.toString() })
 
     proc.stdout.on('data', (data: Buffer) => {
@@ -96,18 +103,30 @@ async function runClaudeStream(
     })
 
     proc.on('close', (code) => {
-      // Flush any remaining buffered line
       if (buf.trim()) {
         full = parseStreamEvent(buf, full, onChunk)
       }
-      if (code !== 0 && !full) {
-        reject(new Error(stderr.trim() || `Claude process exited with code ${code}`))
+      if (streamId) activeStreams.delete(streamId)
+      if (entry.killed || (code !== 0 && !full)) {
+        reject(new Error(entry.killed ? 'Cancelled' : (stderr.trim() || `Claude process exited with code ${code}`)))
         return
       }
       resolve(full)
     })
-    proc.on('error', reject)
+    proc.on('error', (err) => {
+      if (streamId) activeStreams.delete(streamId)
+      reject(err)
+    })
   })
+}
+
+export function cancelStream(streamId: string): boolean {
+  const entry = activeStreams.get(streamId)
+  if (!entry) return false
+  entry.killed = true
+  entry.proc.kill('SIGTERM')
+  activeStreams.delete(streamId)
+  return true
 }
 
 // ─── Plan item draft ─────────────────────────────────────────────────────────
@@ -225,13 +244,20 @@ ${toolCatalog || '(none connected)'}
 Return JSON:
 {
   "name": "Short routine name (max 50 chars, action-oriented)",
+  "cron": "cron expression for when to run. Use comma-separated hours for multiple times, e.g. \\"0 9,17 * * 1-5\\". Default to \\"0 9 * * 1-5\\" if no time is mentioned.",
   "actions": [
     { "server": "<exact server name>", "tool": "<exact tool name>", "params": { ... } }
   ],
   "prompt": "2-4 sentence digest instructions specific to this routine's purpose."
 }
 
-Rules: Only use server/tool names that appear verbatim above. If no tools match, set actions to []. params must be a JSON object, never null or an array.`
+Cron rules:
+- Format: "0 <hour(s)> * * <dow>" (minute is always 0)
+- Single time: "0 9 * * 1-5" = 9 AM weekdays
+- Multiple times: "0 9,17 * * 1-5" = 9 AM and 5 PM weekdays
+- All days: use "*" for dow; weekdays only: use "1-5"
+- Hours are 0-23 (9=9AM, 17=5PM). "twice daily" or "9 and 5" → "0 9,17 * * *"
+- Only server/tool names verbatim from above. params must be a JSON object, never null or an array.`
   )
 
   const jsonMatch = text.match(/\{[\s\S]*\}/)
@@ -259,6 +285,9 @@ Rules: Only use server/tool names that appear verbatim above. If no tools match,
           : {}
     }))
 
+  const rawCron = typeof parsed.cron === 'string' ? parsed.cron : undefined
+  const validatedCron = rawCron && cron.validate(rawCron) ? rawCron : undefined
+
   return {
     name:
       typeof parsed.name === 'string' ? parsed.name.slice(0, 50) : intent.slice(0, 50),
@@ -266,7 +295,8 @@ Rules: Only use server/tool names that appear verbatim above. If no tools match,
     prompt:
       typeof parsed.prompt === 'string'
         ? parsed.prompt
-        : 'Summarize the most important items that need my attention.\nBe concise. Highlight anything urgent or time-sensitive.\nPropose 2-3 specific follow-up actions I can take.'
+        : 'Summarize the most important items that need my attention.\nBe concise. Highlight anything urgent or time-sensitive.\nPropose 2-3 specific follow-up actions I can take.',
+    cron: validatedCron
   }
 }
 
@@ -277,7 +307,8 @@ export async function streamChat(
   userMessage: string,
   onChunk: (chunk: string) => void,
   onDone: (fullText: string) => void,
-  rawContext?: string
+  rawContext?: string,
+  streamId?: string
 ): Promise<void> {
   const messages = [
     ...history.map((m) => ({ role: m.role, content: m.content })),
@@ -288,7 +319,7 @@ export async function streamChat(
     ? `You are mypa, a personal assistant for developers. Be concise and action-oriented.\n\nOriginal data collected by this routine:\n${rawContext}`
     : 'You are mypa, a personal assistant for developers. Be concise and action-oriented.'
 
-  const full = await runClaudeStream(systemPrompt, messages, onChunk)
+  const full = await runClaudeStream(systemPrompt, messages, onChunk, streamId)
 
   onDone(full)
 }

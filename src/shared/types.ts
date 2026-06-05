@@ -53,6 +53,7 @@ export interface RoutineSetupDraft {
   name: string
   actions: RoutineAction[]
   prompt: string
+  cron?: string
 }
 
 export type RunStatus = 'running' | 'pending_response' | 'in_progress' | 'resolved' | 'dismissed' | 'error'
@@ -152,6 +153,7 @@ export interface IpcApi {
     delete(id: string): Promise<void>
     sendMessage(itemId: string, message: string): Promise<void>
     getThread(itemId: string): Promise<ChatMessage[]>
+    cancelStream(itemId: string): Promise<void>
   }
   routines: {
     getAll(): Promise<Routine[]>
@@ -165,6 +167,7 @@ export interface IpcApi {
     sendMessage(runId: string, message: string): Promise<void>
     updateRunStatus(runId: string, status: RunStatus): Promise<void>
     generateSetup(intent: string): Promise<RoutineSetupDraft>
+    cancelStream(runId: string): Promise<void>
   }
   config: {
     get(): Promise<AppConfig>
@@ -178,7 +181,7 @@ export interface IpcApi {
     startPkce(provider: 'notion' | 'linear'): Promise<string>
   }
   system: {
-    openMainWindow(): Promise<void>
+    openMainWindow(routineId?: string): Promise<void>
     getBadgeCount(): Promise<number>
     getWindowType(): 'widget' | 'main-window'
   }
@@ -188,7 +191,8 @@ export interface IpcApi {
       | 'routine:run-completed'
       | 'routine:run-message'
       | 'plan:item-message'
-      | 'badge:updated',
+      | 'badge:updated'
+      | 'navigate:edit-routine',
     listener: (...args: unknown[]) => void
   ): () => void
 }

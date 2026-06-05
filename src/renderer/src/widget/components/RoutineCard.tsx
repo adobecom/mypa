@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, Settings } from 'lucide-react'
 import ChatThread from './ChatThread'
 import type { RoutineRun, ChatMessage } from '../../../../../../shared/types'
 
 interface Props {
   run: RoutineRun
   onRunChange: (run: RoutineRun) => void
+  collapsed?: boolean
 }
 
 function parseDigest(digest: string | null): { summary: string; items: string[]; proposed_actions: string[] } | null {
@@ -18,8 +19,8 @@ function formatTime(ts: string): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-export default function RoutineCard({ run, onRunChange }: Props): React.ReactElement {
-  const [expanded, setExpanded] = useState(run.status === 'pending_response')
+export default function RoutineCard({ run, onRunChange, collapsed }: Props): React.ReactElement {
+  const [expanded, setExpanded] = useState(!collapsed && run.status === 'pending_response')
   const [thread, setThread] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
@@ -65,6 +66,12 @@ export default function RoutineCard({ run, onRunChange }: Props): React.ReactEle
     await api.routines.sendMessage(run.id, msg)
   }
 
+  const handleStop = async () => {
+    await api.routines.cancelStream(run.id)
+    setStreaming(false)
+    setStreamContent('')
+  }
+
   const handleDismiss = async () => {
     await api.routines.updateRunStatus(run.id, 'dismissed')
     onRunChange({ ...run, status: 'dismissed' })
@@ -91,7 +98,11 @@ export default function RoutineCard({ run, onRunChange }: Props): React.ReactEle
 
   return (
     <div className={cardClass}>
-      <div className="routine-card__header" onClick={() => setExpanded((e) => !e)}>
+      <div
+        className="routine-card__header"
+        onClick={() => !collapsed && setExpanded((e) => !e)}
+        style={collapsed ? { cursor: 'default' } : undefined}
+      >
         <span className={dotClass} />
         <div className="routine-card__meta">
           <div className="routine-card__name">{run.routine_name}</div>
@@ -108,10 +119,19 @@ export default function RoutineCard({ run, onRunChange }: Props): React.ReactEle
           )}
         </div>
         <span className="routine-card__time">{formatTime(run.started_at)}</span>
-        <span className={`routine-card__expand-icon${expanded ? ' open' : ''}`}><ChevronDown size={12} /></span>
+        <button
+          className="routine-card__cog-btn"
+          onClick={(e) => { e.stopPropagation(); window.electron.system.openMainWindow(run.routine_id) }}
+          title="Edit routine"
+        >
+          <Settings size={11} />
+        </button>
+        {!collapsed && (
+          <span className={`routine-card__expand-icon${expanded ? ' open' : ''}`}><ChevronDown size={12} /></span>
+        )}
       </div>
 
-      {expanded && (
+      {!collapsed && expanded && (
         <div className="routine-card__body">
           {digest && digest.items.length > 0 && (
             <div style={{ marginBottom: 10 }}>
@@ -128,6 +148,7 @@ export default function RoutineCard({ run, onRunChange }: Props): React.ReactEle
             streaming={streaming}
             streamingContent={streamContent}
             onSend={handleSend}
+            onStop={handleStop}
             sendDisabled={streaming || run.status === 'running'}
             error={chatError}
           />
