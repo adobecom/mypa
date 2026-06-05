@@ -125,6 +125,36 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
     oauthProvider: 'linear',
     oauthTokenEnvKey: 'LINEAR_API_KEY'
   },
+  {
+    id: 'jira',
+    name: 'Jira',
+    description: 'Read and update Jira issues, sprints, and projects',
+    category: 'Productivity',
+    command: 'npx',
+    baseArgs: ['-y', '--package', 'jsdom', '--package', 'mcp-atlassian', 'mcp-atlassian'],
+    authType: 'api_key',
+    requiredEnv: [
+      {
+        key: 'ATLASSIAN_BASE_URL',
+        label: 'Jira site URL',
+        placeholder: 'https://yourorg.atlassian.net',
+        secret: false
+      },
+      {
+        key: 'ATLASSIAN_EMAIL',
+        label: 'Atlassian email',
+        placeholder: 'you@example.com',
+        secret: false
+      },
+      {
+        key: 'ATLASSIAN_API_TOKEN',
+        label: 'API token',
+        placeholder: 'Paste your Atlassian API token',
+        hint: 'Generate at id.atlassian.com/manage-profile/security/api-tokens',
+        secret: true
+      }
+    ]
+  },
   // ─── Data ────────────────────────────────────────────────────────────────────
   {
     id: 'brave-search',

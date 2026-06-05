@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useRef, useMemo, useEffect } from 'react'
 import { ArrowLeft, Check, ExternalLink } from 'lucide-react'
 import { MCP_CATALOG, CATALOG_CATEGORIES, type McpCatalogEntry } from '@shared/mcp-catalog'
 import type { McpServerConfig, DeviceFlowStart } from '@shared/types'
@@ -33,39 +33,81 @@ function CatalogGrid({
   onSelect: (entry: McpCatalogEntry) => void
   onCancel: () => void
 }): React.ReactElement {
+  const [query, setQuery] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  const isSearching = query.trim().length > 0
+  const q = query.toLowerCase().trim()
+
+  const filtered = useMemo(() => {
+    if (!q) return MCP_CATALOG
+    return MCP_CATALOG
+      .filter((e) => e.name.toLowerCase().includes(q) || e.description.toLowerCase().includes(q))
+      .sort((a, b) => {
+        const aName = a.name.toLowerCase().includes(q)
+        const bName = b.name.toLowerCase().includes(q)
+        return bName && !aName ? 1 : aName && !bName ? -1 : 0
+      })
+  }, [q])
+
+  const renderRow = (entry: McpCatalogEntry) => (
+    <button
+      key={entry.id}
+      className="btn btn--ghost"
+      onClick={() => onSelect(entry)}
+      style={{ justifyContent: 'flex-start', textAlign: 'left', padding: '6px 10px', gap: 10 }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 500 }}>{entry.name}</div>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.description}</div>
+      </div>
+      <AuthBadge authType={entry.authType} />
+    </button>
+  )
+
   return (
     <div style={{ marginTop: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ fontWeight: 600, fontSize: 13 }}>Choose a server to add</div>
         <button className="btn btn--ghost btn--sm" onClick={onCancel}>Cancel</button>
       </div>
-      {CATALOG_CATEGORIES.map((category) => {
-        const entries = MCP_CATALOG.filter((e) => e.category === category)
-        if (entries.length === 0) return null
-        return (
-          <div key={category} style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>
-              {category}
+
+      <input
+        ref={inputRef}
+        className="form-input"
+        placeholder="Search servers…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        style={{ marginBottom: 10 }}
+      />
+
+      {filtered.length === 0 && (
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '16px 0' }}>
+          No servers match "{query}"
+        </div>
+      )}
+
+      {isSearching ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {filtered.map(renderRow)}
+        </div>
+      ) : (
+        CATALOG_CATEGORIES.map((category) => {
+          const entries = MCP_CATALOG.filter((e) => e.category === category)
+          if (entries.length === 0) return null
+          return (
+            <div key={category} style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
+                {category}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {entries.map(renderRow)}
+              </div>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {entries.map((entry) => (
-                <button
-                  key={entry.id}
-                  className="btn btn--ghost"
-                  onClick={() => onSelect(entry)}
-                  style={{ justifyContent: 'flex-start', textAlign: 'left', padding: '8px 10px', gap: 10 }}
-                >
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500 }}>{entry.name}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{entry.description}</div>
-                  </div>
-                  <AuthBadge authType={entry.authType} />
-                </button>
-              ))}
-            </div>
-          </div>
-        )
-      })}
+          )
+        })
+      )}
     </div>
   )
 }
