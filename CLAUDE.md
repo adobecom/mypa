@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## First-time setup
+
+Copy `.env.example` to `.env` and fill in credentials for the OAuth providers you need:
+
+```bash
+cp .env.example .env
+```
+
+Each provider requires its own OAuth app registration (callback URL: `mypa://oauth/callback`). See the comments in `src/shared/oauth-config.ts` for registration links. In CI or GitHub Actions, set the same variable names as repository secrets/environment variables instead of a `.env` file.
+
 ## Commands
 
 ```bash

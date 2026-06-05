@@ -1,3 +1,4 @@
+import 'dotenv/config'
 import { app, BrowserWindow, nativeImage } from 'electron'
 import { handleOAuthCallback } from './services/oauth'
 import { join } from 'path'
