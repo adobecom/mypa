@@ -1,11 +1,9 @@
-import { execFile, execSync, spawn } from 'child_process'
+import { execSync, spawn } from 'child_process'
 import { existsSync } from 'fs'
-import { promisify } from 'util'
 import cron from 'node-cron'
 import { readConfig } from './config'
 import type { PlanDraft, PlanItemTiming, ChatMessage, McpServerStatus, RoutineAction, RoutineSetupDraft } from '@shared/types'
 
-const execFileAsync = promisify(execFile)
 
 function findClaude(): string {
   try {
@@ -33,12 +31,24 @@ function modelArgs(): string[] {
 
 async function runClaude(systemPrompt: string, userPrompt: string): Promise<string> {
   const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
-  const { stdout } = await execFileAsync(
-    getClaude(),
-    ['-p', fullPrompt, '--output-format', 'text', '--verbose', ...modelArgs()],
-    { timeout: 60_000, maxBuffer: 10 * 1024 * 1024, input: '' }
-  )
-  return stdout.trim()
+  return new Promise((resolve, reject) => {
+    const proc = spawn(
+      getClaude(),
+      ['-p', fullPrompt, '--output-format', 'text', ...modelArgs()],
+      { stdio: ['ignore', 'pipe', 'pipe'] }
+    )
+    let stdout = ''
+    let stderr = ''
+    const timer = setTimeout(() => { proc.kill(); reject(new Error('Claude timed out')) }, 120_000)
+    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString() })
+    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
+    proc.on('close', (code) => {
+      clearTimeout(timer)
+      if (code !== 0) reject(new Error(`Command failed: ${stderr || stdout}`))
+      else resolve(stdout.trim())
+    })
+    proc.on('error', (err) => { clearTimeout(timer); reject(err) })
+  })
 }
 
 function parseStreamEvent(line: string, full: string, onChunk: (chunk: string) => void): string {
@@ -226,10 +236,12 @@ export async function generateRoutineSetup(
     .map(
       (s) =>
         `Server: ${s.name}\nTools:\n${s.tools
-          .map(
-            (t) =>
-              `  - name: ${t.name}\n    description: ${t.description}\n    inputSchema: ${JSON.stringify(t.inputSchema)}`
-          )
+          .map((t) => {
+            const props = Object.entries(t.inputSchema?.properties ?? {})
+              .map(([k, v]: [string, any]) => `${k}(${v.type ?? 'any'})`)
+              .join(', ')
+            return `  - name: ${t.name}\n    description: ${t.description}\n    params: {${props}}`
+          })
           .join('\n')}`
     )
     .join('\n\n')
