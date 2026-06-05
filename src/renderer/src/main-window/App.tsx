@@ -5,6 +5,8 @@ import AmbientBackground from '../AmbientBackground'
 import RoutinesManager from './components/RoutinesManager'
 import Settings from './components/Settings'
 import RunLogs from './components/RunLogs'
+import OnboardingWizard from './components/OnboardingWizard'
+import type { AppConfig } from '@shared/types'
 
 type Page = 'routines' | 'logs' | 'settings'
 
@@ -17,6 +19,11 @@ const NAV: { id: Page; icon: React.ReactNode; label: string }[] = [
 export default function App(): React.ReactElement {
   const [page, setPage] = useState<Page>('routines')
   const [editRoutineId, setEditRoutineId] = useState<string | null>(null)
+  const [config, setConfig] = useState<AppConfig | null>(null)
+
+  useEffect(() => {
+    window.electron.config.get().then(setConfig)
+  }, [])
 
   useEffect(() => {
     return window.electron.on('navigate:edit-routine', (id) => {
@@ -24,6 +31,25 @@ export default function App(): React.ReactElement {
       setEditRoutineId(id as string)
     })
   }, [])
+
+  if (!config) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: 'var(--bg-base)', color: 'var(--text-muted)', fontSize: 13 }}>
+        Loading…
+      </div>
+    )
+  }
+
+  if (!config.onboarding_complete) {
+    return (
+      <div style={{ position: 'relative', height: '100vh', overflow: 'hidden', background: 'var(--bg-base)' }}>
+        <AmbientBackground variant="main" />
+        <div style={{ position: 'relative', zIndex: 1, overflowY: 'auto', height: '100%' }}>
+          <OnboardingWizard onComplete={() => window.electron.config.get().then(setConfig)} />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={{ position: 'relative', height: '100vh', overflow: 'hidden', background: 'var(--bg-base)' }}>

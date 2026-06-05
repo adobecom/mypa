@@ -126,10 +126,27 @@ export interface AppPreferences {
   launch_on_login: boolean
 }
 
+export interface OAuthAppCredential {
+  clientId: string
+  clientSecret?: string
+}
+
 export interface AppConfig {
   claude: ClaudeConfig
   mcp_servers: McpServerConfig[]
   preferences: AppPreferences
+  persona?: string
+  oauth_apps?: {
+    github?: OAuthAppCredential
+    notion?: OAuthAppCredential
+    linear?: OAuthAppCredential
+  }
+  onboarding_complete?: boolean
+  oauth_connected_at?: {
+    github?: string
+    notion?: string
+    linear?: string
+  }
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -139,7 +156,24 @@ export const DEFAULT_CONFIG: AppConfig = {
     widget_always_on_top: false,
     notification_sound: true,
     launch_on_login: false
-  }
+  },
+  onboarding_complete: false
+}
+
+// ─── Setup / Health ───────────────────────────────────────────────────────────
+
+export interface SetupHealthServer {
+  name: string
+  connected: boolean
+  missingEnvKeys: string[]
+  oauthProvider?: OAuthProvider
+  oauthConnectedAt?: string
+  oauthStaleDays?: number
+}
+
+export interface SetupHealth {
+  claudeCli: boolean
+  servers: SetupHealthServer[]
 }
 
 // ─── IPC API shape ───────────────────────────────────────────────────────────
@@ -179,6 +213,10 @@ export interface IpcApi {
     startDevice(): Promise<DeviceFlowStart>
     pollDevice(deviceCode: string): Promise<string>
     startPkce(provider: 'notion' | 'linear'): Promise<string>
+  }
+  setup: {
+    checkPrerequisites(): Promise<{ claudeCli: boolean }>
+    getHealth(): Promise<SetupHealth>
   }
   system: {
     openMainWindow(routineId?: string): Promise<void>

@@ -37,6 +37,10 @@ const api: IpcApi = {
     pollDevice: (deviceCode: string) => ipcRenderer.invoke('oauth:poll-device', deviceCode),
     startPkce: (provider: 'notion' | 'linear') => ipcRenderer.invoke('oauth:start-pkce', provider)
   },
+  setup: {
+    checkPrerequisites: () => ipcRenderer.invoke('setup:check-prerequisites'),
+    getHealth: () => ipcRenderer.invoke('setup:get-health')
+  },
   system: {
     openMainWindow: (routineId?: string) => ipcRenderer.invoke('system:open-main-window', routineId),
     getBadgeCount: () => ipcRenderer.invoke('system:get-badge-count'),

@@ -1,5 +1,7 @@
-import React, { useState, useEffect } from 'react'
-import type { AppConfig, McpServerConfig, McpServerStatus } from '@shared/types'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import { Check, AlertTriangle, XCircle, RefreshCw } from 'lucide-react'
+import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth } from '@shared/types'
+import { MCP_CATALOG } from '@shared/mcp-catalog'
 import ServerCatalogPicker from './ServerCatalogPicker'
 
 export default function Settings(): React.ReactElement {
@@ -10,13 +12,34 @@ export default function Settings(): React.ReactElement {
   const [showNewServer, setShowNewServer] = useState(false)
   const [testing, setTesting] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<{ name: string; ok: boolean; error?: string } | null>(null)
+  const [health, setHealth] = useState<SetupHealth | null>(null)
+  const [healthLoading, setHealthLoading] = useState(false)
 
   const api = window.electron
+
+  const refreshHealth = useCallback(async () => {
+    setHealthLoading(true)
+    try {
+      setHealth(await api.setup.getHealth())
+    } finally {
+      setHealthLoading(false)
+    }
+  }, [api])
 
   useEffect(() => {
     api.config.get().then(setConfig)
     api.config.getMcpStatus().then(setStatus)
+    refreshHealth()
   }, [])
+
+  const usedProviders = useMemo(() => {
+    const providers = new Set<OAuthProvider>()
+    for (const srv of config?.mcp_servers ?? []) {
+      const entry = MCP_CATALOG.find((e) => e.id === srv.name)
+      if (entry?.oauthProvider) providers.add(entry.oauthProvider as OAuthProvider)
+    }
+    return providers
+  }, [config?.mcp_servers])
 
   if (!config) return <div style={{ padding: 24, color: 'var(--text-muted)' }}>Loading…</div>
 
@@ -26,7 +49,8 @@ export default function Settings(): React.ReactElement {
       await api.config.update(config)
       setSaved(true)
       setTimeout(() => setSaved(false), 2500)
-      setStatus(await api.config.getMcpStatus())
+      const [newStatus] = await Promise.all([api.config.getMcpStatus(), refreshHealth()])
+      setStatus(newStatus)
     } finally {
       setSaving(false)
     }
@@ -51,17 +75,66 @@ export default function Settings(): React.ReactElement {
     }
   }
 
+  const setOAuthField = (
+    provider: 'github' | 'notion' | 'linear',
+    field: keyof OAuthAppCredential,
+    value: string
+  ) => {
+    setConfig({
+      ...config,
+      oauth_apps: {
+        ...config.oauth_apps,
+        [provider]: {
+          clientId: '',
+          ...(config.oauth_apps?.[provider] ?? {}),
+          [field]: value
+        }
+      }
+    })
+  }
+
+  const handleCredentialSave = async (provider: OAuthProvider, creds: OAuthAppCredential) => {
+    await api.config.update({
+      oauth_apps: { [provider]: creds } as Partial<AppConfig>['oauth_apps'],
+      oauth_connected_at: { [provider]: new Date().toISOString() } as Partial<AppConfig>['oauth_connected_at']
+    } as Partial<AppConfig>)
+    setConfig({ ...config, oauth_apps: { ...config.oauth_apps, [provider]: creds } })
+    await refreshHealth()
+  }
+
   return (
     <div>
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <div className="page-title">Settings</div>
-            <div className="page-subtitle">Configure Claude and MCP integrations</div>
+            <div className="page-subtitle">Configure your assistant and integrations</div>
           </div>
           <button className="btn btn--primary" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving…' : saved ? 'Saved' : 'Save changes'}
           </button>
+        </div>
+      </div>
+
+      {/* Setup Health */}
+      <HealthCard health={health} loading={healthLoading} onRefresh={refreshHealth} />
+
+      {/* Assistant Identity */}
+      <div className="card">
+        <div className="card__header">
+          <div className="card__title">Assistant Identity</div>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Persona</label>
+          <textarea
+            className="form-input"
+            rows={3}
+            placeholder="A personal assistant. Be concise and action-oriented."
+            value={config.persona ?? ''}
+            onChange={(e) => setConfig({ ...config, persona: e.target.value })}
+            style={{ resize: 'vertical', fontFamily: 'inherit' }}
+          />
+          <div className="form-hint">Describe how the assistant should present itself in conversations.</div>
         </div>
       </div>
 
@@ -86,6 +159,86 @@ export default function Settings(): React.ReactElement {
           </select>
         </div>
       </div>
+
+      {/* OAuth App Credentials — only shown for providers used by configured servers */}
+      {usedProviders.size > 0 && (
+        <div className="card">
+          <div className="card__header">
+            <div>
+              <div className="card__title">OAuth App Credentials</div>
+              <div className="card__subtitle">App credentials for connected OAuth providers.</div>
+            </div>
+          </div>
+
+          {usedProviders.has('github') && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>GitHub</div>
+              <div className="form-group">
+                <label className="form-label">Client ID</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="Ov23li…"
+                  value={config.oauth_apps?.github?.clientId ?? ''}
+                  onChange={(e) => setOAuthField('github', 'clientId', e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+
+          {usedProviders.has('notion') && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>Notion</div>
+              <div className="form-group">
+                <label className="form-label">Client ID</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="your-client-id"
+                  value={config.oauth_apps?.notion?.clientId ?? ''}
+                  onChange={(e) => setOAuthField('notion', 'clientId', e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Client Secret</label>
+                <input
+                  className="form-input"
+                  type="password"
+                  placeholder="secret_…"
+                  value={config.oauth_apps?.notion?.clientSecret ?? ''}
+                  onChange={(e) => setOAuthField('notion', 'clientSecret', e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+
+          {usedProviders.has('linear') && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>Linear</div>
+              <div className="form-group">
+                <label className="form-label">Client ID</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="your-client-id"
+                  value={config.oauth_apps?.linear?.clientId ?? ''}
+                  onChange={(e) => setOAuthField('linear', 'clientId', e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Client Secret</label>
+                <input
+                  className="form-input"
+                  type="password"
+                  placeholder="lin_oauth_…"
+                  value={config.oauth_apps?.linear?.clientSecret ?? ''}
+                  onChange={(e) => setOAuthField('linear', 'clientSecret', e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* MCP Servers */}
       <div className="card">
@@ -139,7 +292,12 @@ export default function Settings(): React.ReactElement {
         })}
 
         {showNewServer && (
-          <ServerCatalogPicker onAdd={handleAddServer} onCancel={() => setShowNewServer(false)} />
+          <ServerCatalogPicker
+            onAdd={handleAddServer}
+            onCancel={() => setShowNewServer(false)}
+            oauthCreds={config.oauth_apps}
+            onCredentialSave={handleCredentialSave}
+          />
         )}
       </div>
 
@@ -178,3 +336,122 @@ export default function Settings(): React.ReactElement {
   )
 }
 
+// ─── Health Card ──────────────────────────────────────────────────────────────
+
+function HealthCard({
+  health,
+  loading,
+  onRefresh
+}: {
+  health: SetupHealth | null
+  loading: boolean
+  onRefresh: () => void
+}): React.ReactElement | null {
+  if (!health && !loading) return null
+
+  const issues = health
+    ? [
+        !health.claudeCli,
+        ...health.servers.map((s) => s.missingEnvKeys.length > 0 || (s.oauthStaleDays ?? 0) > 60)
+      ].filter(Boolean)
+    : []
+
+  const allOk = health && health.claudeCli && issues.length === 0
+
+  return (
+    <div className="card">
+      <div className="card__header">
+        <div>
+          <div className="card__title">Setup Health</div>
+          {allOk && <div className="card__subtitle">All systems ready</div>}
+        </div>
+        <button
+          className="btn btn--ghost btn--sm"
+          onClick={onRefresh}
+          disabled={loading}
+          style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+        >
+          <RefreshCw size={12} className={loading ? 'spinning' : ''} />
+          {loading ? 'Checking…' : 'Re-check'}
+        </button>
+      </div>
+
+      {health && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {/* Claude CLI row */}
+          <HealthRow
+            ok={health.claudeCli}
+            label="Claude Code CLI"
+            detail={health.claudeCli ? 'Detected' : 'Not found'}
+            action={
+              !health.claudeCli ? (
+                <a
+                  href="#"
+                  onClick={(e) => { e.preventDefault(); window.open('https://claude.ai/download') }}
+                  style={{ fontSize: 11, color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: 3 }}
+                >
+                  Install →
+                </a>
+              ) : null
+            }
+          />
+
+          {/* Per-server rows */}
+          {health.servers.map((srv) => {
+            const isStale = (srv.oauthStaleDays ?? 0) > 60
+            const hasMissing = srv.missingEnvKeys.length > 0
+            const ok = !hasMissing && !isStale
+
+            let detail = 'Connected'
+            if (hasMissing) detail = `Missing: ${srv.missingEnvKeys.join(', ')}`
+            else if (isStale) detail = `OAuth last connected ${srv.oauthStaleDays} days ago`
+            else if (!srv.connected) detail = 'Disconnected'
+
+            return (
+              <HealthRow
+                key={srv.name}
+                ok={ok && srv.connected}
+                warn={!ok}
+                label={srv.name}
+                detail={detail}
+              />
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function HealthRow({
+  ok,
+  warn,
+  label,
+  detail,
+  action
+}: {
+  ok: boolean
+  warn?: boolean
+  label: string
+  detail: string
+  action?: React.ReactNode
+}): React.ReactElement {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0' }}>
+      <div style={{ flexShrink: 0 }}>
+        {ok ? (
+          <Check size={14} color="var(--color-success, #22c55e)" />
+        ) : warn ? (
+          <AlertTriangle size={14} color="var(--color-warning, #f59e0b)" />
+        ) : (
+          <XCircle size={14} color="var(--color-error, #ef4444)" />
+        )}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 500 }}>{label}</span>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>{detail}</span>
+      </div>
+      {action && <div style={{ flexShrink: 0 }}>{action}</div>}
+    </div>
+  )
+}

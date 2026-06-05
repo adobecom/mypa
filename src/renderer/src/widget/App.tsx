@@ -81,7 +81,7 @@ export default function App(): React.ReactElement {
     [api]
   )
 
-  const needsSetup = false
+  const needsSetup = config !== null && !config.onboarding_complete
 
   return (
     <div style={{ position: 'relative', width: 380, height: 580 }}>
@@ -95,7 +95,7 @@ export default function App(): React.ReactElement {
 
       {needsSetup && (
         <div className="setup-banner">
-          <span className="setup-banner__text">Add your Claude API key to get started</span>
+          <span className="setup-banner__text">Finish setup to get started</span>
           <button className="setup-banner__btn" onClick={() => api.system.openMainWindow()}>
             Set up →
           </button>

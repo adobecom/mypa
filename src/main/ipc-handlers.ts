@@ -1,4 +1,5 @@
 import { ipcMain, BrowserWindow } from 'electron'
+import { execFileSync } from 'child_process'
 import {
   dbGetRoutines,
   dbCreateRoutine,
@@ -19,7 +20,8 @@ import { executeRoutine, handleRunMessage } from './services/routines'
 import { createPlanDraft, confirmPlanDraft, updatePlanItemStatus, deletePlanItem, handlePlanMessage } from './services/plan'
 import { generateRoutineSetup, cancelStream } from './services/claude'
 import { refreshSchedules } from './services/cron'
-import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, McpServerConfig } from '@shared/types'
+import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, McpServerConfig, SetupHealth } from '@shared/types'
+import { MCP_CATALOG } from '@shared/mcp-catalog'
 
 export function registerIpcHandlers(
   getWidgetWin: () => BrowserWindow | null,
@@ -153,6 +155,69 @@ export function registerIpcHandlers(
 
   ipcMain.handle('oauth:start-pkce', async (_e, provider: 'notion' | 'linear') => {
     return startPkceFlow(provider)
+  })
+
+  // ─── Setup / Health ────────────────────────────────────────────────────────
+
+  ipcMain.handle('setup:check-prerequisites', async (): Promise<{ claudeCli: boolean }> => {
+    let claudeCli = false
+    try {
+      execFileSync('/usr/bin/which', ['claude'], { stdio: 'ignore' })
+      claudeCli = true
+    } catch {
+      // not found
+    }
+    return { claudeCli }
+  })
+
+  ipcMain.handle('setup:get-health', async (): Promise<SetupHealth> => {
+    let claudeCli = false
+    try {
+      execFileSync('/usr/bin/which', ['claude'], { stdio: 'ignore' })
+      claudeCli = true
+    } catch {
+      // not found
+    }
+
+    const config = readConfig()
+    const statuses = getServerStatus()
+    const now = Date.now()
+
+    const servers = config.mcp_servers.map((srv) => {
+      const status = statuses.find((s) => s.name === srv.name)
+      const entry = MCP_CATALOG.find((e) => e.id === srv.name)
+
+      const missingEnvKeys: string[] = []
+      if (entry?.authType === 'oauth' && entry.oauthTokenEnvKey) {
+        if (!srv.env?.[entry.oauthTokenEnvKey]?.trim()) {
+          missingEnvKeys.push(entry.oauthTokenEnvKey)
+        }
+      } else if (entry?.authType === 'api_key' && entry.requiredEnv) {
+        for (const field of entry.requiredEnv) {
+          if (!srv.env?.[field.key]?.trim()) missingEnvKeys.push(field.key)
+        }
+      }
+
+      const provider = entry?.oauthProvider as string | undefined
+      const oauthConnectedAt = provider
+        ? config.oauth_connected_at?.[provider as 'github' | 'notion' | 'linear']
+        : undefined
+      const oauthStaleDays =
+        oauthConnectedAt
+          ? Math.floor((now - Date.parse(oauthConnectedAt)) / 86_400_000)
+          : undefined
+
+      return {
+        name: srv.name,
+        connected: status?.connected ?? false,
+        missingEnvKeys,
+        oauthProvider: entry?.oauthProvider,
+        oauthConnectedAt,
+        oauthStaleDays
+      }
+    })
+
+    return { claudeCli, servers }
   })
 
   // ─── System ────────────────────────────────────────────────────────────────
