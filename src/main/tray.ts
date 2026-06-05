@@ -10,7 +10,16 @@ function getLogoImage(): Electron.NativeImage {
     const iconPath = app.isPackaged
       ? join(process.resourcesPath, 'icon.png')
       : join(__dirname, '..', '..', 'resources', 'icon.png')
-    logoImage = nativeImage.createFromBuffer(readFileSync(iconPath)).resize({ width: 22, height: 22 })
+    try {
+      logoImage = nativeImage.createFromBuffer(readFileSync(iconPath)).resize({ width: 22, height: 22 })
+    } catch {
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22">
+        <rect x="1" y="1" width="20" height="20" rx="5" fill="#c49a2a"/>
+      </svg>`
+      logoImage = nativeImage.createFromDataURL(
+        `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`
+      )
+    }
   }
   return logoImage
 }

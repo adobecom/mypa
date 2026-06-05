@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { Check, AlertTriangle, XCircle, RefreshCw } from 'lucide-react'
-import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth } from '@shared/types'
+import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import ServerCatalogPicker from './ServerCatalogPicker'
 
@@ -14,6 +14,12 @@ export default function Settings(): React.ReactElement {
   const [testResult, setTestResult] = useState<{ name: string; ok: boolean; error?: string } | null>(null)
   const [health, setHealth] = useState<SetupHealth | null>(null)
   const [healthLoading, setHealthLoading] = useState(false)
+  const [oauthState, setOauthState] = useState<{
+    serverName: string
+    deviceFlow: DeviceFlowStart | null
+    polling: boolean
+    error: string
+  } | null>(null)
 
   const api = window.electron
 
@@ -56,13 +62,25 @@ export default function Settings(): React.ReactElement {
     }
   }
 
-  const handleAddServer = (srv: McpServerConfig) => {
-    setConfig({ ...config, mcp_servers: [...config.mcp_servers, srv] })
-    setShowNewServer(false)
+  const handleAddServer = async (srv: McpServerConfig) => {
+    if (saving) return
+    setSaving(true)
+    try {
+      const updated = { ...config, mcp_servers: [...config.mcp_servers, srv] }
+      setConfig(updated)
+      setShowNewServer(false)
+      await api.config.update(updated)
+      await refreshHealth()
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const handleRemoveServer = (name: string) => {
-    setConfig({ ...config, mcp_servers: config.mcp_servers.filter((s) => s.name !== name) })
+  const handleRemoveServer = async (name: string) => {
+    const updated = { ...config, mcp_servers: config.mcp_servers.filter((s) => s.name !== name) }
+    setConfig(updated)
+    await api.config.update(updated)
+    await refreshHealth()
   }
 
   const handleTestServer = async (srv: McpServerConfig) => {
@@ -72,6 +90,34 @@ export default function Settings(): React.ReactElement {
       setTestResult({ name: srv.name, ok: result.ok, error: result.error })
     } finally {
       setTesting(null)
+    }
+  }
+
+  const handleOAuthReconnect = async (srv: McpServerConfig) => {
+    const entry = MCP_CATALOG.find((e) => e.id === srv.name)
+    if (!entry?.oauthTokenEnvKey) return
+    setOauthState({ serverName: srv.name, deviceFlow: null, polling: false, error: '' })
+    try {
+      const flow = await api.oauth.startDevice()
+      setOauthState({ serverName: srv.name, deviceFlow: flow, polling: true, error: '' })
+      api.oauth.pollDevice(flow.deviceCode)
+        .then(async (token) => {
+          const tokenKey = entry.oauthTokenEnvKey!
+          const updatedServers = config!.mcp_servers.map((s) =>
+            s.name !== srv.name ? s : { ...s, env: { ...(s.env ?? {}), [tokenKey]: token } }
+          )
+          const updated = { ...config!, mcp_servers: updatedServers }
+          setConfig(updated)
+          await api.config.update(updated)
+          setOauthState(null)
+          await refreshHealth()
+        })
+        .catch((err: Error) =>
+          setOauthState((prev) => prev ? { ...prev, deviceFlow: null, polling: false, error: err.message } : null)
+        )
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Connection failed'
+      setOauthState((prev) => prev ? { ...prev, error: msg } : null)
     }
   }
 
@@ -266,28 +312,69 @@ export default function Settings(): React.ReactElement {
 
         {config.mcp_servers.map((srv) => {
           const s = status.find((x) => x.name === srv.name)
+          const entry = MCP_CATALOG.find((e) => e.id === srv.name)
+          const srvHealth = health?.servers.find((h) => h.name === srv.name)
+          const needsOAuth = entry?.authType === 'oauth' && (srvHealth?.missingEnvKeys?.length ?? 0) > 0
+          const oauthActive = oauthState?.serverName === srv.name
           return (
-            <div key={srv.name} className="mcp-server-row">
-              <div
-                className={`mcp-server-row__dot mcp-server-row__dot--${s?.connected ? 'connected' : 'disconnected'}`}
-              />
-              <div className="mcp-server-row__name">{srv.name}</div>
-              <div className="mcp-server-row__count">
-                {s?.connected ? `${s.tools.length} tools` : s ? 'disconnected' : 'unknown'}
+            <React.Fragment key={srv.name}>
+              <div className="mcp-server-row">
+                <div
+                  className={`mcp-server-row__dot mcp-server-row__dot--${s?.connected ? 'connected' : 'disconnected'}`}
+                />
+                <div className="mcp-server-row__name">{srv.name}</div>
+                <div className="mcp-server-row__count">
+                  {s?.connected ? `${s.tools.length} tools` : s ? 'disconnected' : 'unknown'}
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {needsOAuth && (
+                    <button
+                      className="btn btn--primary btn--sm"
+                      onClick={() => handleOAuthReconnect(srv)}
+                      disabled={oauthActive}
+                    >
+                      {oauthActive && !oauthState?.deviceFlow ? <span className="spinner" /> : 'Connect'}
+                    </button>
+                  )}
+                  <button
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => handleTestServer(srv)}
+                    disabled={testing === srv.name}
+                  >
+                    {testing === srv.name ? <span className="spinner" /> : 'Test'}
+                  </button>
+                  <button className="btn btn--danger btn--sm" onClick={() => handleRemoveServer(srv.name)}>
+                    Remove
+                  </button>
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button
-                  className="btn btn--ghost btn--sm"
-                  onClick={() => handleTestServer(srv)}
-                  disabled={testing === srv.name}
-                >
-                  {testing === srv.name ? <span className="spinner" /> : 'Test'}
-                </button>
-                <button className="btn btn--danger btn--sm" onClick={() => handleRemoveServer(srv.name)}>
-                  Remove
-                </button>
-              </div>
-            </div>
+              {oauthActive && oauthState!.error && (
+                <div className="alert alert--error" style={{ marginTop: 6 }}>{oauthState!.error}</div>
+              )}
+              {oauthActive && oauthState!.deviceFlow && (
+                <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', padding: '10px 12px', marginTop: 6 }}>
+                  <div style={{ fontSize: 13, marginBottom: 8 }}>
+                    Enter this code at{' '}
+                    <a
+                      href={oauthState!.deviceFlow.verificationUri}
+                      onClick={(e) => { e.preventDefault(); window.open(oauthState!.deviceFlow!.verificationUri) }}
+                      style={{ color: 'var(--accent)' }}
+                    >
+                      {oauthState!.deviceFlow.verificationUri}
+                    </a>
+                  </div>
+                  <div style={{ fontFamily: 'monospace', fontSize: 22, fontWeight: 700, letterSpacing: '0.15em', marginBottom: 8 }}>
+                    {oauthState!.deviceFlow.userCode}
+                  </div>
+                  {oauthState!.polling && (
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span className="spinner" style={{ width: 12, height: 12 }} />
+                      Waiting for authorization…
+                    </div>
+                  )}
+                </div>
+              )}
+            </React.Fragment>
           )
         })}
 

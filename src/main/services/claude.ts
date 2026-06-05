@@ -135,8 +135,9 @@ export async function generatePlanDraft(intent: string): Promise<PlanDraft> {
   const now = new Date()
   const hour = now.getHours()
 
+  const persona = readConfig().persona?.trim() || 'a personal assistant'
   const text = await runClaude(
-    `You are a personal assistant helping a developer organize their work.
+    `You are ${persona} helping organize work.
 The current time is ${now.toLocaleTimeString()} (hour: ${hour}).
 Respond ONLY with valid JSON matching the schema provided. No markdown, no explanation.`,
     `Parse this intent into a structured plan item. Return JSON only.
@@ -182,8 +183,9 @@ export async function generateRoutineDigest(
   promptTemplate: string,
   rawOutput: string
 ): Promise<RoutineDigest> {
+  const persona = readConfig().persona?.trim() || 'a personal assistant'
   const text = await runClaude(
-    `You are a personal assistant digesting data feeds for a developer.
+    `You are ${persona} digesting data feeds.
 Respond ONLY with valid JSON matching the schema provided.`,
     `Routine: ${routineName}
 
@@ -315,9 +317,10 @@ export async function streamChat(
     { role: 'user', content: userMessage }
   ]
 
+  const persona = readConfig().persona?.trim() || 'a personal assistant'
   const systemPrompt = rawContext
-    ? `You are mypa, a personal assistant for developers. Be concise and action-oriented.\n\nOriginal data collected by this routine:\n${rawContext}`
-    : 'You are mypa, a personal assistant for developers. Be concise and action-oriented.'
+    ? `You are mypa, ${persona}. Be concise and action-oriented.\n\nOriginal data collected by this routine:\n${rawContext}`
+    : `You are mypa, ${persona}. Be concise and action-oriented.`
 
   const full = await runClaudeStream(systemPrompt, messages, onChunk, streamId)
 

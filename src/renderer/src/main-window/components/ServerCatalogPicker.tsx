@@ -1,14 +1,16 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react'
 import { ArrowLeft, Check, ExternalLink } from 'lucide-react'
 import { MCP_CATALOG, CATALOG_CATEGORIES, type McpCatalogEntry } from '@shared/mcp-catalog'
-import type { McpServerConfig, DeviceFlowStart } from '@shared/types'
+import type { McpServerConfig, DeviceFlowStart, OAuthProvider, OAuthAppCredential, AppConfig } from '@shared/types'
 
 interface Props {
-  onAdd: (srv: McpServerConfig) => void
+  onAdd: (srv: McpServerConfig) => Promise<void> | void
   onCancel: () => void
+  oauthCreds?: AppConfig['oauth_apps']
+  onCredentialSave?: (provider: OAuthProvider, creds: OAuthAppCredential) => Promise<void>
 }
 
-export default function ServerCatalogPicker({ onAdd, onCancel }: Props): React.ReactElement {
+export default function ServerCatalogPicker({ onAdd, onCancel, oauthCreds, onCredentialSave }: Props): React.ReactElement {
   const [selected, setSelected] = useState<McpCatalogEntry | null>(null)
 
   if (selected) {
@@ -17,6 +19,8 @@ export default function ServerCatalogPicker({ onAdd, onCancel }: Props): React.R
         entry={selected}
         onBack={() => setSelected(null)}
         onAdd={onAdd}
+        oauthCreds={oauthCreds}
+        onCredentialSave={onCredentialSave}
       />
     )
   }
@@ -127,11 +131,15 @@ function AuthBadge({ authType }: { authType: McpCatalogEntry['authType'] }): Rea
 function ConfigurePanel({
   entry,
   onBack,
-  onAdd
+  onAdd,
+  oauthCreds,
+  onCredentialSave
 }: {
   entry: McpCatalogEntry
   onBack: () => void
-  onAdd: (srv: McpServerConfig) => void
+  onAdd: (srv: McpServerConfig) => Promise<void> | void
+  oauthCreds?: AppConfig['oauth_apps']
+  onCredentialSave?: (provider: OAuthProvider, creds: OAuthAppCredential) => Promise<void>
 }): React.ReactElement {
   const [envValues, setEnvValues] = useState<Record<string, string>>({})
   const [argValues, setArgValues] = useState<string[][]>(
@@ -142,13 +150,30 @@ function ConfigurePanel({
   const [connecting, setConnecting] = useState(false)
   const [polling, setPolling] = useState(false)
   const [error, setError] = useState('')
+  const [inlineClientId, setInlineClientId] = useState('')
+  const [inlineClientSecret, setInlineClientSecret] = useState('')
 
   const api = window.electron
+
+  const provider = entry.oauthProvider as OAuthProvider | undefined
+  const savedCreds = provider ? oauthCreds?.[provider] : undefined
+  const credsMissing = entry.authType === 'oauth' && !!provider && !savedCreds?.clientId
+  const needsSecret = provider === 'notion' || provider === 'linear'
+
+  const saveInlineCredsIfNeeded = async () => {
+    if (!credsMissing || !provider || !inlineClientId.trim()) return
+    const creds: OAuthAppCredential = {
+      clientId: inlineClientId.trim(),
+      ...(needsSecret && inlineClientSecret.trim() ? { clientSecret: inlineClientSecret.trim() } : {})
+    }
+    await onCredentialSave?.(provider, creds)
+  }
 
   const handleOAuthDevice = async () => {
     setError('')
     setConnecting(true)
     try {
+      await saveInlineCredsIfNeeded()
       const flow = await api.oauth.startDevice()
       setDeviceFlow(flow)
       setPolling(true)
@@ -168,11 +193,12 @@ function ConfigurePanel({
   }
 
   const handleOAuthPkce = async () => {
-    if (!entry.oauthProvider || entry.oauthProvider === 'github') return
+    if (!provider || provider === 'github') return
     setError('')
     setConnecting(true)
     try {
-      const token = await api.oauth.startPkce(entry.oauthProvider)
+      await saveInlineCredsIfNeeded()
+      const token = await api.oauth.startPkce(provider)
       setOauthToken(token)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Connection failed')
@@ -194,7 +220,7 @@ function ConfigurePanel({
     return true
   }
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     const resolvedArgs = (entry.argInputs ?? []).flatMap(
       (_, i) => argValues[i]?.filter((v) => v.trim()) ?? []
     )
@@ -202,12 +228,16 @@ function ConfigurePanel({
     if (oauthToken && entry.oauthTokenEnvKey) {
       env[entry.oauthTokenEnvKey] = oauthToken
     }
-    onAdd({
-      name: entry.id,
-      command: entry.command,
-      args: [...entry.baseArgs, ...resolvedArgs],
-      env: Object.keys(env).length ? env : undefined
-    })
+    try {
+      await onAdd({
+        name: entry.id,
+        command: entry.command,
+        args: [...entry.baseArgs, ...resolvedArgs],
+        env: Object.keys(env).length ? env : undefined
+      })
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save server')
+    }
   }
 
   return (
@@ -224,6 +254,40 @@ function ConfigurePanel({
 
       {error && <div className="alert alert--error" style={{ marginBottom: 10 }}>{error}</div>}
 
+      {/* OAuth app credentials (shown inline when not yet configured) */}
+      {credsMissing && !oauthToken && (
+        <div style={{ marginBottom: 12, padding: '10px 12px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>
+            OAuth App Credentials
+          </div>
+          <div className="form-group">
+            <label className="form-label">Client ID</label>
+            <input
+              className="form-input form-input--mono"
+              type="text"
+              placeholder={provider === 'github' ? 'Ov23li…' : 'your-client-id'}
+              value={inlineClientId}
+              onChange={(e) => setInlineClientId(e.target.value)}
+            />
+          </div>
+          {needsSecret && (
+            <div className="form-group">
+              <label className="form-label">Client Secret</label>
+              <input
+                className="form-input form-input--mono"
+                type="password"
+                placeholder={provider === 'linear' ? 'lin_oauth_…' : 'secret_…'}
+                value={inlineClientSecret}
+                onChange={(e) => setInlineClientSecret(e.target.value)}
+              />
+            </div>
+          )}
+          <div className="form-hint">
+            Register an OAuth app at {entry.name} with callback URL <code>mypa://oauth/callback</code>.
+          </div>
+        </div>
+      )}
+
       {/* OAuth auth section */}
       {entry.authType === 'oauth' && (
         <div style={{ marginBottom: 12 }}>
@@ -234,6 +298,7 @@ function ConfigurePanel({
               connecting={connecting}
               polling={polling}
               onConnect={handleOAuthDevice}
+              disabled={credsMissing && !inlineClientId.trim()}
             />
           ) : (
             <PkceSection
@@ -241,6 +306,7 @@ function ConfigurePanel({
               oauthToken={oauthToken}
               connecting={connecting}
               onConnect={handleOAuthPkce}
+              disabled={credsMissing && !inlineClientId.trim()}
             />
           )}
         </div>
@@ -331,13 +397,15 @@ function DeviceFlowSection({
   oauthToken,
   connecting,
   polling,
-  onConnect
+  onConnect,
+  disabled
 }: {
   deviceFlow: DeviceFlowStart | null
   oauthToken: string | null
   connecting: boolean
   polling: boolean
   onConnect: () => void
+  disabled?: boolean
 }): React.ReactElement {
   if (oauthToken) {
     return (
@@ -378,7 +446,7 @@ function DeviceFlowSection({
     <button
       className="btn btn--primary btn--sm"
       onClick={onConnect}
-      disabled={connecting}
+      disabled={connecting || disabled}
       style={{ width: '100%', justifyContent: 'center' }}
     >
       {connecting ? <span className="spinner" /> : 'Connect with GitHub'}
@@ -392,12 +460,14 @@ function PkceSection({
   providerName,
   oauthToken,
   connecting,
-  onConnect
+  onConnect,
+  disabled
 }: {
   providerName: string
   oauthToken: string | null
   connecting: boolean
   onConnect: () => void
+  disabled?: boolean
 }): React.ReactElement {
   if (oauthToken) {
     return (
@@ -412,7 +482,7 @@ function PkceSection({
     <button
       className="btn btn--primary btn--sm"
       onClick={onConnect}
-      disabled={connecting}
+      disabled={connecting || disabled}
       style={{ width: '100%', justifyContent: 'center' }}
     >
       {connecting ? (

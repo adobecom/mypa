@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { ChevronDown, Settings } from 'lucide-react'
 import ChatThread from './ChatThread'
 import type { RoutineRun, ChatMessage } from '../../../../../../shared/types'
@@ -20,7 +20,7 @@ function formatTime(ts: string): string {
 }
 
 export default function RoutineCard({ run, onRunChange, collapsed }: Props): React.ReactElement {
-  const [expanded, setExpanded] = useState(!collapsed && run.status === 'pending_response')
+  const [expanded, setExpanded] = useState(!collapsed && (run.status === 'pending_response' || run.status === 'in_progress'))
   const [thread, setThread] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
@@ -28,6 +28,9 @@ export default function RoutineCard({ run, onRunChange, collapsed }: Props): Rea
 
   const api = window.electron
   const digest = parseDigest(run.digest)
+  // Ref so the message handler always sees the latest run without re-subscribing
+  const runRef = useRef(run)
+  useEffect(() => { runRef.current = run }, [run])
 
   useEffect(() => {
     if (!expanded) return
@@ -45,7 +48,11 @@ export default function RoutineCard({ run, onRunChange, collapsed }: Props): Rea
           setChatError(p.error)
         } else {
           api.routines.getThread(run.id).then(setThread)
-          onRunChange({ ...run, status: 'in_progress' })
+          // Use the ref to avoid clobbering a dismissed/resolved status
+          const current = runRef.current
+          if (current.status === 'pending_response' || current.status === 'in_progress') {
+            onRunChange({ ...current, status: 'in_progress' })
+          }
         }
       } else {
         setStreaming(true)

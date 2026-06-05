@@ -1,6 +1,6 @@
 import { shell } from 'electron'
 import { createHash, randomBytes } from 'crypto'
-import { OAUTH_CLIENTS } from '@shared/oauth-config'
+import { readConfig } from './config'
 import type { OAuthProvider } from '@shared/types'
 
 // Resolves the pending PKCE code exchange when the OS delivers the callback URL
@@ -35,11 +35,13 @@ export interface DeviceFlowStart {
 }
 
 export async function startDeviceFlow(): Promise<DeviceFlowStart> {
-  const client = OAUTH_CLIENTS.github
+  const clientId = readConfig().oauth_apps?.github?.clientId ?? ''
+  if (!clientId) throw new Error('GitHub OAuth app not configured — add your Client ID in Settings.')
+
   const res = await fetch('https://github.com/login/device/code', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ client_id: client.clientId, scope: 'repo read:user' })
+    body: JSON.stringify({ client_id: clientId, scope: 'repo read:user' })
   })
   if (!res.ok) throw new Error(`GitHub device code request failed: ${res.status}`)
   const data = (await res.json()) as {
@@ -58,7 +60,7 @@ export async function startDeviceFlow(): Promise<DeviceFlowStart> {
 }
 
 export async function pollDeviceFlow(deviceCode: string): Promise<string> {
-  const client = OAUTH_CLIENTS.github
+  const clientId = readConfig().oauth_apps?.github?.clientId ?? ''
   const maxAttempts = 120  // up to 10 min at 5s intervals
   for (let i = 0; i < maxAttempts; i++) {
     await sleep(5000)
@@ -66,7 +68,7 @@ export async function pollDeviceFlow(deviceCode: string): Promise<string> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
-        client_id: client.clientId,
+        client_id: clientId,
         device_code: deviceCode,
         grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
       })
@@ -84,17 +86,16 @@ export async function pollDeviceFlow(deviceCode: string): Promise<string> {
 
 const REDIRECT_URI = 'mypa://oauth/callback'
 
-function buildAuthUrl(provider: 'notion' | 'linear', codeChallenge: string): string {
-  const client = OAUTH_CLIENTS[provider]
+function buildAuthUrl(provider: 'notion' | 'linear', clientId: string, codeChallenge: string): string {
   const base = encodeURIComponent(REDIRECT_URI)
   if (provider === 'notion') {
     // Notion does not support PKCE — we send the challenge but still need client_secret for exchange
-    return `https://api.notion.com/v1/oauth/authorize?client_id=${client.clientId}&response_type=code&owner=user&redirect_uri=${base}`
+    return `https://api.notion.com/v1/oauth/authorize?client_id=${clientId}&response_type=code&owner=user&redirect_uri=${base}`
   }
   // Linear supports PKCE
   return (
     `https://linear.app/oauth/authorize` +
-    `?client_id=${client.clientId}` +
+    `?client_id=${clientId}` +
     `&redirect_uri=${base}` +
     `&response_type=code` +
     `&scope=read,write` +
@@ -104,12 +105,17 @@ function buildAuthUrl(provider: 'notion' | 'linear', codeChallenge: string): str
 }
 
 export async function startPkceFlow(provider: 'notion' | 'linear'): Promise<string> {
-  const client = OAUTH_CLIENTS[provider]
+  const creds = readConfig().oauth_apps?.[provider]
+  const clientId = creds?.clientId ?? ''
+  if (!clientId) {
+    const name = provider.charAt(0).toUpperCase() + provider.slice(1)
+    throw new Error(`${name} OAuth app not configured — add your credentials in Settings.`)
+  }
 
   const codeVerifier = randomBytes(32).toString('base64url')
   const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
 
-  const authUrl = buildAuthUrl(provider, codeChallenge)
+  const authUrl = buildAuthUrl(provider, clientId, codeChallenge)
   shell.openExternal(authUrl)
 
   const code = await new Promise<string>((resolve, reject) => {
@@ -122,19 +128,18 @@ export async function startPkceFlow(provider: 'notion' | 'linear'): Promise<stri
     }, 5 * 60 * 1000)
   })
 
-  return exchangeCode(provider, code, codeVerifier, client.clientSecret)
+  return exchangeCode(provider, clientId, creds?.clientSecret, code, codeVerifier)
 }
 
 async function exchangeCode(
   provider: 'notion' | 'linear',
+  clientId: string,
+  clientSecret: string | undefined,
   code: string,
-  codeVerifier: string,
-  clientSecret?: string
+  codeVerifier: string
 ): Promise<string> {
-  const client = OAUTH_CLIENTS[provider]
-
   if (provider === 'notion') {
-    const credentials = Buffer.from(`${client.clientId}:${clientSecret ?? ''}`).toString('base64')
+    const credentials = Buffer.from(`${clientId}:${clientSecret ?? ''}`).toString('base64')
     const res = await fetch('https://api.notion.com/v1/oauth/token', {
       method: 'POST',
       headers: {
@@ -156,7 +161,7 @@ async function exchangeCode(
   const params = new URLSearchParams({
     code,
     redirect_uri: REDIRECT_URI,
-    client_id: client.clientId,
+    client_id: clientId,
     client_secret: clientSecret ?? '',
     code_verifier: codeVerifier,
     grant_type: 'authorization_code'

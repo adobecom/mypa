@@ -1,6 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { readConfig } from './config'
+import { readConfig, updateConfig } from './config'
 import type { McpServerConfig, McpTool, McpServerStatus } from '@shared/types'
 
 interface ActiveServer {
@@ -15,10 +15,15 @@ const servers = new Map<string, ActiveServer>()
 export async function connectServer(cfg: McpServerConfig): Promise<McpTool[]> {
   await disconnectServer(cfg.name)
 
+  const mergedEnv = { ...process.env, ...(cfg.env ?? {}) } as Record<string, string>
+  // Backward compat: server-github reads GITHUB_PERSONAL_ACCESS_TOKEN, not GITHUB_TOKEN
+  if (mergedEnv.GITHUB_TOKEN && !mergedEnv.GITHUB_PERSONAL_ACCESS_TOKEN) {
+    mergedEnv.GITHUB_PERSONAL_ACCESS_TOKEN = mergedEnv.GITHUB_TOKEN
+  }
   const transport = new StdioClientTransport({
     command: cfg.command,
     args: cfg.args ?? [],
-    env: { ...process.env, ...(cfg.env ?? {}) } as Record<string, string>
+    env: mergedEnv
   })
 
   const client = new Client(
@@ -64,7 +69,24 @@ export async function callTool(
 }
 
 export async function connectAllServers(): Promise<void> {
-  const cfg = readConfig()
+  let cfg = readConfig()
+
+  // Migrate GITHUB_TOKEN → GITHUB_PERSONAL_ACCESS_TOKEN in stored config
+  const needsMigration = cfg.mcp_servers.some(
+    (s) => s.name === 'github' && s.env?.GITHUB_TOKEN && !s.env?.GITHUB_PERSONAL_ACCESS_TOKEN
+  )
+  if (needsMigration) {
+    updateConfig({
+      mcp_servers: cfg.mcp_servers.map((s) => {
+        if (s.name !== 'github' || !s.env?.GITHUB_TOKEN) return s
+        const { GITHUB_TOKEN, ...rest } = s.env
+        return { ...s, env: { ...rest, GITHUB_PERSONAL_ACCESS_TOKEN: GITHUB_TOKEN } }
+      })
+    })
+    cfg = readConfig()
+    console.log('[mcp] migrated github: GITHUB_TOKEN → GITHUB_PERSONAL_ACCESS_TOKEN')
+  }
+
   for (const srv of cfg.mcp_servers) {
     try {
       await connectServer(srv)

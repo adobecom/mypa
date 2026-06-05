@@ -48,10 +48,10 @@ export default function RoutinesFeed({ runs, onRunsChange }: Props): React.React
   }
 
   const needsAttention = runs.filter(
-    (r) => r.status === 'pending_response' || r.status === 'running' || r.status === 'error'
+    (r) => r.status === 'pending_response' || r.status === 'running' || r.status === 'error' || r.status === 'in_progress'
   )
   const archived = runs.filter(
-    (r) => r.status !== 'pending_response' && r.status !== 'running' && r.status !== 'error'
+    (r) => r.status !== 'pending_response' && r.status !== 'running' && r.status !== 'error' && r.status !== 'in_progress'
   )
 
   // Group archived by date label (preserving insertion order = newest first)

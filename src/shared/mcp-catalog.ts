@@ -40,7 +40,7 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
     baseArgs: ['-y', '@modelcontextprotocol/server-github'],
     authType: 'oauth',
     oauthProvider: 'github',
-    oauthTokenEnvKey: 'GITHUB_TOKEN'
+    oauthTokenEnvKey: 'GITHUB_PERSONAL_ACCESS_TOKEN'
   },
   {
     id: 'filesystem',

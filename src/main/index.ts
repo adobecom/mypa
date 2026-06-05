@@ -1,4 +1,3 @@
-import 'dotenv/config'
 import { app, BrowserWindow, nativeImage } from 'electron'
 import { handleOAuthCallback } from './services/oauth'
 import { join } from 'path'
@@ -57,6 +56,12 @@ async function main(): Promise<void> {
   // Create widget window (hidden initially)
   const win = createWidgetWindow()
 
+  // Register IPC handlers before tray so renderer can always communicate
+  registerIpcHandlers(
+    () => getWidgetWindow(),
+    openOrFocusMainWindow
+  )
+
   // Create tray
   createTray(
     () => toggleWidget(),
@@ -68,12 +73,6 @@ async function main(): Promise<void> {
       destroyTray()
       app.exit(0)
     }
-  )
-
-  // Register IPC handlers
-  registerIpcHandlers(
-    () => getWidgetWindow(),
-    openOrFocusMainWindow
   )
 
   // Connect MCP servers
