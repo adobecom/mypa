@@ -25,6 +25,13 @@ export default function App(): React.ReactElement {
     api.routines.getAllRuns(20).then(setRuns)
   }, [])
 
+  // Re-fetch config on focus so the setup banner clears after onboarding completes
+  useEffect(() => {
+    const onFocus = () => api.config.get().then(setConfig)
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [api])
+
   // Push event listeners
   useEffect(() => {
     const unsubRunStarted = api.on('routine:run-started', (run) => {
