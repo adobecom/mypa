@@ -342,7 +342,7 @@ export function dbGetRecentSignals(surface: string, sinceIso: string, limit = 50
 export function dbCountSignalsSince(surface: string, kind: string, sinceIso: string): number {
   return (
     getDb()
-      .prepare('SELECT COUNT(*) as c FROM signals WHERE surface = ? AND kind = ? AND observed_at >= ?')
+      .prepare('SELECT COUNT(*) as c FROM signals WHERE surface = ? AND kind = ? AND occurred_at >= ?')
       .get(surface, kind, sinceIso) as any
   ).c as number
 }

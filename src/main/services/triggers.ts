@@ -28,14 +28,27 @@ export function evalSpike(newSignals: Signal[]): TriggerHit[] {
     groups.get(key)!.push(s)
   }
   for (const [key, signals] of groups) {
-    if (signals.length >= SPIKE_THRESHOLD) {
-      const sinceIso = new Date(Date.now() - SPIKE_WINDOW_MS).toISOString()
+    const sinceIso = new Date(Date.now() - SPIKE_WINDOW_MS).toISOString()
+    // Only count signals that actually occurred within the window — not signals
+    // that were merely observed for the first time (e.g. the initial backfill
+    // of all open PRs on first run, which all get observed_at=now).
+    const recent = signals.filter((s) => !!s.occurred_at && s.occurred_at >= sinceIso)
+    if (recent.length >= SPIKE_THRESHOLD) {
       const [surface, kind] = key.split(':')
       const total = dbCountSignalsSince(surface, kind, sinceIso)
       if (total >= SPIKE_THRESHOLD) {
+        // Resolve the bursting signals to their memory-graph task nodes so that
+        // coalesceHits can merge this spike hit with any threshold/dependency hit
+        // that covers the same nodes, preventing the same burst from producing
+        // two separate intents (one per hit) that land in different feed sections.
+        const focusNodeIds = [...new Set(
+          signals
+            .map((s) => dbGetNode('task', `${s.surface}:${s.kind}:${s.external_id}`)?.id)
+            .filter((id): id is string => !!id)
+        )].slice(0, 3)
         hits.push({
           kind: 'spike',
-          focusNodeIds: [],
+          focusNodeIds,
           reason: `Spike: ${total} ${key} signals in the last 10 minutes`
         })
       }
@@ -166,15 +179,24 @@ export function coalesceHits(hits: TriggerHit[]): TriggerHit[] {
   if (hits.length <= 1) return hits
   const result: TriggerHit[] = []
   for (const hit of hits) {
-    const existing = result.find((r) =>
-      hit.focusNodeIds.length > 0 && r.focusNodeIds.some((id) => hit.focusNodeIds.includes(id))
-    )
-    if (existing) {
-      existing.focusNodeIds = [...new Set([...existing.focusNodeIds, ...hit.focusNodeIds])]
-      existing.reason += `; ${hit.reason}`
+    if (hit.focusNodeIds.length > 0) {
+      // Merge into any existing hit that shares at least one focus node
+      const existing = result.find((r) => r.focusNodeIds.some((id) => hit.focusNodeIds.includes(id)))
+      if (existing) {
+        existing.focusNodeIds = [...new Set([...existing.focusNodeIds, ...hit.focusNodeIds])]
+        existing.reason += `; ${hit.reason}`
+        continue
+      }
     } else {
-      result.push({ ...hit, focusNodeIds: [...hit.focusNodeIds] })
+      // Focus-less hit (e.g. time/digest with an empty graph): merge with the
+      // first existing result hit of the same kind to avoid duplicate inferences.
+      const existing = result.find((r) => r.kind === hit.kind)
+      if (existing) {
+        existing.reason += `; ${hit.reason}`
+        continue
+      }
     }
+    result.push({ ...hit, focusNodeIds: [...hit.focusNodeIds] })
   }
   return result
 }
