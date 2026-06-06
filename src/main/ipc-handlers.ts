@@ -11,7 +11,18 @@ import {
   dbUpdateRun,
   dbGetPlanItems,
   dbGetPlanThread,
-  dbGetBadgeCount
+  dbGetBadgeCount,
+  dbGetAllNodes,
+  dbGetAllEdges,
+  dbGetNodeById,
+  dbGetEdgesFrom,
+  dbGetEdgesTo,
+  dbGetMemoriesForNode,
+  dbGetNodeTimeline,
+  dbDeleteNode,
+  dbDeleteEdge,
+  dbDeleteMemory,
+  dbUpdateMemory
 } from './db/index'
 import { readConfig, updateConfig } from './services/config'
 import { testServer, getServerStatus, connectAllServers } from './services/mcp'
@@ -20,7 +31,23 @@ import { executeRoutine, handleRunMessage } from './services/routines'
 import { createPlanDraft, confirmPlanDraft, updatePlanItemStatus, deletePlanItem, handlePlanMessage } from './services/plan'
 import { generateRoutineSetup, cancelStream } from './services/claude'
 import { refreshSchedules } from './services/cron'
-import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, McpServerConfig, SetupHealth } from '@shared/types'
+import {
+  ambientGetIntents,
+  ambientApproveIntent,
+  ambientDismissIntent,
+  ambientChallengeIntent,
+  ambientGetDigest,
+  ambientComputeTrayState,
+  ambientGetPolicy,
+  ambientSetAutonomyTier,
+  ambientResetTrust,
+  ambientPollNow,
+  startAmbient,
+  stopAmbient
+} from './services/ambient'
+import { dbGetActionLog } from './db/index'
+import { setTrayState } from './tray'
+import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, McpServerConfig, SetupHealth, DigestSlot, Tier } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 
 export function registerIpcHandlers(
@@ -129,9 +156,17 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('config:update', async (_e, partial) => {
+    const wasEnabled = readConfig().ambient?.enabled ?? true
     const updated = updateConfig(partial)
     // Re-connect MCP servers if changed
     await connectAllServers()
+    // Start/stop ambient intelligence on enabled transitions
+    const nowEnabled = updated.ambient?.enabled ?? true
+    if (!wasEnabled && nowEnabled) {
+      startAmbient(getWidgetWin)
+    } else if (wasEnabled && !nowEnabled) {
+      stopAmbient()
+    }
     return updated
   })
 
@@ -244,5 +279,104 @@ export function registerIpcHandlers(
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win) return 'unknown'
     return win.getTitle().includes('widget') ? 'widget' : 'main-window'
+  })
+
+  // ─── Ambient ───────────────────────────────────────────────────────────────
+
+  function refreshAmbientTray(): void {
+    setTrayState(ambientComputeTrayState())
+  }
+
+  ipcMain.handle('ambient:get-intents', async () => {
+    return ambientGetIntents()
+  })
+
+  ipcMain.handle('ambient:approve', async (_e, id: string) => {
+    const intent = await ambientApproveIntent(id)
+    getWidgetWin()?.webContents.send('ambient:intent-updated', intent)
+    refreshAmbientTray()
+    getWidgetWin()?.webContents.send('badge:updated', dbGetBadgeCount())
+    return intent
+  })
+
+  ipcMain.handle('ambient:dismiss', async (_e, id: string) => {
+    const intent = ambientDismissIntent(id)
+    // Send a full Intent object (same shape as approve/challenge) so renderer can merge it
+    getWidgetWin()?.webContents.send('ambient:intent-updated', intent)
+    refreshAmbientTray()
+    getWidgetWin()?.webContents.send('badge:updated', dbGetBadgeCount())
+  })
+
+  ipcMain.handle('ambient:challenge', async (_e, id: string, reason: string) => {
+    const intent = await ambientChallengeIntent(id, reason)
+    getWidgetWin()?.webContents.send('ambient:intent-updated', intent)
+    refreshAmbientTray()
+    return intent
+  })
+
+  ipcMain.handle('ambient:get-digest', async (_e, slot?: DigestSlot) => {
+    return ambientGetDigest(slot)
+  })
+
+  ipcMain.handle('ambient:get-tray-state', async () => {
+    return ambientComputeTrayState()
+  })
+
+  ipcMain.handle('ambient:get-policy', async () => {
+    return ambientGetPolicy()
+  })
+
+  ipcMain.handle('ambient:set-tier', async (_e, actionType: string, tier: Tier, locked?: boolean) => {
+    // Validate inputs to prevent renderer from writing arbitrary tier values
+    if (!Number.isInteger(tier) || tier < 0 || tier > 3) {
+      throw new Error(`Invalid tier ${tier}: must be 0–3`)
+    }
+    if (typeof actionType !== 'string' || actionType.trim() === '') {
+      throw new Error('Invalid actionType')
+    }
+    ambientSetAutonomyTier(actionType, tier, locked)
+  })
+
+  ipcMain.handle('ambient:reset-trust', async () => {
+    ambientResetTrust()
+  })
+
+  ipcMain.handle('ambient:poll-now', async () => {
+    await ambientPollNow()
+  })
+
+  ipcMain.handle('ambient:get-log', async (_e, limit?: number) => {
+    return dbGetActionLog(limit)
+  })
+
+  // ─── Memory graph ──────────────────────────────────────────────────────────
+
+  ipcMain.handle('memory:get-graph', async () => {
+    return { nodes: dbGetAllNodes(), edges: dbGetAllEdges() }
+  })
+
+  ipcMain.handle('memory:get-node', async (_e, id: string) => {
+    const node = dbGetNodeById(id)
+    if (!node) return null
+    const edges = [...dbGetEdgesFrom(id), ...dbGetEdgesTo(id)]
+    const memories = dbGetMemoriesForNode(id)
+    const timeline = dbGetNodeTimeline(id, 20)
+    return { node, edges, memories, timeline }
+  })
+
+  ipcMain.handle('memory:delete-node', async (_e, id: string) => {
+    dbDeleteNode(id)
+  })
+
+  ipcMain.handle('memory:delete-edge', async (_e, id: string) => {
+    dbDeleteEdge(id)
+  })
+
+  ipcMain.handle('memory:delete-memory', async (_e, id: string) => {
+    dbDeleteMemory(id)
+  })
+
+  ipcMain.handle('memory:update-memory', async (_e, id: string, update: { content?: string; importance?: number; status?: 'active' | 'superseded' }) => {
+    dbUpdateMemory(id, update)
   })
 }

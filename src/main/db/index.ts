@@ -14,8 +14,25 @@ import type {
   PlanItemStatus,
   ChatMessage,
   McpActionRef,
-  RoutineAction
+  RoutineAction,
+  Signal,
+  SignalInput,
+  GraphNode,
+  GraphEdge,
+  NodeType,
+  EdgeRel,
+  Intent,
+  IntentObject,
+  TriggerKind,
+  IntentStatus,
+  AutonomyPolicy,
+  ActionLogEntry,
+  Tier,
+  Memory,
+  MemoryInput,
+  NodeSignalLink
 } from '@shared/types'
+import { createHash } from 'crypto'
 
 let _db: BetterSqlite3.Database | null = null
 
@@ -241,7 +258,12 @@ export function dbGetBadgeCount(): number {
       .prepare("SELECT COUNT(*) as c FROM plan_items WHERE status = 'pending'")
       .get() as any
   ).c as number
-  return pendingRuns + pendingItems
+  const pendingIntents = (
+    getDb()
+      .prepare("SELECT COUNT(*) as c FROM intents WHERE status IN ('pending','surfaced')")
+      .get() as any
+  ).c as number
+  return pendingRuns + pendingItems + pendingIntents
 }
 
 function safeJsonParse<T>(val: string | null | undefined, fallback: T): T {
@@ -250,4 +272,635 @@ function safeJsonParse<T>(val: string | null | undefined, fallback: T): T {
   } catch {
     return fallback
   }
+}
+
+// ─── Signals ─────────────────────────────────────────────────────────────────
+
+export function dbInsertSignal(s: SignalInput): { inserted: boolean; id: string } {
+  const id = uuidv4()
+  const observed_at = new Date().toISOString()
+  const db = getDb()
+
+  // Check if a signal already exists for this (surface, external_id)
+  const existing = db
+    .prepare('SELECT id, fingerprint FROM signals WHERE surface = ? AND external_id = ?')
+    .get(s.surface, s.external_id) as { id: string; fingerprint: string } | undefined
+
+  if (existing) {
+    // Only treat as "new" if the fingerprint changed (i.e., the item actually changed)
+    if (existing.fingerprint === s.fingerprint) {
+      return { inserted: false, id: '' }
+    }
+    // Update the row with the new state — mark unprocessed so triggers re-evaluate it
+    const updateStmt = db.prepare(
+      `UPDATE signals SET fingerprint=?, title=?, body=?, actor=?, url=?, raw=?, occurred_at=?,
+       observed_at=?, processed=0 WHERE id=?`
+    )
+    const updateArgs = [
+      s.fingerprint, s.title, s.body, s.actor, s.url,
+      JSON.stringify(s.raw), s.occurred_at ?? null, observed_at, existing.id
+    ] as const
+    try {
+      updateStmt.run(...updateArgs)
+    } catch (e: any) {
+      if (e?.code !== 'SQLITE_CONSTRAINT_UNIQUE') throw e
+      // A sibling row with the same fingerprint exists (leftover from old 3-column constraint).
+      // Delete duplicates and retry.
+      db.prepare('DELETE FROM signals WHERE surface=? AND external_id=? AND id!=?')
+        .run(s.surface, s.external_id, existing.id)
+      updateStmt.run(...updateArgs)
+    }
+    return { inserted: true, id: existing.id }
+  }
+
+  // New signal — insert
+  const result = db
+    .prepare(
+      `INSERT OR IGNORE INTO signals
+        (id, surface, kind, external_id, fingerprint, title, body, actor, url, raw, occurred_at, observed_at, processed)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)`
+    )
+    .run(
+      id, s.surface, s.kind, s.external_id, s.fingerprint,
+      s.title, s.body, s.actor, s.url,
+      JSON.stringify(s.raw), s.occurred_at ?? null, observed_at
+    )
+  return { inserted: result.changes > 0, id: result.changes > 0 ? id : '' }
+}
+
+export function dbGetUnprocessedSignals(limit = 100): Signal[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM signals WHERE processed = 0 ORDER BY observed_at ASC LIMIT ?')
+    .all(limit) as any[]
+  return rows.map(deserializeSignal)
+}
+
+export function dbMarkSignalsProcessed(ids: string[]): void {
+  if (ids.length === 0) return
+  const placeholders = ids.map(() => '?').join(',')
+  getDb()
+    .prepare(`UPDATE signals SET processed = 1 WHERE id IN (${placeholders})`)
+    .run(...ids)
+}
+
+export function dbGetRecentSignals(surface: string, sinceIso: string, limit = 50): Signal[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM signals WHERE surface = ? AND observed_at >= ? ORDER BY observed_at DESC LIMIT ?')
+    .all(surface, sinceIso, limit) as any[]
+  return rows.map(deserializeSignal)
+}
+
+export function dbCountSignalsSince(surface: string, kind: string, sinceIso: string): number {
+  return (
+    getDb()
+      .prepare('SELECT COUNT(*) as c FROM signals WHERE surface = ? AND kind = ? AND occurred_at >= ?')
+      .get(surface, kind, sinceIso) as any
+  ).c as number
+}
+
+export function dbGetSignalByExternal(surface: string, externalId: string): Signal | null {
+  const row = getDb()
+    .prepare('SELECT * FROM signals WHERE surface = ? AND external_id = ? ORDER BY observed_at DESC LIMIT 1')
+    .get(surface, externalId) as any
+  return row ? deserializeSignal(row) : null
+}
+
+function deserializeSignal(row: any): Signal {
+  // Strip embedding columns — they're internal DB concerns and must not leak over IPC
+  const { embedding: _emb, embedding_model: _model, ...rest } = row
+  return {
+    ...rest,
+    processed: row.processed === 1,
+    raw: safeJsonParse<Record<string, unknown>>(row.raw, {})
+  }
+}
+
+export function dbSetSignalEmbedding(id: string, embedding: Buffer, model: string): void {
+  getDb()
+    .prepare('UPDATE signals SET embedding = ?, embedding_model = ? WHERE id = ?')
+    .run(embedding, model, id)
+}
+
+export function dbGetSignalsWithEmbeddings(
+  sinceIso: string,
+  limit = 500
+): Array<Signal & { embedding: Buffer }> {
+  const rows = getDb()
+    .prepare(
+      'SELECT * FROM signals WHERE embedding IS NOT NULL AND observed_at >= ? ORDER BY observed_at DESC LIMIT ?'
+    )
+    .all(sinceIso, limit) as any[]
+  return rows.map((row) => ({
+    ...deserializeSignal(row),
+    embedding: row.embedding as Buffer
+  }))
+}
+
+export function dbGetSignalsMissingEmbeddings(limit = 50): Signal[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM signals WHERE embedding IS NULL ORDER BY observed_at DESC LIMIT ?')
+    .all(limit) as any[]
+  return rows.map(deserializeSignal)
+}
+
+// ─── Graph nodes ──────────────────────────────────────────────────────────────
+
+export function dbUpsertNode(type: NodeType, key: string, label: string, attrs?: Record<string, unknown>): GraphNode {
+  const now = new Date().toISOString()
+  const id = uuidv4()
+  getDb()
+    .prepare(
+      `INSERT INTO graph_nodes (id, type, key, label, attrs, weight, first_seen, last_seen)
+       VALUES (?,?,?,?,?,0,?,?)
+       ON CONFLICT(type, key) DO UPDATE SET
+         label = excluded.label,
+         attrs = CASE WHEN excluded.attrs != '{}' THEN excluded.attrs ELSE graph_nodes.attrs END,
+         last_seen = excluded.last_seen`
+    )
+    .run(id, type, key, label, JSON.stringify(attrs ?? {}), now, now)
+  return dbGetNode(type, key)!
+}
+
+export function dbGetNode(type: NodeType, key: string): GraphNode | null {
+  const row = getDb().prepare('SELECT * FROM graph_nodes WHERE type = ? AND key = ?').get(type, key) as any
+  return row ? deserializeNode(row) : null
+}
+
+export function dbGetNodeById(id: string): GraphNode | null {
+  const row = getDb().prepare('SELECT * FROM graph_nodes WHERE id = ?').get(id) as any
+  return row ? deserializeNode(row) : null
+}
+
+export function dbBumpNodeWeight(id: string, delta: number): void {
+  const now = new Date().toISOString()
+  getDb()
+    .prepare('UPDATE graph_nodes SET weight = weight + ?, last_seen = ? WHERE id = ?')
+    .run(delta, now, id)
+}
+
+export function dbDecayNodes(halfLifeDays: number, asOfIso?: string): void {
+  const asOf = asOfIso ?? new Date().toISOString()
+  // exponential decay: weight *= 0.5^(days_since_last_seen / halfLifeDays)
+  // SQLite: weight * pow(0.5, (julianday(asOf) - julianday(last_seen)) / halfLifeDays)
+  getDb()
+    .prepare(
+      `UPDATE graph_nodes SET weight = weight * pow(0.5, (julianday(?) - julianday(last_seen)) / ?)
+       WHERE weight > 0.001`
+    )
+    .run(asOf, halfLifeDays)
+}
+
+export function dbGetStaleNodes(quietBeforeIso: string, minWeight: number): GraphNode[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM graph_nodes WHERE last_seen < ? AND weight >= ? ORDER BY weight DESC')
+    .all(quietBeforeIso, minWeight) as any[]
+  return rows.map(deserializeNode)
+}
+
+export function dbGetTopNodesByWeight(limit: number): GraphNode[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM graph_nodes ORDER BY weight DESC LIMIT ?')
+    .all(limit) as any[]
+  return rows.map(deserializeNode)
+}
+
+function deserializeNode(row: any): GraphNode {
+  return {
+    ...row,
+    attrs: safeJsonParse<Record<string, unknown>>(row.attrs, {})
+  }
+}
+
+// ─── Graph edges ──────────────────────────────────────────────────────────────
+
+export function dbUpsertEdge(srcId: string, dstId: string, rel: EdgeRel, weightDelta = 1): GraphEdge {
+  const now = new Date().toISOString()
+  const id = uuidv4()
+  getDb()
+    .prepare(
+      `INSERT INTO graph_edges (id, src_id, dst_id, rel, weight, attrs, first_seen, last_seen)
+       VALUES (?,?,?,?,?,?,?,?)
+       ON CONFLICT(src_id, dst_id, rel) DO UPDATE SET
+         weight = graph_edges.weight + ?,
+         last_seen = excluded.last_seen`
+    )
+    .run(id, srcId, dstId, rel, weightDelta, '{}', now, now, weightDelta)
+  const row = getDb().prepare('SELECT * FROM graph_edges WHERE src_id = ? AND dst_id = ? AND rel = ?').get(srcId, dstId, rel) as any
+  return deserializeEdge(row)
+}
+
+export function dbGetEdgesFrom(srcId: string): GraphEdge[] {
+  const rows = getDb().prepare('SELECT * FROM graph_edges WHERE src_id = ?').all(srcId) as any[]
+  return rows.map(deserializeEdge)
+}
+
+export function dbGetEdgesTo(dstId: string): GraphEdge[] {
+  const rows = getDb().prepare('SELECT * FROM graph_edges WHERE dst_id = ?').all(dstId) as any[]
+  return rows.map(deserializeEdge)
+}
+
+export function dbGetDependencyEdges(): GraphEdge[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM graph_edges WHERE rel IN ('depends_on','blocked_by','waiting_for')")
+    .all() as any[]
+  return rows.map(deserializeEdge)
+}
+
+export function dbDecayEdges(halfLifeDays: number, asOfIso?: string): void {
+  const asOf = asOfIso ?? new Date().toISOString()
+  getDb()
+    .prepare(
+      `UPDATE graph_edges SET weight = weight * pow(0.5, (julianday(?) - julianday(last_seen)) / ?)
+       WHERE weight > 0.001`
+    )
+    .run(asOf, halfLifeDays)
+}
+
+function deserializeEdge(row: any): GraphEdge {
+  return {
+    ...row,
+    attrs: safeJsonParse<Record<string, unknown>>(row.attrs, {})
+  }
+}
+
+export function dbGetAllNodes(): GraphNode[] {
+  const rows = getDb().prepare('SELECT * FROM graph_nodes ORDER BY weight DESC').all() as any[]
+  return rows.map(deserializeNode)
+}
+
+export function dbGetAllEdges(): GraphEdge[] {
+  const rows = getDb().prepare('SELECT * FROM graph_edges').all() as any[]
+  return rows.map(deserializeEdge)
+}
+
+export function dbDeleteNode(id: string): void {
+  getDb().prepare('DELETE FROM graph_nodes WHERE id = ?').run(id)
+}
+
+export function dbDeleteEdge(id: string): void {
+  getDb().prepare('DELETE FROM graph_edges WHERE id = ?').run(id)
+}
+
+export function dbDeleteMemory(id: string): void {
+  getDb().prepare('DELETE FROM memories WHERE id = ?').run(id)
+}
+
+export function dbUpdateMemory(
+  id: string,
+  update: { content?: string; importance?: number; status?: 'active' | 'superseded' }
+): void {
+  const sets: string[] = []
+  const args: (string | number)[] = []
+  if (update.content !== undefined) { sets.push('content = ?'); args.push(update.content) }
+  if (update.importance !== undefined) { sets.push('importance = ?'); args.push(update.importance) }
+  if (update.status !== undefined) { sets.push('status = ?'); args.push(update.status) }
+  if (sets.length === 0) return
+  args.push(id)
+  getDb().prepare(`UPDATE memories SET ${sets.join(', ')} WHERE id = ?`).run(...args)
+}
+
+// ─── Intents ─────────────────────────────────────────────────────────────────
+
+export function dbCreateIntent(
+  obj: IntentObject,
+  triggerKind: TriggerKind,
+  tier: number,
+  contextPacket: Record<string, unknown>
+): Intent {
+  const id = uuidv4()
+  const created_at = new Date().toISOString()
+  getDb()
+    .prepare(
+      `INSERT INTO intents
+        (id, type, trigger_kind, confidence, surface, verb, target, payload, rationale,
+         reversibility, required_approval, tier, status, context_packet, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    )
+    .run(
+      id,
+      obj.type,
+      triggerKind,
+      obj.confidence,
+      obj.proposed_action.surface,
+      obj.proposed_action.verb,
+      obj.proposed_action.target,
+      JSON.stringify(obj.proposed_action.payload),
+      obj.rationale,
+      obj.reversibility,
+      obj.required_approval ? 1 : 0,
+      tier,
+      'pending',
+      JSON.stringify(contextPacket),
+      created_at
+    )
+  return dbGetIntent(id)!
+}
+
+export function dbGetIntent(id: string): Intent | null {
+  const row = getDb().prepare('SELECT * FROM intents WHERE id = ?').get(id) as any
+  return row ? deserializeIntent(row) : null
+}
+
+export function dbGetPendingIntents(): Intent[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM intents WHERE status IN ('pending','surfaced') ORDER BY created_at ASC")
+    .all() as any[]
+  return rows.map(deserializeIntent)
+}
+
+export function dbGetAllIntents(limit = 50): Intent[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM intents ORDER BY created_at DESC LIMIT ?')
+    .all(limit) as any[]
+  return rows.map(deserializeIntent)
+}
+
+export function dbUpdateIntentStatus(id: string, status: IntentStatus, error?: string): void {
+  const resolved_at = new Date().toISOString()
+  if (error !== undefined) {
+    getDb()
+      .prepare('UPDATE intents SET status = ?, resolved_at = ?, error = ? WHERE id = ?')
+      .run(status, resolved_at, error, id)
+  } else {
+    getDb()
+      .prepare('UPDATE intents SET status = ?, resolved_at = ? WHERE id = ?')
+      .run(status, resolved_at, id)
+  }
+}
+
+function deserializeIntent(row: any): Intent {
+  return {
+    ...row,
+    required_approval: row.required_approval === 1,
+    payload: safeJsonParse<Record<string, unknown>>(row.payload, {}),
+    context_packet: safeJsonParse<Record<string, unknown>>(row.context_packet, {})
+  }
+}
+
+// ─── Autonomy policy ──────────────────────────────────────────────────────────
+
+export function dbGetPolicy(actionType: string): AutonomyPolicy | null {
+  const row = getDb().prepare('SELECT * FROM autonomy_policy WHERE action_type = ?').get(actionType) as any
+  return row ? deserializePolicy(row) : null
+}
+
+export function dbGetAllPolicies(): AutonomyPolicy[] {
+  const rows = getDb().prepare('SELECT * FROM autonomy_policy ORDER BY action_type ASC').all() as any[]
+  return rows.map(deserializePolicy)
+}
+
+export function dbUpsertPolicy(actionType: string, fields: Partial<Omit<AutonomyPolicy, 'action_type'>>): AutonomyPolicy {
+  const now = new Date().toISOString()
+  const existing = dbGetPolicy(actionType)
+  if (!existing) {
+    const defaults = { tier: 2, tier_locked: false, approvals: 0, consecutive_approvals: 0, challenges: 0, dismissals: 0, executions: 0 }
+    const merged = { ...defaults, ...fields }
+    getDb()
+      .prepare(
+        `INSERT INTO autonomy_policy
+          (action_type, tier, tier_locked, approvals, consecutive_approvals, challenges, dismissals, executions, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        actionType,
+        merged.tier,
+        merged.tier_locked ? 1 : 0,
+        merged.approvals,
+        merged.consecutive_approvals,
+        merged.challenges,
+        merged.dismissals,
+        merged.executions,
+        now
+      )
+  } else {
+    const sets: string[] = ['updated_at = ?']
+    const vals: unknown[] = [now]
+    if (fields.tier !== undefined) { sets.push('tier = ?'); vals.push(fields.tier) }
+    if (fields.tier_locked !== undefined) { sets.push('tier_locked = ?'); vals.push(fields.tier_locked ? 1 : 0) }
+    if (fields.approvals !== undefined) { sets.push('approvals = ?'); vals.push(fields.approvals) }
+    if (fields.consecutive_approvals !== undefined) { sets.push('consecutive_approvals = ?'); vals.push(fields.consecutive_approvals) }
+    if (fields.challenges !== undefined) { sets.push('challenges = ?'); vals.push(fields.challenges) }
+    if (fields.dismissals !== undefined) { sets.push('dismissals = ?'); vals.push(fields.dismissals) }
+    if (fields.executions !== undefined) { sets.push('executions = ?'); vals.push(fields.executions) }
+    vals.push(actionType)
+    getDb().prepare(`UPDATE autonomy_policy SET ${sets.join(', ')} WHERE action_type = ?`).run(...vals)
+  }
+  return dbGetPolicy(actionType)!
+}
+
+export function dbRecordPolicyOutcome(
+  actionType: string,
+  outcome: 'approval' | 'challenge' | 'dismissal' | 'execution'
+): AutonomyPolicy {
+  const now = new Date().toISOString()
+  // Ensure row exists
+  dbUpsertPolicy(actionType, {})
+  const db = getDb()
+
+  if (outcome === 'approval') {
+    // Increment cumulative approvals and consecutive run
+    db.prepare(
+      `UPDATE autonomy_policy SET approvals = approvals + 1,
+       consecutive_approvals = consecutive_approvals + 1, updated_at = ? WHERE action_type = ?`
+    ).run(now, actionType)
+  } else if (outcome === 'challenge') {
+    // Reset the consecutive streak — challenge breaks trust accumulation
+    db.prepare(
+      `UPDATE autonomy_policy SET challenges = challenges + 1,
+       consecutive_approvals = 0, updated_at = ? WHERE action_type = ?`
+    ).run(now, actionType)
+  } else if (outcome === 'dismissal') {
+    // Reset consecutive streak on dismissal too
+    db.prepare(
+      `UPDATE autonomy_policy SET dismissals = dismissals + 1,
+       consecutive_approvals = 0, updated_at = ? WHERE action_type = ?`
+    ).run(now, actionType)
+  } else {
+    db.prepare(
+      `UPDATE autonomy_policy SET executions = executions + 1, updated_at = ? WHERE action_type = ?`
+    ).run(now, actionType)
+  }
+
+  return dbGetPolicy(actionType)!
+}
+
+function deserializePolicy(row: any): AutonomyPolicy {
+  return {
+    ...row,
+    tier: row.tier as Tier,
+    tier_locked: row.tier_locked === 1,
+    consecutive_approvals: row.consecutive_approvals ?? 0
+  }
+}
+
+// ─── Action log ───────────────────────────────────────────────────────────────
+
+export function dbAppendActionLog(entry: Omit<ActionLogEntry, 'id'>): void {
+  const id = uuidv4()
+  getDb()
+    .prepare(
+      `INSERT INTO action_log (id, intent_id, event, action_type, tier, detail, created_at)
+       VALUES (?,?,?,?,?,?,?)`
+    )
+    .run(
+      id,
+      entry.intent_id ?? null,
+      entry.event,
+      entry.action_type,
+      entry.tier ?? null,
+      JSON.stringify(entry.detail),
+      entry.created_at
+    )
+}
+
+export function dbGetActionLog(limit = 100): ActionLogEntry[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM action_log ORDER BY created_at DESC LIMIT ?')
+    .all(limit) as any[]
+  return rows.map((row) => ({
+    ...row,
+    detail: safeJsonParse<Record<string, unknown>>(row.detail, {})
+  }))
+}
+
+// ─── Maintenance / retention ──────────────────────────────────────────────────
+// Prune tables that accumulate unboundedly. Called periodically (e.g. once per day).
+
+const SIGNAL_RETAIN_DAYS = 30
+const ACTION_LOG_RETAIN_DAYS = 90
+const GRAPH_NODE_MIN_WEIGHT = 0.001 // delete nodes that have decayed to essentially zero
+
+export function dbRunMaintenance(): void {
+  const db = getDb()
+  const signalCutoff = new Date(Date.now() - SIGNAL_RETAIN_DAYS * 24 * 60 * 60 * 1000).toISOString()
+  const logCutoff = new Date(Date.now() - ACTION_LOG_RETAIN_DAYS * 24 * 60 * 60 * 1000).toISOString()
+
+  const deletedSignals = db.prepare('DELETE FROM signals WHERE observed_at < ?').run(signalCutoff).changes
+  const deletedLog = db.prepare('DELETE FROM action_log WHERE created_at < ?').run(logCutoff).changes
+  // Prune fully-decayed graph nodes (and their edges via CASCADE)
+  const deletedNodes = db
+    .prepare('DELETE FROM graph_nodes WHERE weight < ?')
+    .run(GRAPH_NODE_MIN_WEIGHT).changes
+
+  console.log(
+    `[db] maintenance: removed ${deletedSignals} signals, ${deletedLog} log entries, ${deletedNodes} graph nodes`
+  )
+}
+
+// ─── Timeline ─────────────────────────────────────────────────────────────────
+
+export function dbLinkNodeSignal(
+  nodeId: string,
+  signalId: string,
+  surface: string,
+  summary: string,
+  occurredAt: string | null,
+  observedAt: string
+): void {
+  const id = uuidv4()
+  getDb()
+    .prepare(
+      `INSERT INTO node_signals (id, node_id, signal_id, surface, summary, occurred_at, observed_at)
+       VALUES (?,?,?,?,?,?,?)
+       ON CONFLICT(node_id, signal_id) DO UPDATE SET
+         summary     = excluded.summary,
+         occurred_at = excluded.occurred_at,
+         observed_at = excluded.observed_at`
+    )
+    .run(id, nodeId, signalId, surface, summary, occurredAt ?? null, observedAt)
+}
+
+export function dbGetNodeTimeline(nodeId: string, limit = 50): NodeSignalLink[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM node_signals WHERE node_id = ? ORDER BY observed_at ASC LIMIT ?')
+    .all(nodeId, limit) as any[]
+  return rows.map(deserializeNodeSignalLink)
+}
+
+export function dbGetNodeFirstSeen(nodeId: string): string | null {
+  // Use the earliest known event time; fall back to ingestion time when occurred_at is null.
+  const row = getDb()
+    .prepare('SELECT MIN(COALESCE(occurred_at, observed_at)) as first FROM node_signals WHERE node_id = ?')
+    .get(nodeId) as { first: string | null } | undefined
+  return row?.first ?? null
+}
+
+function deserializeNodeSignalLink(row: any): NodeSignalLink {
+  return { ...row }
+}
+
+// ─── Memories ─────────────────────────────────────────────────────────────────
+
+export function dbCreateMemory(input: MemoryInput): Memory {
+  const id = uuidv4()
+  const created_at = new Date().toISOString()
+  getDb()
+    .prepare(
+      `INSERT INTO memories
+        (id, content, type, confidence, importance, surface, node_id, status, superseded_by, created_at, last_accessed)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+    )
+    .run(
+      id,
+      input.content,
+      input.type,
+      input.confidence,
+      input.importance,
+      input.surface,
+      input.node_id ?? null,
+      'active',
+      null,
+      created_at,
+      null
+    )
+  return dbGetMemory(id)!
+}
+
+function dbGetMemory(id: string): Memory | null {
+  const row = getDb().prepare('SELECT * FROM memories WHERE id = ?').get(id) as any
+  return row ? deserializeMemory(row) : null
+}
+
+export function dbGetActiveMemories(limit = 10): Memory[] {
+  const rows = getDb()
+    .prepare(
+      "SELECT * FROM memories WHERE status = 'active' ORDER BY importance DESC, created_at DESC LIMIT ?"
+    )
+    .all(limit) as any[]
+  return rows.map(deserializeMemory)
+}
+
+export function dbGetMemoriesForNode(nodeId: string): Memory[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM memories WHERE node_id = ? AND status = 'active'")
+    .all(nodeId) as any[]
+  return rows.map(deserializeMemory)
+}
+
+export function dbSupersedeMemory(oldId: string, newId: string): void {
+  getDb()
+    .prepare("UPDATE memories SET status = 'superseded', superseded_by = ? WHERE id = ?")
+    .run(newId, oldId)
+}
+
+export function dbTouchMemoryAccessed(ids: string[]): void {
+  if (ids.length === 0) return
+  const now = new Date().toISOString()
+  const placeholders = ids.map(() => '?').join(',')
+  getDb()
+    .prepare(`UPDATE memories SET last_accessed = ? WHERE id IN (${placeholders})`)
+    .run(now, ...ids)
+}
+
+function deserializeMemory(row: any): Memory {
+  return { ...row }
+}
+
+// ─── Fingerprint helper ───────────────────────────────────────────────────────
+
+export function computeFingerprint(surface: string, externalId: string, changeFields: Record<string, unknown>): string {
+  return createHash('sha256')
+    .update(`${surface}|${externalId}|${JSON.stringify(changeFields)}`)
+    .digest('hex')
+    .slice(0, 16)
 }

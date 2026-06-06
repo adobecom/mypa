@@ -1,13 +1,13 @@
 import { app, BrowserWindow, nativeImage } from 'electron'
 import { handleOAuthCallback } from './services/oauth'
-import { join } from 'path'
 import { readFileSync } from 'fs'
-import { initDb, dbGetBadgeCount } from './db/index'
+import { initDb, dbRunMaintenance } from './db/index'
 import { readConfig } from './services/config'
 import { connectAllServers, disconnectAllServers } from './services/mcp'
 import { startScheduler, stopScheduler } from './services/cron'
+import { startAmbient, stopAmbient, ambientComputeTrayState } from './services/ambient'
 import { registerIpcHandlers } from './ipc-handlers'
-import { createTray, updateTrayBadge, destroyTray } from './tray'
+import { createTray, setTrayState, destroyTray, resolveIconPath } from './tray'
 import {
   createWidgetWindow,
   toggleWidget,
@@ -69,6 +69,7 @@ async function main(): Promise<void> {
     () => {
       setQuitting()
       stopScheduler()
+      stopAmbient()
       disconnectAllServers()
       destroyTray()
       app.exit(0)
@@ -81,13 +82,24 @@ async function main(): Promise<void> {
   // Start cron scheduler
   startScheduler(() => getWidgetWindow())
 
-  // Update badge on start
-  updateTrayBadge(dbGetBadgeCount())
+  // Start ambient intelligence (fire-and-forget, same as connectAllServers)
+  startAmbient(() => getWidgetWindow())
+
+  // Periodic DB maintenance — prune old signals, action log, and decayed graph nodes.
+  // Run once at startup (after a short delay) and then every 24 hours.
+  setTimeout(() => {
+    dbRunMaintenance()
+    setInterval(() => dbRunMaintenance(), 24 * 60 * 60 * 1000)
+  }, 60_000)
+
+  // Set initial tray state
+  setTrayState(ambientComputeTrayState())
 
   // Prevent app from quitting when last window closes — stay in tray
   app.on('before-quit', () => {
     setQuitting()
     stopScheduler()
+    stopAmbient()
     disconnectAllServers()
     destroyTray()
   })
@@ -97,11 +109,8 @@ async function main(): Promise<void> {
   // Set dock icon on macOS — after win.show() so the dock entry exists
   if (process.platform === 'darwin') {
     try {
-      const iconPath = app.isPackaged
-        ? join(process.resourcesPath, 'icon.png')
-        : join(__dirname, '..', '..', 'resources', 'icon.png')
-      const data = readFileSync(iconPath)
-      const icon = nativeImage.createFromDataURL(`data:image/png;base64,${data.toString('base64')}`)
+      const data = readFileSync(resolveIconPath())
+      const icon = nativeImage.createFromBuffer(data)
       if (!icon.isEmpty()) app.dock?.setIcon(icon)
     } catch (_) {
       // leave default

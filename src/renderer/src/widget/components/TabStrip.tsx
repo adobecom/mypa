@@ -1,16 +1,18 @@
 import React from 'react'
 import { Settings } from 'lucide-react'
 import LogoMark from '../../LogoMark'
+import type { TrayState } from '../../../../../../shared/types'
 
-type Tab = 'routines' | 'plan'
+export type Tab = 'routines' | 'plan' | 'ambient'
 
 interface Props {
   tab: Tab
   onTabChange: (t: Tab) => void
   onOpenMain: () => void
+  trayState?: TrayState
 }
 
-export default function TabStrip({ tab, onTabChange, onOpenMain }: Props): React.ReactElement {
+export default function TabStrip({ tab, onTabChange, onOpenMain, trayState }: Props): React.ReactElement {
   return (
     <div className="tab-strip">
       <div className="tab-strip__logo">
@@ -30,6 +32,18 @@ export default function TabStrip({ tab, onTabChange, onOpenMain }: Props): React
           onClick={() => onTabChange('plan')}
         >
           Plan
+        </button>
+        <button
+          className={`tab-btn${tab === 'ambient' ? ' active' : ''}`}
+          onClick={() => onTabChange('ambient')}
+          style={{ position: 'relative' }}
+        >
+          Ambient
+          {(trayState === 'needs-you' || trayState === 'has-something') && (
+            <span
+              className={`tab-btn__dot tab-btn__dot--${trayState === 'needs-you' ? 'accent' : 'green'}`}
+            />
+          )}
         </button>
       </div>
 
