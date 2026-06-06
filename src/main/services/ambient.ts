@@ -99,14 +99,39 @@ function onNewSignals(signals: Signal[]): void {
 
 // ─── Ambient cycle ────────────────────────────────────────────────────────────
 
+// Returns the set of focus-node ids already covered by any non-terminal intent,
+// so runAmbientCycle can skip hits about subjects already surfaced to the user.
+function activeFocusNodeIds(): Set<string> {
+  const ids = new Set<string>()
+  for (const intent of dbGetPendingIntents()) {
+    const focusNodes = (intent.context_packet?.focusNodes ?? []) as Array<{ id: string }>
+    for (const n of focusNodes) {
+      if (n?.id) ids.add(n.id)
+    }
+  }
+  return ids
+}
+
 export async function runAmbientCycle(
   hits: ReturnType<typeof evalEventTriggers>
 ): Promise<void> {
   const win = getWidgetWin?.() ?? null
   let intentCount = 0
 
+  // Seed covered set from intents already visible to the user so we skip hits
+  // about the same nodes whether they arrive in this cycle or a later one.
+  const covered = activeFocusNodeIds()
+
   for (const hit of hits) {
     if (intentCount >= MAX_INTENTS_PER_CYCLE) break
+
+    // Skip hits whose focus nodes are already covered by a surfaced intent.
+    // Focus-less hits (e.g. time digests) are never skipped — they have their
+    // own purpose and won't collide with activity-based intents.
+    if (hit.focusNodeIds.length > 0 && hit.focusNodeIds.some((id) => covered.has(id))) {
+      console.log(`[ambient] skipping ${hit.kind} hit — focus nodes already covered`)
+      continue
+    }
 
     const packet = await assembleContextPacket(hit.kind, hit.focusNodeIds)
     let obj: IntentObject | null
@@ -120,6 +145,10 @@ export async function runAmbientCycle(
 
     const tier = resolveTier(obj)
     const intent = dbCreateIntent(obj, hit.kind as TriggerKind, tier, packet as unknown as Record<string, unknown>)
+
+    // Mark these focus nodes as covered so later hits in this same cycle are
+    // also deduplicated without needing a DB round-trip.
+    for (const id of hit.focusNodeIds) covered.add(id)
 
     dbAppendActionLog({
       intent_id: intent.id,
