@@ -27,6 +27,7 @@ import {
 import { readConfig, updateConfig } from './services/config'
 import { testServer, getServerStatus, connectAllServers } from './services/mcp'
 import { startDeviceFlow, pollDeviceFlow, startPkceFlow } from './services/oauth'
+import { detectClaudeMcpServers } from './services/claude-import'
 import { executeRoutine, handleRunMessage } from './services/routines'
 import { createPlanDraft, confirmPlanDraft, updatePlanItemStatus, deletePlanItem, handlePlanMessage } from './services/plan'
 import { generateRoutineSetup, cancelStream } from './services/claude'
@@ -254,6 +255,8 @@ export function registerIpcHandlers(
 
     return { claudeCli, servers }
   })
+
+  ipcMain.handle('setup:detect-claude-mcp', () => detectClaudeMcpServers())
 
   // ─── System ────────────────────────────────────────────────────────────────
 

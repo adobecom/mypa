@@ -384,6 +384,7 @@ export default function Settings(): React.ReactElement {
             onCancel={() => setShowNewServer(false)}
             oauthCreds={config.oauth_apps}
             onCredentialSave={handleCredentialSave}
+            existingNames={config.mcp_servers.map((s) => s.name)}
           />
         )}
       </div>

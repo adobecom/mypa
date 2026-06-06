@@ -39,7 +39,8 @@ const api: IpcApi = {
   },
   setup: {
     checkPrerequisites: () => ipcRenderer.invoke('setup:check-prerequisites'),
-    getHealth: () => ipcRenderer.invoke('setup:get-health')
+    getHealth: () => ipcRenderer.invoke('setup:get-health'),
+    detectClaudeMcp: () => ipcRenderer.invoke('setup:detect-claude-mcp')
   },
   system: {
     openMainWindow: (routineId?: string) => ipcRenderer.invoke('system:open-main-window', routineId),

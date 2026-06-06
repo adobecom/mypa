@@ -114,6 +114,17 @@ export interface McpServerStatus {
   error?: string
 }
 
+export interface DetectedMcpServer {
+  name: string
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  /** 'stdio' | 'http' | 'sse' */
+  type: string
+  /** true only for stdio servers (command present) */
+  supported: boolean
+}
+
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 export interface ClaudeConfig {
@@ -397,6 +408,7 @@ export interface IpcApi {
   setup: {
     checkPrerequisites(): Promise<{ claudeCli: boolean }>
     getHealth(): Promise<SetupHealth>
+    detectClaudeMcp(): Promise<DetectedMcpServer[]>
   }
   system: {
     openMainWindow(routineId?: string): Promise<void>

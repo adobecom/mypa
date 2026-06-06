@@ -349,6 +349,7 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
                 onCancel={() => setStep(5)}
                 oauthCreds={oauthCreds}
                 onCredentialSave={handleCredentialSave}
+                existingNames={[...existingServers, ...serversAdded].map((s) => s.name)}
               />
             </div>
 
