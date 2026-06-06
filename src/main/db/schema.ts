@@ -207,4 +207,42 @@ export function initSchema(db: Database.Database): void {
   // Embedding columns on signals — nullable so old rows remain valid immediately
   tryExec('ALTER TABLE signals ADD COLUMN embedding BLOB')
   tryExec('ALTER TABLE signals ADD COLUMN embedding_model TEXT')
+
+  // Migrate signals from old UNIQUE(surface, external_id, fingerprint) → UNIQUE(surface, external_id).
+  // The 3-column constraint allowed duplicate (surface, external_id) rows to accumulate, causing
+  // UPDATE to fail when it tried to set a fingerprint that already existed on a sibling row.
+  const sigSql = (db.prepare("SELECT sql FROM sqlite_master WHERE name='signals'").get() as any)?.sql ?? ''
+  if (sigSql.includes('UNIQUE (surface, external_id, fingerprint)')) {
+    db.pragma('foreign_keys = OFF')
+    db.exec(`
+      CREATE TABLE signals_mig (
+        id           TEXT PRIMARY KEY,
+        surface      TEXT NOT NULL,
+        kind         TEXT NOT NULL,
+        external_id  TEXT NOT NULL,
+        fingerprint  TEXT NOT NULL,
+        title        TEXT NOT NULL DEFAULT '',
+        body         TEXT NOT NULL DEFAULT '',
+        actor        TEXT NOT NULL DEFAULT '',
+        url          TEXT NOT NULL DEFAULT '',
+        raw          TEXT NOT NULL DEFAULT '{}',
+        occurred_at  TEXT,
+        observed_at  TEXT NOT NULL,
+        processed    INTEGER NOT NULL DEFAULT 0,
+        embedding    BLOB,
+        embedding_model TEXT,
+        UNIQUE (surface, external_id)
+      );
+      INSERT OR IGNORE INTO signals_mig
+        SELECT id, surface, kind, external_id, fingerprint, title, body, actor, url, raw,
+               occurred_at, observed_at, processed, embedding, embedding_model
+        FROM signals ORDER BY observed_at DESC;
+      DELETE FROM node_signals WHERE signal_id NOT IN (SELECT id FROM signals_mig);
+      DROP TABLE signals;
+      ALTER TABLE signals_mig RENAME TO signals;
+      CREATE INDEX IF NOT EXISTS idx_signals_unprocessed ON signals(processed, observed_at);
+      CREATE INDEX IF NOT EXISTS idx_signals_surface ON signals(surface, occurred_at);
+    `)
+    db.pragma('foreign_keys = ON')
+  }
 }

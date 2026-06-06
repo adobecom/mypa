@@ -292,13 +292,24 @@ export function dbInsertSignal(s: SignalInput): { inserted: boolean; id: string 
       return { inserted: false, id: '' }
     }
     // Update the row with the new state — mark unprocessed so triggers re-evaluate it
-    db.prepare(
+    const updateStmt = db.prepare(
       `UPDATE signals SET fingerprint=?, title=?, body=?, actor=?, url=?, raw=?, occurred_at=?,
        observed_at=?, processed=0 WHERE id=?`
-    ).run(
+    )
+    const updateArgs = [
       s.fingerprint, s.title, s.body, s.actor, s.url,
       JSON.stringify(s.raw), s.occurred_at ?? null, observed_at, existing.id
-    )
+    ] as const
+    try {
+      updateStmt.run(...updateArgs)
+    } catch (e: any) {
+      if (e?.code !== 'SQLITE_CONSTRAINT_UNIQUE') throw e
+      // A sibling row with the same fingerprint exists (leftover from old 3-column constraint).
+      // Delete duplicates and retry.
+      db.prepare('DELETE FROM signals WHERE surface=? AND external_id=? AND id!=?')
+        .run(s.surface, s.external_id, existing.id)
+      updateStmt.run(...updateArgs)
+    }
     return { inserted: true, id: existing.id }
   }
 
