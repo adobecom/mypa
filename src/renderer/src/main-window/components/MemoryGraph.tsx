@@ -152,6 +152,7 @@ function NodeDetailPanel({
     <div
       style={{
         width: 300,
+        height: '100%',
         flexShrink: 0,
         background: 'rgba(10,12,22,0.92)',
         backdropFilter: 'blur(16px)',
@@ -919,7 +920,7 @@ export default function MemoryGraph(): React.ReactElement {
 
         {/* Detail panel */}
         {selectedId && (
-          <div style={{ width: 300, flexShrink: 0 }}>
+          <div style={{ width: 300, flexShrink: 0, height: '100%', overflow: 'hidden' }}>
             {detailLoading || !detail ? (
               <div
                 style={{
