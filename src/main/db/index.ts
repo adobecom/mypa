@@ -512,6 +512,42 @@ function deserializeEdge(row: any): GraphEdge {
   }
 }
 
+export function dbGetAllNodes(): GraphNode[] {
+  const rows = getDb().prepare('SELECT * FROM graph_nodes ORDER BY weight DESC').all() as any[]
+  return rows.map(deserializeNode)
+}
+
+export function dbGetAllEdges(): GraphEdge[] {
+  const rows = getDb().prepare('SELECT * FROM graph_edges').all() as any[]
+  return rows.map(deserializeEdge)
+}
+
+export function dbDeleteNode(id: string): void {
+  getDb().prepare('DELETE FROM graph_nodes WHERE id = ?').run(id)
+}
+
+export function dbDeleteEdge(id: string): void {
+  getDb().prepare('DELETE FROM graph_edges WHERE id = ?').run(id)
+}
+
+export function dbDeleteMemory(id: string): void {
+  getDb().prepare('DELETE FROM memories WHERE id = ?').run(id)
+}
+
+export function dbUpdateMemory(
+  id: string,
+  update: { content?: string; importance?: number; status?: 'active' | 'superseded' }
+): void {
+  const sets: string[] = []
+  const args: (string | number)[] = []
+  if (update.content !== undefined) { sets.push('content = ?'); args.push(update.content) }
+  if (update.importance !== undefined) { sets.push('importance = ?'); args.push(update.importance) }
+  if (update.status !== undefined) { sets.push('status = ?'); args.push(update.status) }
+  if (sets.length === 0) return
+  args.push(id)
+  getDb().prepare(`UPDATE memories SET ${sets.join(', ')} WHERE id = ?`).run(...args)
+}
+
 // ─── Intents ─────────────────────────────────────────────────────────────────
 
 export function dbCreateIntent(

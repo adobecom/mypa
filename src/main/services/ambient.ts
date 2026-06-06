@@ -342,13 +342,34 @@ export async function ambientChallengeIntent(id: string, reason: string): Promis
   return dbGetIntent(id)!
 }
 
+/**
+ * Returns the lower-bound timestamp (ms) for each digest slot's time window.
+ * - morning: since yesterday at 17:00 (overnight catch-up)
+ * - midday:  since today at 00:00 (morning activity so far)
+ * - eod:     since today at 00:00 (full-day recap)
+ */
+function slotWindow(slot: DigestSlot): number {
+  const now = new Date()
+  if (slot === 'morning') {
+    // Yesterday at 17:00
+    const yesterday = new Date(now)
+    yesterday.setDate(yesterday.getDate() - 1)
+    yesterday.setHours(17, 0, 0, 0)
+    return yesterday.getTime()
+  }
+  // midday and eod: start of today
+  const startOfDay = new Date(now)
+  startOfDay.setHours(0, 0, 0, 0)
+  return startOfDay.getTime()
+}
+
 export async function ambientGetDigest(slot?: DigestSlot): Promise<AmbientDigest> {
   const resolvedSlot: DigestSlot = slot ?? getCurrentSlot()
   const intents = dbGetAllIntents(50)
+  const windowStartMs = slotWindow(resolvedSlot)
   const recent = intents.filter((i) => {
     if (!i.created_at) return false
-    const age = Date.now() - Date.parse(i.created_at)
-    return age < 24 * 60 * 60 * 1000 // last 24h
+    return Date.parse(i.created_at) >= windowStartMs
   })
 
   const did = recent

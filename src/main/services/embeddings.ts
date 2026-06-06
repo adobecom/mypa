@@ -24,10 +24,7 @@ async function getPipeline(): Promise<EmbeddingPipeline | null> {
 
   _pipelineLoading = true
   try {
-    // Use require() — more reliable from a CJS output than dynamic import() interop
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const transformers = require('@xenova/transformers') as typeof import('@xenova/transformers')
-    const { pipeline, env } = transformers
+    const { pipeline, env } = await import('@xenova/transformers')
     env.cacheDir = join(app.getPath('home'), '.mypa', 'models')
     env.allowLocalModels = true
 

@@ -63,6 +63,14 @@ const api: IpcApi = {
     pollNow: () => ipcRenderer.invoke('ambient:poll-now'),
     getLog: (limit?: number) => ipcRenderer.invoke('ambient:get-log', limit)
   },
+  memory: {
+    getGraph: () => ipcRenderer.invoke('memory:get-graph'),
+    getNode: (id: string) => ipcRenderer.invoke('memory:get-node', id),
+    deleteNode: (id: string) => ipcRenderer.invoke('memory:delete-node', id),
+    deleteEdge: (id: string) => ipcRenderer.invoke('memory:delete-edge', id),
+    deleteMemory: (id: string) => ipcRenderer.invoke('memory:delete-memory', id),
+    updateMemory: (id: string, update: object) => ipcRenderer.invoke('memory:update-memory', id, update)
+  },
   on: (channel, listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => listener(...args)
     ipcRenderer.on(channel, wrapped)

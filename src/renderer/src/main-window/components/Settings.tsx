@@ -442,10 +442,17 @@ function AmbientAutonomyCard(): React.ReactElement {
   const [policies, setPolicies] = useState<AutonomyPolicy[]>([])
   const [resetting, setResetting] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
+  const [enabled, setEnabled] = useState(true)
 
   useEffect(() => {
     api.ambient.getPolicy().then((p) => setPolicies(p as AutonomyPolicy[]))
+    api.config.get().then((cfg) => setEnabled(cfg.ambient?.enabled ?? true))
   }, [])
+
+  async function handleToggleEnabled(next: boolean): Promise<void> {
+    setEnabled(next)
+    await api.config.update({ ambient: { enabled: next } } as any)
+  }
 
   function getTierForType(type: IntentType): Tier {
     return (policies.find((p) => p.action_type.startsWith(type))?.tier ?? 2) as Tier
@@ -476,24 +483,49 @@ function AmbientAutonomyCard(): React.ReactElement {
           <div className="card__title">Ambient Autonomy</div>
           <div className="card__subtitle">Control how much the assistant can act on its own.</div>
         </div>
-        {confirmReset ? (
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Reset trust?</span>
-            <button className="btn btn--ghost btn--sm" onClick={() => setConfirmReset(false)} style={{ padding: '3px 8px', fontSize: 11 }}>Cancel</button>
-            <button className="btn btn--danger btn--sm" onClick={handleReset} disabled={resetting} style={{ padding: '3px 8px', fontSize: 11 }}>Reset</button>
-          </div>
-        ) : (
-          <button
-            className="btn btn--danger btn--sm"
-            onClick={() => setConfirmReset(true)}
-            style={{ padding: '3px 8px', fontSize: 11 }}
-          >
-            Reset trust
-          </button>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {/* Master on/off toggle */}
+          <label className="toggle" title={enabled ? 'Ambient is on — click to disable' : 'Ambient is off — click to enable'}>
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => handleToggleEnabled(e.target.checked)}
+            />
+            <span className="toggle__track" />
+          </label>
+          {/* Reset trust */}
+          {confirmReset ? (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Reset trust?</span>
+              <button className="btn btn--ghost btn--sm" onClick={() => setConfirmReset(false)} style={{ padding: '3px 8px', fontSize: 11 }}>Cancel</button>
+              <button className="btn btn--danger btn--sm" onClick={handleReset} disabled={resetting} style={{ padding: '3px 8px', fontSize: 11 }}>Reset</button>
+            </div>
+          ) : (
+            <button
+              className="btn btn--danger btn--sm"
+              onClick={() => setConfirmReset(true)}
+              style={{ padding: '3px 8px', fontSize: 11 }}
+            >
+              Reset trust
+            </button>
+          )}
+        </div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {!enabled && (
+        <div style={{
+          padding: '8px 12px', marginBottom: 8,
+          background: 'rgba(255,255,255,0.04)',
+          border: '1px solid rgba(255,255,255,0.08)',
+          borderRadius: 8,
+          fontSize: 12,
+          color: 'var(--text-muted)'
+        }}>
+          Ambient intelligence is off — mypa won't poll or surface anything.
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, opacity: enabled ? 1 : 0.4, pointerEvents: enabled ? 'auto' : 'none', transition: 'opacity 200ms' }}>
         {INTENT_TYPES.map((type) => {
           const currentTier = getTierForType(type)
           return (

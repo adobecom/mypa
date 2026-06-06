@@ -416,6 +416,14 @@ export interface IpcApi {
     pollNow(): Promise<void>
     getLog(limit?: number): Promise<ActionLogEntry[]>
   }
+  memory: {
+    getGraph(): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }>
+    getNode(id: string): Promise<{ node: GraphNode; edges: GraphEdge[]; memories: Memory[]; timeline: NodeSignalLink[] } | null>
+    deleteNode(id: string): Promise<void>
+    deleteEdge(id: string): Promise<void>
+    deleteMemory(id: string): Promise<void>
+    updateMemory(id: string, update: { content?: string; importance?: number; status?: 'active' | 'superseded' }): Promise<void>
+  }
   on(
     channel:
       | 'routine:run-started'

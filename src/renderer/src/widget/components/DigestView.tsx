@@ -18,11 +18,16 @@ export default function DigestView(): React.ReactElement {
   const api = window.electron
 
   useEffect(() => {
+    let cancelled = false
     setLoading(true)
     api.ambient.getDigest(slot)
-      .then((d) => setDigest(d as AmbientDigest))
+      .then((d) => { if (!cancelled) setDigest(d as AmbientDigest) })
       .catch(console.error)
-      .finally(() => setLoading(false))
+      .finally(() => { if (!cancelled) setLoading(false) })
+    // Cleanup: mark this fetch stale if slot changes before it resolves.
+    // Intentionally do NOT clear digest here so previous slot's content
+    // stays visible under the "Loading…" indicator until the new one lands.
+    return () => { cancelled = true }
   }, [slot])
 
   // Subscribe once; use slotRef so the handler always compares against the current slot

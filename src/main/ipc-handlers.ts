@@ -11,7 +11,18 @@ import {
   dbUpdateRun,
   dbGetPlanItems,
   dbGetPlanThread,
-  dbGetBadgeCount
+  dbGetBadgeCount,
+  dbGetAllNodes,
+  dbGetAllEdges,
+  dbGetNodeById,
+  dbGetEdgesFrom,
+  dbGetEdgesTo,
+  dbGetMemoriesForNode,
+  dbGetNodeTimeline,
+  dbDeleteNode,
+  dbDeleteEdge,
+  dbDeleteMemory,
+  dbUpdateMemory
 } from './db/index'
 import { readConfig, updateConfig } from './services/config'
 import { testServer, getServerStatus, connectAllServers } from './services/mcp'
@@ -30,7 +41,9 @@ import {
   ambientGetPolicy,
   ambientSetAutonomyTier,
   ambientResetTrust,
-  ambientPollNow
+  ambientPollNow,
+  startAmbient,
+  stopAmbient
 } from './services/ambient'
 import { dbGetActionLog } from './db/index'
 import { setTrayState } from './tray'
@@ -143,9 +156,17 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('config:update', async (_e, partial) => {
+    const wasEnabled = readConfig().ambient?.enabled ?? true
     const updated = updateConfig(partial)
     // Re-connect MCP servers if changed
     await connectAllServers()
+    // Start/stop ambient intelligence on enabled transitions
+    const nowEnabled = updated.ambient?.enabled ?? true
+    if (!wasEnabled && nowEnabled) {
+      startAmbient(getWidgetWin)
+    } else if (wasEnabled && !nowEnabled) {
+      stopAmbient()
+    }
     return updated
   })
 
@@ -326,5 +347,36 @@ export function registerIpcHandlers(
 
   ipcMain.handle('ambient:get-log', async (_e, limit?: number) => {
     return dbGetActionLog(limit)
+  })
+
+  // ─── Memory graph ──────────────────────────────────────────────────────────
+
+  ipcMain.handle('memory:get-graph', async () => {
+    return { nodes: dbGetAllNodes(), edges: dbGetAllEdges() }
+  })
+
+  ipcMain.handle('memory:get-node', async (_e, id: string) => {
+    const node = dbGetNodeById(id)
+    if (!node) return null
+    const edges = [...dbGetEdgesFrom(id), ...dbGetEdgesTo(id)]
+    const memories = dbGetMemoriesForNode(id)
+    const timeline = dbGetNodeTimeline(id, 20)
+    return { node, edges, memories, timeline }
+  })
+
+  ipcMain.handle('memory:delete-node', async (_e, id: string) => {
+    dbDeleteNode(id)
+  })
+
+  ipcMain.handle('memory:delete-edge', async (_e, id: string) => {
+    dbDeleteEdge(id)
+  })
+
+  ipcMain.handle('memory:delete-memory', async (_e, id: string) => {
+    dbDeleteMemory(id)
+  })
+
+  ipcMain.handle('memory:update-memory', async (_e, id: string, update: { content?: string; importance?: number; status?: 'active' | 'superseded' }) => {
+    dbUpdateMemory(id, update)
   })
 }

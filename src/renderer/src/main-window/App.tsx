@@ -1,18 +1,20 @@
 import React, { useState, useEffect } from 'react'
-import { Zap, List, Settings as SettingsIcon } from 'lucide-react'
+import { Zap, List, Settings as SettingsIcon, Network } from 'lucide-react'
 import LogoMark from '../LogoMark'
 import AmbientBackground from '../AmbientBackground'
 import RoutinesManager from './components/RoutinesManager'
 import Settings from './components/Settings'
 import RunLogs from './components/RunLogs'
 import OnboardingWizard from './components/OnboardingWizard'
+import MemoryGraph from './components/MemoryGraph'
 import type { AppConfig } from '@shared/types'
 
-type Page = 'routines' | 'logs' | 'settings'
+type Page = 'routines' | 'logs' | 'settings' | 'memory'
 
 const NAV: { id: Page; icon: React.ReactNode; label: string }[] = [
   { id: 'routines', icon: <Zap size={14} strokeWidth={2} />, label: 'Routines' },
   { id: 'logs', icon: <List size={14} strokeWidth={2} />, label: 'Run Logs' },
+  { id: 'memory', icon: <Network size={14} strokeWidth={2} />, label: 'Memory' },
   { id: 'settings', icon: <SettingsIcon size={14} strokeWidth={2} />, label: 'Settings' }
 ]
 
@@ -75,7 +77,10 @@ export default function App(): React.ReactElement {
           </nav>
         </aside>
 
-        <main className="main-content">
+        <main
+          className={page === 'memory' ? undefined : 'main-content'}
+          style={page === 'memory' ? { flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', minWidth: 0 } : undefined}
+        >
           {page === 'routines' && (
             <RoutinesManager
               editRoutineId={editRoutineId}
@@ -83,6 +88,7 @@ export default function App(): React.ReactElement {
             />
           )}
           {page === 'logs' && <RunLogs />}
+          {page === 'memory' && <MemoryGraph />}
           {page === 'settings' && <Settings />}
         </main>
       </div>
