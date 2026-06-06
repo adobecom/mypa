@@ -29,7 +29,7 @@ function modelArgs(): string[] {
   return model ? ['--model', model] : []
 }
 
-async function runClaude(systemPrompt: string, userPrompt: string): Promise<string> {
+export async function runClaude(systemPrompt: string, userPrompt: string): Promise<string> {
   const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
   return new Promise((resolve, reject) => {
     const proc = spawn(

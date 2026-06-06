@@ -2,12 +2,13 @@ import { app, BrowserWindow, nativeImage } from 'electron'
 import { handleOAuthCallback } from './services/oauth'
 import { join } from 'path'
 import { readFileSync } from 'fs'
-import { initDb, dbGetBadgeCount } from './db/index'
+import { initDb, dbGetBadgeCount, dbRunMaintenance } from './db/index'
 import { readConfig } from './services/config'
 import { connectAllServers, disconnectAllServers } from './services/mcp'
 import { startScheduler, stopScheduler } from './services/cron'
+import { startAmbient, stopAmbient, ambientComputeTrayState } from './services/ambient'
 import { registerIpcHandlers } from './ipc-handlers'
-import { createTray, updateTrayBadge, destroyTray } from './tray'
+import { createTray, updateTrayBadge, setTrayState, destroyTray } from './tray'
 import {
   createWidgetWindow,
   toggleWidget,
@@ -69,6 +70,7 @@ async function main(): Promise<void> {
     () => {
       setQuitting()
       stopScheduler()
+      stopAmbient()
       disconnectAllServers()
       destroyTray()
       app.exit(0)
@@ -81,13 +83,25 @@ async function main(): Promise<void> {
   // Start cron scheduler
   startScheduler(() => getWidgetWindow())
 
-  // Update badge on start
+  // Start ambient intelligence (fire-and-forget, same as connectAllServers)
+  startAmbient(() => getWidgetWindow())
+
+  // Periodic DB maintenance — prune old signals, action log, and decayed graph nodes.
+  // Run once at startup (after a short delay) and then every 24 hours.
+  setTimeout(() => {
+    dbRunMaintenance()
+    setInterval(() => dbRunMaintenance(), 24 * 60 * 60 * 1000)
+  }, 60_000)
+
+  // Update tray with initial state
   updateTrayBadge(dbGetBadgeCount())
+  setTrayState(ambientComputeTrayState())
 
   // Prevent app from quitting when last window closes — stay in tray
   app.on('before-quit', () => {
     setQuitting()
     stopScheduler()
+    stopAmbient()
     disconnectAllServers()
     destroyTray()
   })

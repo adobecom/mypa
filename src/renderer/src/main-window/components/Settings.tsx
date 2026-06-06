@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { Check, AlertTriangle, XCircle, RefreshCw } from 'lucide-react'
-import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart } from '@shared/types'
+import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import ServerCatalogPicker from './ServerCatalogPicker'
 
@@ -418,6 +418,116 @@ export default function Settings(): React.ReactElement {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Ambient Autonomy */}
+      <AmbientAutonomyCard />
+    </div>
+  )
+}
+
+// ─── Ambient Autonomy Card ───────────────────────────────────────────────────
+
+const INTENT_TYPES: IntentType[] = ['action', 'suggestion', 'flag', 'digest']
+const TIER_LABELS: Record<number, string> = { 0: 'Silent', 1: 'Notify', 2: 'Approve', 3: 'Locked' }
+const TIER_HINTS: Record<number, string> = {
+  0: 'Acts automatically without telling you',
+  1: 'Acts, then tells you what it did',
+  2: 'Always asks before doing anything',
+  3: 'Never acts — you must initiate'
+}
+
+function AmbientAutonomyCard(): React.ReactElement {
+  const api = window.electron
+  const [policies, setPolicies] = useState<AutonomyPolicy[]>([])
+  const [resetting, setResetting] = useState(false)
+  const [confirmReset, setConfirmReset] = useState(false)
+
+  useEffect(() => {
+    api.ambient.getPolicy().then((p) => setPolicies(p as AutonomyPolicy[]))
+  }, [])
+
+  function getTierForType(type: IntentType): Tier {
+    return (policies.find((p) => p.action_type.startsWith(type))?.tier ?? 2) as Tier
+  }
+
+  async function handleSetTier(type: IntentType, tier: Tier): Promise<void> {
+    await api.ambient.setTier(type, tier)
+    const updated = await api.ambient.getPolicy()
+    setPolicies(updated as AutonomyPolicy[])
+  }
+
+  async function handleReset(): Promise<void> {
+    setResetting(true)
+    try {
+      await api.ambient.resetTrust()
+      const updated = await api.ambient.getPolicy()
+      setPolicies(updated as AutonomyPolicy[])
+      setConfirmReset(false)
+    } finally {
+      setResetting(false)
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card__header">
+        <div>
+          <div className="card__title">Ambient Autonomy</div>
+          <div className="card__subtitle">Control how much the assistant can act on its own.</div>
+        </div>
+        {confirmReset ? (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Reset trust?</span>
+            <button className="btn btn--ghost btn--sm" onClick={() => setConfirmReset(false)} style={{ padding: '3px 8px', fontSize: 11 }}>Cancel</button>
+            <button className="btn btn--danger btn--sm" onClick={handleReset} disabled={resetting} style={{ padding: '3px 8px', fontSize: 11 }}>Reset</button>
+          </div>
+        ) : (
+          <button
+            className="btn btn--danger btn--sm"
+            onClick={() => setConfirmReset(true)}
+            style={{ padding: '3px 8px', fontSize: 11 }}
+          >
+            Reset trust
+          </button>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {INTENT_TYPES.map((type) => {
+          const currentTier = getTierForType(type)
+          return (
+            <div key={type}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ fontSize: 13, textTransform: 'capitalize' }}>{type}s</span>
+                {/* Segmented tier control */}
+                <div style={{ display: 'flex', background: 'var(--bg-elevated)', borderRadius: 8, padding: 2, gap: 2 }}>
+                  {([0, 1, 2, 3] as Tier[]).map((tier) => (
+                    <button
+                      key={tier}
+                      onClick={() => handleSetTier(type, tier)}
+                      style={{
+                        padding: '3px 8px',
+                        borderRadius: 6,
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: 11,
+                        fontFamily: 'var(--font-sans)',
+                        fontWeight: currentTier === tier ? 600 : 400,
+                        background: currentTier === tier ? 'var(--bg-overlay)' : 'transparent',
+                        color: currentTier === tier ? 'var(--text-primary)' : 'var(--text-muted)',
+                        transition: 'background var(--transition), color var(--transition)'
+                      }}
+                    >
+                      {TIER_LABELS[tier]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{TIER_HINTS[currentTier]}</div>
+            </div>
+          )
+        })}
       </div>
     </div>
   )

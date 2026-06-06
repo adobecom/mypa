@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import TabStrip from './components/TabStrip'
+import TabStrip, { type Tab } from './components/TabStrip'
 import RoutinesFeed from './components/RoutinesFeed'
 import PlanList from './components/PlanList'
 import QuickAddBar from './components/QuickAddBar'
 import PlanReviewCard from './components/PlanReviewCard'
+import AmbientFeed from './components/AmbientFeed'
+import DigestView from './components/DigestView'
 import AmbientBackground from '../AmbientBackground'
-import type { PlanDraft, PlanItem, RoutineRun, AppConfig } from '../../../../../shared/types'
-
-type Tab = 'routines' | 'plan'
+import type { PlanDraft, PlanItem, RoutineRun, AppConfig, Intent, TrayState } from '../../../../../shared/types'
 
 export default function App(): React.ReactElement {
   const [tab, setTab] = useState<Tab>('routines')
@@ -16,6 +16,8 @@ export default function App(): React.ReactElement {
   const [draft, setDraft] = useState<PlanDraft | null>(null)
   const [drafting, setDrafting] = useState(false)
   const [config, setConfig] = useState<AppConfig | null>(null)
+  const [intents, setIntents] = useState<Intent[]>([])
+  const [trayState, setTrayState] = useState<TrayState>('idle')
 
   const api = window.electron
 
@@ -23,6 +25,8 @@ export default function App(): React.ReactElement {
     api.config.get().then(setConfig)
     api.plan.getAll().then(setPlanItems)
     api.routines.getAllRuns(20).then(setRuns)
+    api.ambient.getIntents().then((items) => setIntents(items as Intent[]))
+    api.ambient.getTrayState().then((s) => setTrayState(s as TrayState))
   }, [])
 
   // Re-fetch config on focus so the setup banner clears after onboarding completes
@@ -46,11 +50,26 @@ export default function App(): React.ReactElement {
     const unsubBadge = api.on('badge:updated', () => {
       api.plan.getAll().then(setPlanItems)
     })
+    const unsubIntentCreated = api.on('ambient:intent-created', (intent) => {
+      const i = intent as Intent
+      setIntents((prev) => [i, ...prev.filter((x) => x.id !== i.id)])
+      setTab('ambient')
+    })
+    const unsubIntentUpdated = api.on('ambient:intent-updated', (updated) => {
+      const u = updated as Partial<Intent> & { id: string }
+      setIntents((prev) => prev.map((i) => (i.id === u.id ? { ...i, ...u } : i)))
+    })
+    const unsubTrayState = api.on('ambient:tray-state', (s) => {
+      setTrayState(s as TrayState)
+    })
 
     return () => {
       unsubRunStarted()
       unsubRunCompleted()
       unsubBadge()
+      unsubIntentCreated()
+      unsubIntentUpdated()
+      unsubTrayState()
     }
   }, [])
 
@@ -98,6 +117,7 @@ export default function App(): React.ReactElement {
         tab={tab}
         onTabChange={setTab}
         onOpenMain={() => api.system.openMainWindow()}
+        trayState={trayState}
       />
 
       {needsSetup && (
@@ -131,6 +151,13 @@ export default function App(): React.ReactElement {
             onStatusChange={handleStatusChange}
             onItemsChange={setPlanItems}
           />
+        )}
+
+        {tab === 'ambient' && (
+          <>
+            <DigestView />
+            <AmbientFeed intents={intents} onIntentsChange={setIntents} />
+          </>
         )}
       </div>
 

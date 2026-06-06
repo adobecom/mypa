@@ -147,6 +147,7 @@ export interface AppConfig {
     notion?: string
     linear?: string
   }
+  ambient?: AmbientConfig
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -157,7 +158,186 @@ export const DEFAULT_CONFIG: AppConfig = {
     notification_sound: true,
     launch_on_login: false
   },
-  onboarding_complete: false
+  onboarding_complete: false,
+  ambient: {
+    enabled: true,
+    pollIntervalMs: 5 * 60 * 1000,
+    decayHalfLifeDays: 7,
+    confidenceFloor: 0.4
+  }
+}
+
+// ─── Ambient Intelligence ────────────────────────────────────────────────────
+
+export type IntentSurface = 'github' | 'jira' | 'slack'
+export type IntentType = 'action' | 'suggestion' | 'flag' | 'digest'
+export type IntentStatus =
+  | 'pending'
+  | 'surfaced'
+  | 'approved'
+  | 'executed'
+  | 'challenged'
+  | 'dismissed'
+  | 'expired'
+  | 'failed'
+export type IntentReversibility = 'reversible' | 'irreversible'
+export type TriggerKind = 'spike' | 'staleness' | 'dependency' | 'threshold' | 'time'
+export type Tier = 0 | 1 | 2 | 3
+export type TrayState = 'idle' | 'has-something' | 'needs-you'
+export type DigestSlot = 'morning' | 'midday' | 'eod'
+export type NodeType = 'person' | 'project' | 'task' | 'decision'
+export type EdgeRel =
+  | 'working_on'
+  | 'blocked_by'
+  | 'depends_on'
+  | 'mentioned_in'
+  | 'assigned_to'
+  | 'waiting_for'
+  | 'deferred'
+
+export interface ProposedAction {
+  surface: IntentSurface
+  verb: string
+  target: string
+  payload: Record<string, unknown>
+}
+
+export interface IntentObject {
+  type: IntentType
+  confidence: number
+  proposed_action: ProposedAction
+  rationale: string
+  reversibility: IntentReversibility
+  required_approval: boolean
+}
+
+export interface Intent {
+  id: string
+  type: IntentType
+  trigger_kind: TriggerKind
+  confidence: number
+  surface: IntentSurface | null
+  verb: string | null
+  target: string | null
+  payload: Record<string, unknown>
+  rationale: string
+  reversibility: IntentReversibility
+  required_approval: boolean
+  tier: Tier
+  status: IntentStatus
+  context_packet: Record<string, unknown>
+  created_at: string
+  resolved_at: string | null
+  error: string | null
+}
+
+export interface Signal {
+  id: string
+  surface: IntentSurface
+  kind: string
+  external_id: string
+  fingerprint: string
+  title: string
+  body: string
+  actor: string
+  url: string
+  raw: Record<string, unknown>
+  occurred_at: string | null
+  observed_at: string
+  processed: boolean
+}
+
+export type SignalInput = Omit<Signal, 'id' | 'observed_at' | 'processed'>
+
+export interface GraphNode {
+  id: string
+  type: NodeType
+  key: string
+  label: string
+  attrs: Record<string, unknown>
+  weight: number
+  first_seen: string
+  last_seen: string
+}
+
+export interface GraphEdge {
+  id: string
+  src_id: string
+  dst_id: string
+  rel: EdgeRel
+  weight: number
+  attrs: Record<string, unknown>
+  first_seen: string
+  last_seen: string
+}
+
+export interface AutonomyPolicy {
+  action_type: string
+  tier: Tier
+  tier_locked: boolean
+  approvals: number
+  consecutive_approvals: number
+  challenges: number
+  dismissals: number
+  executions: number
+  updated_at: string
+}
+
+export interface ActionLogEntry {
+  id: string
+  intent_id: string | null
+  event: string
+  action_type: string
+  tier: number | null
+  detail: Record<string, unknown>
+  created_at: string
+}
+
+export interface DigestSection {
+  did: string[]
+  watching: string[]
+  decisions: string[]
+}
+
+export interface AmbientDigest {
+  slot: DigestSlot
+  generated_at: string
+  section: DigestSection
+}
+
+export interface AmbientConfig {
+  enabled: boolean
+  pollIntervalMs: number
+  decayHalfLifeDays: number
+  confidenceFloor: number
+}
+
+export type MemoryType = 'fact' | 'pattern' | 'preference' | 'status'
+
+export interface Memory {
+  id: string
+  content: string
+  type: MemoryType
+  confidence: number
+  importance: number
+  surface: string
+  node_id: string | null
+  status: 'active' | 'superseded'
+  superseded_by: string | null
+  created_at: string
+  last_accessed: string | null
+}
+
+export type MemoryInput = Omit<Memory, 'id' | 'created_at' | 'status' | 'superseded_by' | 'last_accessed'>
+
+export interface NodeSignalLink {
+  id: string
+  node_id: string
+  signal_id: string
+  surface: string
+  summary: string
+  occurred_at: string | null
+  observed_at: string
 }
 
 // ─── Setup / Health ───────────────────────────────────────────────────────────
@@ -223,6 +403,19 @@ export interface IpcApi {
     getBadgeCount(): Promise<number>
     getWindowType(): 'widget' | 'main-window'
   }
+  ambient: {
+    getIntents(): Promise<Intent[]>
+    approve(id: string): Promise<Intent>
+    dismiss(id: string): Promise<void>
+    challenge(id: string, reason: string): Promise<Intent>
+    getDigest(slot?: DigestSlot): Promise<AmbientDigest>
+    getTrayState(): Promise<TrayState>
+    getPolicy(): Promise<AutonomyPolicy[]>
+    setTier(actionType: string, tier: Tier, locked?: boolean): Promise<void>
+    resetTrust(): Promise<void>
+    pollNow(): Promise<void>
+    getLog(limit?: number): Promise<ActionLogEntry[]>
+  }
   on(
     channel:
       | 'routine:run-started'
@@ -230,7 +423,11 @@ export interface IpcApi {
       | 'routine:run-message'
       | 'plan:item-message'
       | 'badge:updated'
-      | 'navigate:edit-routine',
+      | 'navigate:edit-routine'
+      | 'ambient:intent-created'
+      | 'ambient:intent-updated'
+      | 'ambient:tray-state'
+      | 'ambient:digest-ready',
     listener: (...args: unknown[]) => void
   ): () => void
 }

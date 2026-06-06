@@ -1049,3 +1049,58 @@ body {
 .md-text hr { border: none; border-top: 1px solid var(--border); margin: 0.5em 0; }
 .md-text a { color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; }
 .md-text a:hover { color: var(--accent-hover); }
+
+/* ─── Ambient Intelligence ──────────────────────────────────────────────────── */
+
+/* Inline chips on IntentCard — confidence, reversibility, tier, target */
+.intent-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.intent-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 16px;
+  font-family: var(--font-sans);
+}
+
+.intent-chip--accent {
+  background: var(--accent-muted);
+  color: var(--accent-text);
+  border: 1px solid rgba(109, 106, 255, 0.2);
+}
+
+.intent-chip--warning {
+  background: var(--yellow-muted);
+  color: var(--yellow);
+  border: 1px solid rgba(245, 158, 96, 0.25);
+}
+
+.intent-chip--muted {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  border: 1px solid var(--border-muted);
+}
+
+/* .btn--sm modifier */
+.btn--sm { padding: 4px 10px; font-size: 11px; }
+
+/* Tab notification dot (Ambient tab) */
+.tab-btn__dot {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.tab-btn__dot--accent { background: var(--accent); }
+.tab-btn__dot--green  { background: var(--green); }

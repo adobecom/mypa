@@ -49,6 +49,20 @@ const api: IpcApi = {
       return window.location.pathname.includes('widget') ? 'widget' : 'main-window'
     }
   },
+  ambient: {
+    getIntents: () => ipcRenderer.invoke('ambient:get-intents'),
+    approve: (id: string) => ipcRenderer.invoke('ambient:approve', id),
+    dismiss: (id: string) => ipcRenderer.invoke('ambient:dismiss', id),
+    challenge: (id: string, reason: string) => ipcRenderer.invoke('ambient:challenge', id, reason),
+    getDigest: (slot?: string) => ipcRenderer.invoke('ambient:get-digest', slot),
+    getTrayState: () => ipcRenderer.invoke('ambient:get-tray-state'),
+    getPolicy: () => ipcRenderer.invoke('ambient:get-policy'),
+    setTier: (actionType: string, tier: number, locked?: boolean) =>
+      ipcRenderer.invoke('ambient:set-tier', actionType, tier, locked),
+    resetTrust: () => ipcRenderer.invoke('ambient:reset-trust'),
+    pollNow: () => ipcRenderer.invoke('ambient:poll-now'),
+    getLog: (limit?: number) => ipcRenderer.invoke('ambient:get-log', limit)
+  },
   on: (channel, listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => listener(...args)
     ipcRenderer.on(channel, wrapped)

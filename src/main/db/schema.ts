@@ -70,5 +70,141 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_routine_run_threads_run_id ON routine_run_threads(run_id);
     CREATE INDEX IF NOT EXISTS idx_plan_item_threads_item_id ON plan_item_threads(item_id);
     CREATE INDEX IF NOT EXISTS idx_plan_items_status ON plan_items(status);
+
+    -- ─── Ambient Intelligence ─────────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS signals (
+      id           TEXT PRIMARY KEY,
+      surface      TEXT NOT NULL,
+      kind         TEXT NOT NULL,
+      external_id  TEXT NOT NULL,
+      fingerprint  TEXT NOT NULL,
+      title        TEXT NOT NULL DEFAULT '',
+      body         TEXT NOT NULL DEFAULT '',
+      actor        TEXT NOT NULL DEFAULT '',
+      url          TEXT NOT NULL DEFAULT '',
+      raw          TEXT NOT NULL DEFAULT '{}',
+      occurred_at  TEXT,
+      observed_at  TEXT NOT NULL,
+      processed    INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (surface, external_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS graph_nodes (
+      id         TEXT PRIMARY KEY,
+      type       TEXT NOT NULL,
+      key        TEXT NOT NULL,
+      label      TEXT NOT NULL DEFAULT '',
+      attrs      TEXT NOT NULL DEFAULT '{}',
+      weight     REAL NOT NULL DEFAULT 0,
+      first_seen TEXT NOT NULL,
+      last_seen  TEXT NOT NULL,
+      UNIQUE (type, key)
+    );
+
+    CREATE TABLE IF NOT EXISTS graph_edges (
+      id         TEXT PRIMARY KEY,
+      src_id     TEXT NOT NULL,
+      dst_id     TEXT NOT NULL,
+      rel        TEXT NOT NULL,
+      weight     REAL NOT NULL DEFAULT 0,
+      attrs      TEXT NOT NULL DEFAULT '{}',
+      first_seen TEXT NOT NULL,
+      last_seen  TEXT NOT NULL,
+      UNIQUE (src_id, dst_id, rel),
+      FOREIGN KEY (src_id) REFERENCES graph_nodes(id) ON DELETE CASCADE,
+      FOREIGN KEY (dst_id) REFERENCES graph_nodes(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS intents (
+      id               TEXT PRIMARY KEY,
+      type             TEXT NOT NULL,
+      trigger_kind     TEXT NOT NULL,
+      confidence       REAL NOT NULL DEFAULT 0,
+      surface          TEXT,
+      verb             TEXT,
+      target           TEXT,
+      payload          TEXT NOT NULL DEFAULT '{}',
+      rationale        TEXT NOT NULL DEFAULT '',
+      reversibility    TEXT NOT NULL DEFAULT 'reversible',
+      required_approval INTEGER NOT NULL DEFAULT 1,
+      tier             INTEGER NOT NULL DEFAULT 2,
+      status           TEXT NOT NULL DEFAULT 'pending',
+      context_packet   TEXT NOT NULL DEFAULT '{}',
+      created_at       TEXT NOT NULL,
+      resolved_at      TEXT,
+      error            TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS action_log (
+      id          TEXT PRIMARY KEY,
+      intent_id   TEXT,
+      event       TEXT NOT NULL,
+      action_type TEXT NOT NULL DEFAULT '',
+      tier        INTEGER,
+      detail      TEXT NOT NULL DEFAULT '{}',
+      created_at  TEXT NOT NULL,
+      FOREIGN KEY (intent_id) REFERENCES intents(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS autonomy_policy (
+      action_type           TEXT PRIMARY KEY,
+      tier                  INTEGER NOT NULL DEFAULT 2,
+      tier_locked           INTEGER NOT NULL DEFAULT 0,
+      approvals             INTEGER NOT NULL DEFAULT 0,
+      consecutive_approvals INTEGER NOT NULL DEFAULT 0,
+      challenges            INTEGER NOT NULL DEFAULT 0,
+      dismissals            INTEGER NOT NULL DEFAULT 0,
+      executions            INTEGER NOT NULL DEFAULT 0,
+      updated_at            TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS node_signals (
+      id          TEXT PRIMARY KEY,
+      node_id     TEXT NOT NULL,
+      signal_id   TEXT NOT NULL,
+      surface     TEXT NOT NULL DEFAULT '',
+      summary     TEXT NOT NULL DEFAULT '',
+      occurred_at TEXT,
+      observed_at TEXT NOT NULL,
+      UNIQUE (node_id, signal_id),
+      FOREIGN KEY (node_id)   REFERENCES graph_nodes(id) ON DELETE CASCADE,
+      FOREIGN KEY (signal_id) REFERENCES signals(id)     ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS memories (
+      id            TEXT PRIMARY KEY,
+      content       TEXT NOT NULL,
+      type          TEXT NOT NULL DEFAULT 'fact',
+      confidence    REAL NOT NULL DEFAULT 0.5,
+      importance    REAL NOT NULL DEFAULT 0.5,
+      surface       TEXT NOT NULL DEFAULT '',
+      node_id       TEXT,
+      status        TEXT NOT NULL DEFAULT 'active',
+      superseded_by TEXT,
+      created_at    TEXT NOT NULL,
+      last_accessed TEXT,
+      FOREIGN KEY (node_id) REFERENCES graph_nodes(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_signals_unprocessed ON signals(processed, observed_at);
+    CREATE INDEX IF NOT EXISTS idx_signals_surface ON signals(surface, occurred_at);
+    CREATE INDEX IF NOT EXISTS idx_graph_edges_src ON graph_edges(src_id);
+    CREATE INDEX IF NOT EXISTS idx_graph_edges_dst ON graph_edges(dst_id);
+    CREATE INDEX IF NOT EXISTS idx_graph_nodes_weight ON graph_nodes(weight);
+    CREATE INDEX IF NOT EXISTS idx_graph_nodes_last_seen ON graph_nodes(last_seen);
+    CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_action_log_type ON action_log(action_type, created_at);
+    CREATE INDEX IF NOT EXISTS idx_node_signals_node ON node_signals(node_id, observed_at);
+    CREATE INDEX IF NOT EXISTS idx_memories_active ON memories(status, importance);
+    CREATE INDEX IF NOT EXISTS idx_memories_node   ON memories(node_id);
   `)
+
+  // Schema migrations — add columns introduced after initial table creation.
+  // SQLite throws if the column already exists; that's expected and safe to ignore.
+  const tryExec = (sql: string): void => { try { db.exec(sql) } catch { /* already exists */ } }
+  tryExec('ALTER TABLE autonomy_policy ADD COLUMN consecutive_approvals INTEGER NOT NULL DEFAULT 0')
+  // Embedding columns on signals — nullable so old rows remain valid immediately
+  tryExec('ALTER TABLE signals ADD COLUMN embedding BLOB')
+  tryExec('ALTER TABLE signals ADD COLUMN embedding_model TEXT')
 }
