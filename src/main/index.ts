@@ -1,14 +1,13 @@
 import { app, BrowserWindow, nativeImage } from 'electron'
 import { handleOAuthCallback } from './services/oauth'
-import { join } from 'path'
 import { readFileSync } from 'fs'
-import { initDb, dbGetBadgeCount, dbRunMaintenance } from './db/index'
+import { initDb, dbRunMaintenance } from './db/index'
 import { readConfig } from './services/config'
 import { connectAllServers, disconnectAllServers } from './services/mcp'
 import { startScheduler, stopScheduler } from './services/cron'
 import { startAmbient, stopAmbient, ambientComputeTrayState } from './services/ambient'
 import { registerIpcHandlers } from './ipc-handlers'
-import { createTray, updateTrayBadge, setTrayState, destroyTray } from './tray'
+import { createTray, setTrayState, destroyTray, resolveIconPath } from './tray'
 import {
   createWidgetWindow,
   toggleWidget,
@@ -93,8 +92,7 @@ async function main(): Promise<void> {
     setInterval(() => dbRunMaintenance(), 24 * 60 * 60 * 1000)
   }, 60_000)
 
-  // Update tray with initial state
-  updateTrayBadge(dbGetBadgeCount())
+  // Set initial tray state
   setTrayState(ambientComputeTrayState())
 
   // Prevent app from quitting when last window closes — stay in tray
@@ -111,11 +109,8 @@ async function main(): Promise<void> {
   // Set dock icon on macOS — after win.show() so the dock entry exists
   if (process.platform === 'darwin') {
     try {
-      const iconPath = app.isPackaged
-        ? join(process.resourcesPath, 'icon.png')
-        : join(__dirname, '..', '..', 'resources', 'icon.png')
-      const data = readFileSync(iconPath)
-      const icon = nativeImage.createFromDataURL(`data:image/png;base64,${data.toString('base64')}`)
+      const data = readFileSync(resolveIconPath())
+      const icon = nativeImage.createFromBuffer(data)
       if (!icon.isEmpty()) app.dock?.setIcon(icon)
     } catch (_) {
       // leave default
