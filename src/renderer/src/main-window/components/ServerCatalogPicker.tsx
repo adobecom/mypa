@@ -1,23 +1,27 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react'
-import { ArrowLeft, Check, ExternalLink } from 'lucide-react'
+import { ArrowLeft, Check, ExternalLink, Download } from 'lucide-react'
 import { MCP_CATALOG, CATALOG_CATEGORIES, type McpCatalogEntry } from '@shared/mcp-catalog'
-import type { McpServerConfig, DeviceFlowStart, OAuthProvider, OAuthAppCredential, AppConfig } from '@shared/types'
+import type { McpServerConfig, DeviceFlowStart, OAuthProvider, OAuthAppCredential, AppConfig, DetectedMcpServer } from '@shared/types'
 
 interface Props {
   onAdd: (srv: McpServerConfig) => Promise<void> | void
   onCancel: () => void
   oauthCreds?: AppConfig['oauth_apps']
   onCredentialSave?: (provider: OAuthProvider, creds: OAuthAppCredential) => Promise<void>
+  existingNames?: string[]
 }
 
-export default function ServerCatalogPicker({ onAdd, onCancel, oauthCreds, onCredentialSave }: Props): React.ReactElement {
+type Phase = 'catalog' | 'configure' | 'import'
+
+export default function ServerCatalogPicker({ onAdd, onCancel, oauthCreds, onCredentialSave, existingNames = [] }: Props): React.ReactElement {
+  const [phase, setPhase] = useState<Phase>('catalog')
   const [selected, setSelected] = useState<McpCatalogEntry | null>(null)
 
-  if (selected) {
+  if (phase === 'configure' && selected) {
     return (
       <ConfigurePanel
         entry={selected}
-        onBack={() => setSelected(null)}
+        onBack={() => { setPhase('catalog'); setSelected(null) }}
         onAdd={onAdd}
         oauthCreds={oauthCreds}
         onCredentialSave={onCredentialSave}
@@ -25,21 +29,49 @@ export default function ServerCatalogPicker({ onAdd, onCancel, oauthCreds, onCre
     )
   }
 
-  return <CatalogGrid onSelect={setSelected} onCancel={onCancel} />
+  if (phase === 'import') {
+    return (
+      <ImportPanel
+        existingNames={existingNames}
+        onBack={() => setPhase('catalog')}
+        onAdd={onAdd}
+      />
+    )
+  }
+
+  return (
+    <CatalogGrid
+      existingNames={existingNames}
+      onSelect={(entry) => { setSelected(entry); setPhase('configure') }}
+      onCancel={onCancel}
+      onImport={() => setPhase('import')}
+    />
+  )
 }
 
 // ─── Phase A: Catalog grid ────────────────────────────────────────────────────
 
 function CatalogGrid({
   onSelect,
-  onCancel
+  onCancel,
+  onImport,
+  existingNames
 }: {
   onSelect: (entry: McpCatalogEntry) => void
   onCancel: () => void
+  onImport: () => void
+  existingNames: string[]
 }): React.ReactElement {
   const [query, setQuery] = useState('')
+  const [detected, setDetected] = useState<DetectedMcpServer[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
   useEffect(() => { inputRef.current?.focus() }, [])
+
+  useEffect(() => {
+    window.electron.setup.detectClaudeMcp().then((servers) => {
+      setDetected(servers.filter((s) => !existingNames.includes(s.name)))
+    }).catch(() => {/* ignore */})
+  }, [existingNames.join(',')])
 
   const isSearching = query.trim().length > 0
   const q = query.toLowerCase().trim()
@@ -76,6 +108,32 @@ function CatalogGrid({
         <div style={{ fontWeight: 600, fontSize: 13 }}>Choose a server to add</div>
         <button className="btn btn--ghost btn--sm" onClick={onCancel}>Cancel</button>
       </div>
+
+      {/* Claude Code import banner */}
+      {detected.length > 0 && (
+        <button
+          className="btn btn--ghost"
+          onClick={onImport}
+          style={{
+            width: '100%',
+            justifyContent: 'flex-start',
+            gap: 8,
+            marginBottom: 10,
+            padding: '8px 12px',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--bg-elevated)'
+          }}
+        >
+          <Download size={14} style={{ flexShrink: 0 }} />
+          <div style={{ flex: 1, textAlign: 'left' }}>
+            <div style={{ fontSize: 13, fontWeight: 500 }}>Import from Claude Code</div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
+              {detected.length} server{detected.length !== 1 ? 's' : ''} found in your Claude Code config
+            </div>
+          </div>
+        </button>
+      )}
 
       <input
         ref={inputRef}
@@ -146,6 +204,7 @@ function ConfigurePanel({
     entry.argInputs?.map(() => ['']) ?? []
   )
   const [oauthToken, setOauthToken] = useState<string | null>(null)
+  const [patValue, setPatValue] = useState('')
   const [deviceFlow, setDeviceFlow] = useState<DeviceFlowStart | null>(null)
   const [connecting, setConnecting] = useState(false)
   const [polling, setPolling] = useState(false)
@@ -159,6 +218,9 @@ function ConfigurePanel({
   const savedCreds = provider ? oauthCreds?.[provider] : undefined
   const credsMissing = entry.authType === 'oauth' && !!provider && !savedCreds?.clientId
   const needsSecret = provider === 'notion' || provider === 'linear'
+
+  // Token from either OAuth flow or manually pasted PAT
+  const effectiveToken = oauthToken ?? (patValue.trim() || null)
 
   const saveInlineCredsIfNeeded = async () => {
     if (!credsMissing || !provider || !inlineClientId.trim()) return
@@ -208,7 +270,7 @@ function ConfigurePanel({
   }
 
   const isReady = (): boolean => {
-    if (entry.authType === 'oauth' && !oauthToken) return false
+    if (entry.authType === 'oauth' && !effectiveToken) return false
     if (entry.authType === 'api_key') {
       if (entry.requiredEnv?.some((f) => !envValues[f.key]?.trim())) return false
     }
@@ -225,8 +287,8 @@ function ConfigurePanel({
       (_, i) => argValues[i]?.filter((v) => v.trim()) ?? []
     )
     const env: Record<string, string> = { ...envValues }
-    if (oauthToken && entry.oauthTokenEnvKey) {
-      env[entry.oauthTokenEnvKey] = oauthToken
+    if (effectiveToken && entry.oauthTokenEnvKey) {
+      env[entry.oauthTokenEnvKey] = effectiveToken
     }
     try {
       await onAdd({
@@ -255,7 +317,7 @@ function ConfigurePanel({
       {error && <div className="alert alert--error" style={{ marginBottom: 10 }}>{error}</div>}
 
       {/* OAuth app credentials (shown inline when not yet configured) */}
-      {credsMissing && !oauthToken && (
+      {credsMissing && !oauthToken && !patValue.trim() && (
         <div style={{ marginBottom: 12, padding: '10px 12px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)' }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>
             OAuth App Credentials
@@ -291,23 +353,58 @@ function ConfigurePanel({
       {/* OAuth auth section */}
       {entry.authType === 'oauth' && (
         <div style={{ marginBottom: 12 }}>
-          {entry.oauthProvider === 'github' ? (
-            <DeviceFlowSection
-              deviceFlow={deviceFlow}
-              oauthToken={oauthToken}
-              connecting={connecting}
-              polling={polling}
-              onConnect={handleOAuthDevice}
-              disabled={credsMissing && !inlineClientId.trim()}
-            />
-          ) : (
-            <PkceSection
-              providerName={entry.name}
-              oauthToken={oauthToken}
-              connecting={connecting}
-              onConnect={handleOAuthPkce}
-              disabled={credsMissing && !inlineClientId.trim()}
-            />
+          {/* OAuth buttons — hidden once the user has a token from either source */}
+          {!oauthToken && !patValue.trim() && (
+            entry.oauthProvider === 'github' ? (
+              <DeviceFlowSection
+                deviceFlow={deviceFlow}
+                oauthToken={oauthToken}
+                connecting={connecting}
+                polling={polling}
+                onConnect={handleOAuthDevice}
+                disabled={credsMissing && !inlineClientId.trim()}
+              />
+            ) : (
+              <PkceSection
+                providerName={entry.name}
+                oauthToken={oauthToken}
+                connecting={connecting}
+                onConnect={handleOAuthPkce}
+                disabled={credsMissing && !inlineClientId.trim()}
+              />
+            )
+          )}
+
+          {/* PAT alternative — always shown until OAuth token is obtained */}
+          {!oauthToken && entry.patLabel && (
+            <>
+              {!patValue.trim() && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '10px 0', color: 'var(--text-muted)', fontSize: 11 }}>
+                  <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                  or paste a token
+                  <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                </div>
+              )}
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">{entry.patLabel}</label>
+                <input
+                  className="form-input form-input--mono"
+                  type="password"
+                  placeholder={entry.patPlaceholder}
+                  value={patValue}
+                  onChange={(e) => setPatValue(e.target.value)}
+                />
+                {entry.patHint && <div className="form-hint">{entry.patHint}</div>}
+              </div>
+            </>
+          )}
+
+          {/* Connected state — OAuth flow succeeded */}
+          {oauthToken && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--color-success, #22c55e)', fontSize: 13 }}>
+              <Check size={14} />
+              Connected to {entry.name}
+            </div>
           )}
         </div>
       )}
@@ -494,5 +591,172 @@ function PkceSection({
         `Connect with ${providerName}`
       )}
     </button>
+  )
+}
+
+// ─── Phase C: Import from Claude Code ────────────────────────────────────────
+
+function ImportPanel({
+  existingNames,
+  onBack,
+  onAdd
+}: {
+  existingNames: string[]
+  onBack: () => void
+  onAdd: (srv: McpServerConfig) => Promise<void> | void
+}): React.ReactElement {
+  const [detected, setDetected] = useState<DetectedMcpServer[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [loading, setLoading] = useState(true)
+  const [importing, setImporting] = useState(false)
+  const [error, setError] = useState('')
+  const [done, setDone] = useState(false)
+
+  useEffect(() => {
+    window.electron.setup.detectClaudeMcp()
+      .then((servers) => {
+        const filtered = servers.filter((s) => !existingNames.includes(s.name))
+        setDetected(filtered)
+        // Pre-select all supported servers
+        setSelected(new Set(filtered.filter((s) => s.supported).map((s) => s.name)))
+      })
+      .catch(() => setError('Could not read ~/.claude.json'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  const toggle = (name: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
+
+  const handleImport = async () => {
+    setImporting(true)
+    setError('')
+    const toImport = detected.filter((s) => s.supported && selected.has(s.name))
+    const imported: string[] = []
+    try {
+      for (const s of toImport) {
+        await onAdd({
+          name: s.name,
+          command: s.command!,
+          args: s.args,
+          env: s.env && Object.keys(s.env).length ? s.env : undefined
+        })
+        imported.push(s.name)
+      }
+      setDone(true)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Import failed'
+      const suffix = imported.length > 0
+        ? ` (${imported.length} of ${toImport.length} imported: ${imported.join(', ')})`
+        : ''
+      setError(msg + suffix)
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const supportedCount = detected.filter((s) => s.supported).length
+  const selectedCount = [...selected].filter((n) => detected.find((d) => d.name === n && d.supported)).length
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+        <button className="btn btn--ghost btn--sm" onClick={onBack} style={{ padding: '4px 6px' }}>
+          <ArrowLeft size={14} />
+        </button>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>Import from Claude Code</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Global MCP servers from ~/.claude.json</div>
+        </div>
+      </div>
+
+      {error && <div className="alert alert--error" style={{ marginBottom: 10 }}>{error}</div>}
+
+      {loading && (
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6, padding: '12px 0' }}>
+          <span className="spinner" style={{ width: 12, height: 12 }} />
+          Scanning Claude Code config…
+        </div>
+      )}
+
+      {!loading && detected.length === 0 && !error && (
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '16px 0' }}>
+          No new servers found in your Claude Code config.
+        </div>
+      )}
+
+      {!loading && done && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--color-success, #22c55e)', fontSize: 13, marginBottom: 10 }}>
+          <Check size={14} />
+          {selectedCount} server{selectedCount !== 1 ? 's' : ''} imported successfully
+        </div>
+      )}
+
+      {!loading && detected.length > 0 && !done && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {detected.map((srv) => (
+            <label
+              key={srv.name}
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 10,
+                padding: '8px 10px',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--bg-elevated)',
+                cursor: srv.supported ? 'pointer' : 'default',
+                opacity: srv.supported ? 1 : 0.5
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={srv.supported && selected.has(srv.name)}
+                disabled={!srv.supported}
+                onChange={() => srv.supported && toggle(srv.name)}
+                style={{ marginTop: 2, flexShrink: 0 }}
+              />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {srv.name}
+                  {!srv.supported && (
+                    <span style={{ fontSize: 10, color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 4, padding: '1px 5px' }}>
+                      {srv.type} — unsupported
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {srv.command ? [srv.command, ...(srv.args ?? [])].join(' ') : srv.type}
+                </div>
+                {srv.env && Object.keys(srv.env).length > 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                    {Object.keys(srv.env).length} env var{Object.keys(srv.env).length !== 1 ? 's' : ''} included
+                  </div>
+                )}
+              </div>
+            </label>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
+        <button className="btn btn--ghost btn--sm" onClick={onBack}>
+          {done ? 'Done' : 'Back'}
+        </button>
+        {!done && supportedCount > 0 && (
+          <button
+            className="btn btn--primary btn--sm"
+            onClick={handleImport}
+            disabled={importing || selectedCount === 0}
+          >
+            {importing ? <span className="spinner" /> : `Import ${selectedCount > 0 ? selectedCount : ''} server${selectedCount !== 1 ? 's' : ''}`}
+          </button>
+        )}
+      </div>
+    </div>
   )
 }

@@ -27,6 +27,10 @@ export interface McpCatalogEntry {
   oauthProvider?: OAuthProvider
   oauthTokenEnvKey?: string
   requiredEnv?: EnvField[]
+  /** Optional PAT alternative for oauth entries */
+  patLabel?: string
+  patPlaceholder?: string
+  patHint?: string
 }
 
 export const MCP_CATALOG: McpCatalogEntry[] = [
@@ -40,7 +44,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
     baseArgs: ['-y', '@modelcontextprotocol/server-github'],
     authType: 'oauth',
     oauthProvider: 'github',
-    oauthTokenEnvKey: 'GITHUB_PERSONAL_ACCESS_TOKEN'
+    oauthTokenEnvKey: 'GITHUB_PERSONAL_ACCESS_TOKEN',
+    patLabel: 'Personal access token',
+    patPlaceholder: 'ghp_…',
+    patHint: 'Generate at github.com/settings/tokens — grant repo and read:user scopes.'
   },
   {
     id: 'filesystem',
@@ -112,7 +119,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
     baseArgs: ['-y', '@notionhq/notion-mcp-server'],
     authType: 'oauth',
     oauthProvider: 'notion',
-    oauthTokenEnvKey: 'NOTION_API_KEY'
+    oauthTokenEnvKey: 'NOTION_API_KEY',
+    patLabel: 'Internal integration token',
+    patPlaceholder: 'secret_… or ntn_…',
+    patHint: 'Create an internal integration at notion.so/my-integrations, then share your pages with it.'
   },
   {
     id: 'linear',
@@ -123,7 +133,10 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
     baseArgs: ['-y', 'linear-mcp-server'],
     authType: 'oauth',
     oauthProvider: 'linear',
-    oauthTokenEnvKey: 'LINEAR_API_KEY'
+    oauthTokenEnvKey: 'LINEAR_API_KEY',
+    patLabel: 'Personal API key',
+    patPlaceholder: 'lin_api_…',
+    patHint: 'Generate at linear.app → Settings → API → Personal API keys.'
   },
   {
     id: 'jira',
