@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { GitBranch, SquareKanban, MessageSquare } from 'lucide-react'
+import { GitBranch, SquareKanban, MessageSquare, ChevronDown } from 'lucide-react'
 import type { Intent } from '../../../../../../shared/types'
 
 interface Props {
@@ -25,7 +25,35 @@ function formatAge(iso: string): string {
 
 const TERMINAL_STATUSES: Intent['status'][] = ['executed', 'dismissed', 'challenged', 'failed', 'expired']
 
+const VERB_LABELS: Record<string, string> = {
+  comment: 'Comment',
+  label: 'Label',
+  close: 'Close',
+  assign: 'Assign',
+  merge: 'Merge',
+  reply: 'Reply',
+  send: 'Send',
+  summarize: 'Summarize',
+}
+
+const TIER_LABELS = ['Silent', 'Notify', 'Approve', 'Locked']
+
+// Safely coerce an unknown value to a typed array using an item guard
+function safeArray<T>(val: unknown, guard: (x: unknown) => x is T): T[] {
+  if (!Array.isArray(val)) return []
+  return val.filter(guard)
+}
+
+function isRecord(x: unknown): x is Record<string, unknown> {
+  return typeof x === 'object' && x !== null && !Array.isArray(x)
+}
+
+function hasString(x: unknown, key: string): x is Record<string, unknown> & { [k: string]: string } {
+  return isRecord(x) && typeof (x as Record<string, unknown>)[key] === 'string'
+}
+
 export default function IntentCard({ intent, onIntentChange }: Props): React.ReactElement {
+  const [expanded, setExpanded] = useState(false)
   const [challenging, setChallenging] = useState(false)
   const [challengeReason, setChallengeReason] = useState('')
   const [loading, setLoading] = useState(false)
@@ -48,7 +76,8 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
   }`
 
   const confidencePct = Math.round(intent.confidence * 100)
-  const tierLabel = ['Silent', 'Notify', 'Approve', 'Locked'][intent.tier] ?? 'Approve'
+  const tierLabel = TIER_LABELS[intent.tier] ?? 'Approve'
+  const verbLabel = intent.verb ? (VERB_LABELS[intent.verb] ?? intent.verb) : null
 
   async function handleApprove(): Promise<void> {
     setLoading(true)
@@ -82,47 +111,153 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
     }
   }
 
+  // ── Expand detail helpers ──────────────────────────────────────────────────
+
+  const payload = intent.payload ?? {}
+  const payloadTextKey = ['body', 'text', 'comment', 'message'].find((k) => typeof payload[k] === 'string')
+  const payloadText = payloadTextKey ? String(payload[payloadTextKey]) : null
+  const payloadExtra = Object.entries(payload).filter(([k]) => k !== payloadTextKey)
+
+  const cp = intent.context_packet ?? {}
+  const memories = safeArray(cp.memories, isRecord)
+  const recentSignals = safeArray(cp.recentSignals, isRecord)
+  const focusNodes = safeArray(cp.focusNodes, isRecord)
+  const hasContext = memories.length > 0 || recentSignals.length > 0 || focusNodes.length > 0
+
   return (
     <div className={cardClass}>
-      <div className="routine-card__header" style={{ cursor: 'default' }}>
+      {/* ── Header ── */}
+      <div
+        className="routine-card__header"
+        onClick={() => setExpanded((e) => !e)}
+        style={{ cursor: 'pointer' }}
+      >
         <span className={dotClass} />
         <div className="routine-card__meta">
-          <div className="routine-card__name" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          {/* 2-line title */}
+          <div className="intent-card__title">
             <SurfaceIcon surface={intent.surface} />
             <span>{intent.rationale}</span>
           </div>
 
-          {/* Chips row */}
+          {/* Proposed action line */}
+          {(verbLabel || intent.target) && (
+            <div className="intent-card__action">
+              {verbLabel && <span className="intent-card__action-verb">{verbLabel}</span>}
+              {verbLabel && intent.target && <span className="intent-card__action-sep"> · </span>}
+              {intent.target && <span>{intent.target}</span>}
+            </div>
+          )}
+
+          {/* Slim chip row — just the high-signal at-a-glance info */}
           <div className="intent-card__chips">
-            {/* Confidence */}
             <span
               className="intent-chip intent-chip--accent"
               title={`Confidence: ${confidencePct}%`}
             >
               {confidencePct}%
             </span>
-
-            {/* Reversibility */}
+            {needsApproval && !isTerminal && (
+              <span className="intent-chip intent-chip--muted">needs approval</span>
+            )}
             {intent.reversibility === 'irreversible' && (
               <span className="intent-chip intent-chip--warning">irreversible</span>
-            )}
-
-            {/* Tier */}
-            <span className="intent-chip intent-chip--muted">{tierLabel}</span>
-
-            {/* Target */}
-            {intent.target && (
-              <span className="intent-chip intent-chip--muted" style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {intent.target}
-              </span>
             )}
           </div>
         </div>
 
         <span className="routine-card__time">{formatAge(intent.created_at)}</span>
+        <span className={`routine-card__expand-icon${expanded ? ' open' : ''}`}>
+          <ChevronDown size={12} />
+        </span>
       </div>
 
-      {/* Status line for terminal states */}
+      {/* ── Expanded detail block ── */}
+      {expanded && (
+        <div className="routine-card__body intent-detail">
+          {/* Why this surfaced */}
+          <div className="intent-detail__section">
+            <div className="intent-detail__label">Why this surfaced</div>
+            <div className="intent-detail__text">{intent.rationale}</div>
+          </div>
+
+          {/* Proposed action */}
+          {(verbLabel || intent.target || payloadText || payloadExtra.length > 0) && (
+            <div className="intent-detail__section">
+              <div className="intent-detail__label">Proposed action</div>
+              {(verbLabel || intent.target) && (
+                <div className="intent-detail__action-line">
+                  {[verbLabel, intent.target].filter(Boolean).join(' · ')}
+                </div>
+              )}
+              <div className="intent-detail__meta-row">
+                <span>{tierLabel}</span>
+                {intent.reversibility === 'irreversible' && (
+                  <span style={{ color: 'var(--yellow)' }}>· irreversible</span>
+                )}
+              </div>
+              {payloadText && (
+                <div className="intent-detail__quote">{payloadText}</div>
+              )}
+              {payloadExtra.length > 0 && (
+                <div className="intent-detail__kv">
+                  {payloadExtra.map(([k, v]) => (
+                    <div key={k} className="intent-detail__kv-row">
+                      <span className="intent-detail__kv-key">{k}</span>
+                      <span className="intent-detail__kv-val">{String(v)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Context */}
+          {hasContext && (
+            <div className="intent-detail__section">
+              <div className="intent-detail__label">Context</div>
+              {memories.length > 0 && (
+                <div className="intent-detail__ctx-group">
+                  <div className="intent-detail__ctx-heading">Known facts</div>
+                  {memories.slice(0, 4).map((m, i) => (
+                    <div key={i} className="intent-detail__ctx-row">
+                      · {hasString(m, 'content') ? m.content : JSON.stringify(m)}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {recentSignals.length > 0 && (
+                <div className="intent-detail__ctx-group">
+                  <div className="intent-detail__ctx-heading">Recent activity</div>
+                  {recentSignals.slice(0, 5).map((s, i) => {
+                    const surface = hasString(s, 'surface') ? s.surface : ''
+                    const kind = hasString(s, 'kind') ? s.kind : ''
+                    const title = hasString(s, 'title') ? s.title : ''
+                    const prefix = [surface, kind].filter(Boolean).join(':')
+                    return (
+                      <div key={i} className="intent-detail__ctx-row">
+                        · {prefix ? <span style={{ color: 'var(--text-muted)' }}>[{prefix}]</span> : null} {title}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {focusNodes.length > 0 && (
+                <div className="intent-detail__ctx-group">
+                  <div className="intent-detail__ctx-heading">Focus</div>
+                  {focusNodes.slice(0, 3).map((n, i) => (
+                    <div key={i} className="intent-detail__ctx-row">
+                      · {hasString(n, 'label') ? n.label : JSON.stringify(n)}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Status line for terminal states ── */}
       {isTerminal && (
         <div className="routine-card__body" style={{ fontSize: 11, color: 'var(--text-muted)', paddingTop: 0 }}>
           {intent.status === 'executed' ? '✓ Executed' :
@@ -132,7 +267,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
         </div>
       )}
 
-      {/* Challenge input */}
+      {/* ── Challenge input ── */}
       {challenging && !isTerminal && (
         <div className="routine-card__body" style={{ paddingTop: 4 }}>
           <textarea
@@ -164,12 +299,12 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
         </div>
       )}
 
-      {/* Action footer */}
+      {/* ── Action footer ── */}
       {!isTerminal && !challenging && (
         <div className="routine-card__body" style={{ paddingTop: 0, display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
           <button
             className="btn btn--ghost"
-            onClick={handleDismiss}
+            onClick={(e) => { e.stopPropagation(); handleDismiss() }}
             disabled={loading}
             style={{ fontSize: 11 }}
           >
@@ -177,7 +312,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
           </button>
           <button
             className="btn btn--danger"
-            onClick={() => setChallenging(true)}
+            onClick={(e) => { e.stopPropagation(); setChallenging(true) }}
             disabled={loading}
             style={{ fontSize: 11 }}
           >
@@ -186,7 +321,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
           {needsApproval && (
             <button
               className="btn btn--primary"
-              onClick={handleApprove}
+              onClick={(e) => { e.stopPropagation(); handleApprove() }}
               disabled={loading}
               style={{ fontSize: 11 }}
             >
