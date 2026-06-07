@@ -5,13 +5,26 @@ import {
   dbAddRunMessage,
   dbGetRunThread,
   dbGetRun,
-  dbGetBadgeCount
+  dbGetBadgeCount,
+  dbUpsertNode,
+  dbBumpNodeWeight
 } from '../db/index'
 import { callTool } from './mcp'
 import { generateRoutineDigest, streamChat } from './claude'
 import type { Routine, RunStatus } from '@shared/types'
 
 export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow | null): Promise<void> {
+  // Upsert the routine as a graph node (idempotent — same key on every run)
+  try {
+    const routineNode = dbUpsertNode('routine', `routine:${routine.id}`, routine.name, {
+      cron: routine.cron,
+      enabled: routine.enabled
+    })
+    dbBumpNodeWeight(routineNode.id, 0.5)
+  } catch (e) {
+    console.error('[routines] graph node error:', e)
+  }
+
   const run = dbCreateRun(routine.id, routine.name)
 
   // Notify renderer: run started

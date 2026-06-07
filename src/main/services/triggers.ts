@@ -4,7 +4,7 @@ import {
   dbGetTopNodesByWeight,
   dbGetNode
 } from '../db/index'
-import { getStaleCandidates } from './memory-graph'
+import { getStaleCandidates, kindToNodeType } from './memory-graph'
 import type { Signal, TriggerKind } from '@shared/types'
 
 export interface TriggerHit {
@@ -43,7 +43,7 @@ export function evalSpike(newSignals: Signal[]): TriggerHit[] {
         // two separate intents (one per hit) that land in different feed sections.
         const focusNodeIds = [...new Set(
           signals
-            .map((s) => dbGetNode('task', `${s.surface}:${s.kind}:${s.external_id}`)?.id)
+            .map((s) => dbGetNode(kindToNodeType(s.kind), `${s.surface}:${s.kind}:${s.external_id}`)?.id)
             .filter((id): id is string => !!id)
         )].slice(0, 3)
         hits.push({
@@ -94,9 +94,9 @@ export function evalDependency(newSignals: Signal[]): TriggerHit[] {
 
   const hits: TriggerHit[] = []
   for (const signal of newSignals) {
-    // Resolve this signal to its task node in the memory graph
+    // Resolve this signal to its work-item node in the memory graph
     const taskKey = `${signal.surface}:${signal.kind}:${signal.external_id}`
-    const taskNode = dbGetNode('task', taskKey)
+    const taskNode = dbGetNode(kindToNodeType(signal.kind), taskKey)
     if (!taskNode) continue
 
     // Only fire if the signal's own node participates in a dependency edge
