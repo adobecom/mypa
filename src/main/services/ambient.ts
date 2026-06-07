@@ -8,7 +8,10 @@ import {
   dbUpdateIntentStatus,
   dbGetBadgeCount,
   dbAppendActionLog,
-  dbGetAllPolicies
+  dbGetAllPolicies,
+  dbUpsertNode,
+  dbBumpNodeWeight,
+  dbUpsertEdge
 } from '../db/index'
 import { readConfig } from './config'
 import { callTool } from './mcp'
@@ -145,6 +148,26 @@ export async function runAmbientCycle(
 
     const tier = resolveTier(obj)
     const intent = dbCreateIntent(obj, hit.kind as TriggerKind, tier, packet as unknown as Record<string, unknown>)
+
+    // Mirror the intent into the knowledge graph so it appears alongside the
+    // work items it concerns — enables cross-artifact reasoning in context packets.
+    try {
+      const intentLabel = (obj.rationale ?? `${obj.proposed_action.verb} intent`).slice(0, 120)
+      const intentNode = dbUpsertNode('intent', `intent:${intent.id}`, intentLabel, {
+        type: intent.type,
+        surface: intent.surface,
+        verb: intent.verb,
+        tier,
+        status: intent.status
+      })
+      dbBumpNodeWeight(intentNode.id, 1.5)
+      // Link intent → focus nodes with targets edges
+      for (const fn of packet.focusNodes.slice(0, 3)) {
+        dbUpsertEdge(intentNode.id, fn.id, 'targets', 1.0)
+      }
+    } catch (e) {
+      console.error('[ambient] intent graph node error:', e)
+    }
 
     // Mark these focus nodes as covered so later hits in this same cycle are
     // also deduplicated without needing a DB round-trip.

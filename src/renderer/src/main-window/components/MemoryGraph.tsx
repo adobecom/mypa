@@ -7,12 +7,37 @@ import type { GraphNode, GraphEdge, Memory, NodeSignalLink, NodeType, EdgeRel } 
 // ─── Palette ──────────────────────────────────────────────────────────────────
 
 const TYPE_COLORS: Record<NodeType, string> = {
-  person: '#6d6aff',
-  project: '#4ade9e',
-  task: '#f59e60',
-  decision: '#f87b7b'
+  // Layer 1 — Observed world
+  person:       '#6d6aff',  // indigo — people
+  repo:         '#4ade9e',  // emerald — GitHub repos
+  project:      '#22c77a',  // green — Jira/Linear projects
+  channel:      '#38bdf8',  // sky — Slack channels
+  sprint:       '#a3e635',  // lime — Jira sprints / cycles
+  pull_request: '#f59e60',  // amber — PRs
+  issue:        '#fb923c',  // orange — issues
+  message:      '#fbbf24',  // yellow — Slack messages
+  document:     '#e2e8f0',  // slate — Notion pages
+  // Layer 2 — Semantic
+  topic:        '#c084fc',  // purple — distilled themes
+  // Layer 3 — Assistant cognition
+  decision:     '#f87b7b',  // rose — autonomy preferences
+  intent:       '#e879f9',  // fuchsia — proposed actions
+  routine:      '#94a3b8',  // slate-blue — scheduled automations
+  plan_item:    '#67e8f9',  // cyan — user to-dos
 }
-const TYPE_ORDER: NodeType[] = ['person', 'project', 'task', 'decision']
+
+const TYPE_ORDER: NodeType[] = [
+  'person',
+  'repo', 'project', 'channel', 'sprint',
+  'pull_request', 'issue', 'message', 'document',
+  'topic',
+  'decision', 'intent', 'routine', 'plan_item',
+]
+
+/** Human-readable display label for a NodeType, e.g. pull_request → "Pull Request" */
+function typeLabel(t: NodeType): string {
+  return t.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+}
 
 // ─── Force-graph data types ───────────────────────────────────────────────────
 
@@ -77,13 +102,29 @@ function fmtDate(iso: string | null | undefined): string {
 
 function RelLabel({ rel }: { rel: EdgeRel }) {
   const COLORS: Record<EdgeRel, string> = {
-    working_on: '#4ade9e',
-    blocked_by: '#f87b7b',
-    depends_on: '#f59e60',
-    mentioned_in: 'rgba(180,195,230,0.6)',
-    assigned_to: '#6d6aff',
-    waiting_for: '#f87b7b',
-    deferred: 'rgba(140,160,200,0.5)'
+    // Participation
+    authored:        '#6d6aff',
+    reviews:         '#818cf8',
+    assigned_to:     '#6d6aff',
+    mentioned_in:    'rgba(180,195,230,0.6)',
+    participates_in: 'rgba(160,185,220,0.5)',
+    // Structure
+    part_of:         'rgba(160,220,200,0.5)',
+    // Dependency
+    blocked_by:      '#f87b7b',
+    depends_on:      '#f59e60',
+    waiting_for:     '#f87b7b',
+    relates_to:      'rgba(180,195,230,0.5)',
+    references:      'rgba(200,195,230,0.55)',
+    // Semantic
+    about:           '#c084fc',
+    similar_to:      'rgba(192,132,252,0.45)',
+    // Cognition
+    targets:         '#e879f9',
+    addresses:       '#67e8f9',
+    produced:        '#94a3b8',
+    concerns:        'rgba(148,163,184,0.5)',
+    deferred:        'rgba(140,160,200,0.5)',
   }
   return (
     <span
@@ -907,11 +948,10 @@ export default function MemoryGraph(): React.ReactElement {
                 <span
                   style={{
                     fontSize: 10,
-                    color: 'rgba(180,195,230,0.5)',
-                    textTransform: 'capitalize'
+                    color: 'rgba(180,195,230,0.5)'
                   }}
                 >
-                  {t}
+                  {typeLabel(t)}
                 </span>
               </div>
             ))}

@@ -5,7 +5,9 @@ import {
   dbDeletePlanItem,
   dbAddPlanMessage,
   dbGetPlanThread,
-  dbGetBadgeCount
+  dbGetBadgeCount,
+  dbUpsertNode,
+  dbBumpNodeWeight
 } from '../db/index'
 import { generatePlanDraft, streamChat } from './claude'
 import type { PlanDraft, PlanItem, PlanItemStatus } from '@shared/types'
@@ -15,7 +17,20 @@ export async function createPlanDraft(intent: string): Promise<PlanDraft> {
 }
 
 export function confirmPlanDraft(draft: PlanDraft): PlanItem {
-  return dbCreatePlanItem(draft)
+  const item = dbCreatePlanItem(draft)
+  // Mirror the plan item into the knowledge graph so it appears alongside the
+  // work items it relates to and the routines that produced it.
+  try {
+    const planNode = dbUpsertNode('plan_item', `plan_item:${item.id}`, item.title.slice(0, 120), {
+      status: item.status,
+      timing: item.timing,
+      source: item.source
+    })
+    dbBumpNodeWeight(planNode.id, 2.0)
+  } catch (e) {
+    console.error('[plan] graph node error:', e)
+  }
+  return item
 }
 
 export function updatePlanItemStatus(id: string, status: PlanItemStatus): void {

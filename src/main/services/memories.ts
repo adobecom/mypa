@@ -1,7 +1,7 @@
 import { runClaude } from './claude'
 import { readConfig } from './config'
 import { embedText, cosineSim } from './embeddings'
-import { sanitizeLabel } from './memory-graph'
+import { sanitizeLabel, kindToNodeType } from './memory-graph'
 import {
   dbGetRecentSignals,
   dbGetTopNodesByWeight,
@@ -180,16 +180,25 @@ function resolveEntityToNodeId(entity: string | undefined): string | null {
 
   const [, nodeKind] = parts
 
-  // Map the entity kind to the NodeType used in the graph.
-  // Repo/channel/project entities are stored as 'project' nodes;
-  // person entities as 'person'; everything else (PR, issue, message) as 'task'.
+  // Route signal-like kinds through kindToNodeType; handle non-signal node kinds explicitly.
   let nodeType: NodeType
   if (nodeKind === 'person') {
     nodeType = 'person'
-  } else if (nodeKind === 'repo' || nodeKind === 'project' || nodeKind === 'channel') {
+  } else if (nodeKind === 'repo') {
+    nodeType = 'repo'
+  } else if (nodeKind === 'project') {
     nodeType = 'project'
+  } else if (nodeKind === 'channel') {
+    nodeType = 'channel'
+  } else if (nodeKind === 'sprint') {
+    nodeType = 'sprint'
+  } else if (nodeKind === 'topic') {
+    nodeType = 'topic'
+  } else if (nodeKind === 'decision') {
+    nodeType = 'decision'
   } else {
-    nodeType = 'task'
+    // pull_request / issue / message and any unknown kinds
+    nodeType = kindToNodeType(nodeKind)
   }
 
   const found = dbGetNode(nodeType, entity)

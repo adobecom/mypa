@@ -196,14 +196,47 @@ export type TriggerKind = 'spike' | 'staleness' | 'dependency' | 'threshold' | '
 export type Tier = 0 | 1 | 2 | 3
 export type TrayState = 'idle' | 'has-something' | 'needs-you'
 export type DigestSlot = 'morning' | 'midday' | 'eod'
-export type NodeType = 'person' | 'project' | 'task' | 'decision'
+export type NodeType =
+  // Layer 1 — Observed world (from signals)
+  | 'person'
+  | 'repo'
+  | 'project'
+  | 'channel'
+  | 'sprint'
+  | 'pull_request'
+  | 'issue'
+  | 'message'
+  | 'document'
+  // Layer 2 — Semantic
+  | 'topic'
+  // Layer 3 — Assistant cognition
+  | 'decision'
+  | 'intent'
+  | 'routine'
+  | 'plan_item'
 export type EdgeRel =
-  | 'working_on'
+  // Participation (person ↔ work item)
+  | 'authored'
+  | 'reviews'
+  | 'assigned_to'
+  | 'mentioned_in'
+  | 'participates_in'
+  // Structure (containment)
+  | 'part_of'
+  // Dependency
   | 'blocked_by'
   | 'depends_on'
-  | 'mentioned_in'
-  | 'assigned_to'
   | 'waiting_for'
+  | 'relates_to'
+  | 'references'
+  // Semantic
+  | 'about'
+  | 'similar_to'
+  // Cognition bridges
+  | 'targets'
+  | 'addresses'
+  | 'produced'
+  | 'concerns'
   | 'deferred'
 
 export interface ProposedAction {
