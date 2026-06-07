@@ -1,0 +1,183 @@
+# Ambient Intelligence
+
+mypa runs a background loop that monitors external surfaces, builds a knowledge graph from the observations, and proposes actions (intents) for the user to approve or dismiss.
+
+**Source files:**
+- `src/main/services/ambient.ts` — polling loop
+- `src/main/services/triggers.ts` — trigger evaluators
+- `src/main/services/ingestion.ts` — signal ingestion pipeline
+- `src/main/services/inference.ts` — intent generation
+- `src/main/services/autonomy.ts` — trust tier engine
+- `src/main/db/schema.ts` — `signals`, `intents`, `action_log`, `autonomy_policy`
+- IPC: `ambient` namespace in `src/shared/types.ts`
+- Renderer: `src/renderer/src/widget/components/AmbientFeed.tsx`, `IntentCard.tsx`, `DigestView.tsx`
+
+---
+
+## Overview
+
+```
+External APIs (GitHub / Jira / Slack)
+          │
+          ▼  poll every pollIntervalMs (default 5 min)
+   ambient.ts / ingestion.ts
+          │  dbInsertSignal — deduplicated by (surface, external_id)
+          ▼
+   signals table
+          │  memory-graph.ts → ingestSignalIntoGraph
+          ▼
+   graph_nodes / graph_edges / node_signals
+          │  triggers.ts evaluates TriggerKinds
+          ▼
+   inference.ts  → scored IntentObject candidates
+          │  filtered by confidence ≥ AmbientConfig.confidenceFloor (default 0.4)
+          ▼
+   intents table
+          │
+          ├──► renderer: widget Ambient tab (IntentCard)
+          ├──► push event: ambient:intent-created
+          └──► tray state: 'has-something' or 'needs-you'
+```
+
+---
+
+## Configuration (`AmbientConfig`)
+
+Stored in `AppConfig.ambient` (in `~/.mypa/config.json`):
+
+| Field | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Enable / disable the polling loop |
+| `pollIntervalMs` | `300000` (5 min) | How often to poll external surfaces |
+| `decayHalfLifeDays` | `7` | Weight decay half-life for graph nodes and edges |
+| `confidenceFloor` | `0.4` | Minimum confidence to surface an intent |
+
+---
+
+## Signals
+
+A **signal** is a raw observed event from an external surface. Each signal is:
+- Deduplicated by `UNIQUE(surface, external_id)` — the same GitHub PR won't create two rows.
+- Fingerprinted — changes to the same item produce a new fingerprint, triggering re-processing.
+- Marked `processed = 0` on insert; set to `1` after `ingestSignalIntoGraph` runs.
+- Optionally embedded (local vector stored in `embedding` BLOB) for semantic similarity.
+
+Supported surfaces: `github`, `jira`, `slack`.
+
+---
+
+## Trigger kinds (`TriggerKind`)
+
+Evaluated by `triggers.ts` against the current graph state:
+
+| Kind | Fires when |
+|---|---|
+| `spike` | A node's weight increased sharply in the last poll window (sudden activity) |
+| `staleness` | A node hasn't been updated in a configurable threshold (item going stale) |
+| `dependency` | A dependency or blocker edge connects to a node with recent activity |
+| `threshold` | A numeric metric (PR age, issue count, etc.) crosses a configured limit |
+| `time` | A scheduled digest slot (morning / midday / eod) is due |
+
+---
+
+## Intents
+
+An **intent** is a proposed action derived from trigger evaluation. Types:
+
+| `IntentType` | Meaning |
+|---|---|
+| `action` | A concrete action the assistant wants to take (e.g. post a comment, create a branch) |
+| `suggestion` | A softer recommendation the user should consider |
+| `flag` | Something that needs the user's attention but no action is proposed |
+| `digest` | A structured summary (morning / midday / eod digest) |
+
+Each intent has:
+- `confidence` — 0–1 score from inference; filtered against `confidenceFloor`.
+- `reversibility` — `reversible` or `irreversible`; irreversible intents always require approval.
+- `tier` — the trust tier at the time it was created (affects whether it runs automatically).
+- `status` lifecycle: `pending → surfaced → approved / dismissed / challenged → executed / failed / expired`.
+
+---
+
+## Autonomy trust tiers
+
+The trust tier system adapts over time based on the user's feedback. Each `action_type` has its own policy row in `autonomy_policy`.
+
+| Tier | Behaviour |
+|---|---|
+| `0` | Fully automatic — execute without surfacing to the user |
+| `1` | Notify — show in ambient feed, execute after short delay unless dismissed |
+| `2` (default) | Require approval — surface in feed, wait for explicit approve/dismiss |
+| `3` | Always approve — extra confirmation required (used for irreversible or high-impact actions) |
+
+### Tier drift
+
+- **Promotion** (tier decreases): when `consecutive_approvals` reaches a threshold, the tier drops by one (more autonomy).
+- **Demotion** (tier increases): a challenge resets the consecutive streak and may bump the tier up.
+- **Locking**: `tier_locked = 1` prevents automatic drift; only a manual `setTier` call changes it.
+- **Reset**: `resetTrust()` sets all policies back to tier 2, not locked, zero counters.
+
+### User actions
+
+| Action | Effect |
+|---|---|
+| **Approve** | Execute the intent; increment `approvals` + `consecutive_approvals`; potentially promote tier |
+| **Dismiss** | Mark intent dismissed; increment `dismissals`; reset consecutive streak |
+| **Challenge** | Mark intent challenged with a reason; increment `challenges`; reset streak; potentially demote tier |
+
+---
+
+## Digests
+
+Digests are `IntentType = 'digest'` intents generated at three times per day:
+
+| Slot | Typical time |
+|---|---|
+| `morning` | ~9 AM |
+| `midday` | ~12 PM |
+| `eod` | ~5 PM |
+
+Each digest has three sections:
+- `did` — actions completed since the last digest
+- `watching` — items the assistant is tracking
+- `decisions` — autonomy decisions taken automatically
+
+Rendered in the widget's Ambient tab as `DigestView`.
+
+---
+
+## Tray state
+
+The tray icon reflects the ambient state:
+
+| `TrayState` | Icon state | When |
+|---|---|---|
+| `idle` | Normal | No pending intents |
+| `has-something` | Badge / indicator | Pending intents or new digest available |
+| `needs-you` | Alert indicator | High-confidence action or irreversible intent waiting for approval |
+
+The renderer subscribes to the `ambient:tray-state` push channel to stay in sync.
+
+---
+
+## IPC (`ambient` namespace)
+
+See [ipc.md](ipc.md) for full signatures. Quick reference:
+
+| Method | Description |
+|---|---|
+| `getIntents()` | All pending/surfaced intents |
+| `approve(id)` | Approve and (if tier allows) execute |
+| `dismiss(id)` | Dismiss |
+| `challenge(id, reason)` | Challenge with reason |
+| `getDigest(slot?)` | Latest digest for a slot |
+| `getTrayState()` | Current tray state |
+| `getPolicy()` | All autonomy policies |
+| `setTier(type, tier, locked?)` | Manual tier override |
+| `resetTrust()` | Reset all policies |
+| `pollNow()` | Trigger immediate poll |
+| `getLog(limit?)` | Recent action log |
+
+## Changelog
+
+- 2026-06-06 — initial documentation

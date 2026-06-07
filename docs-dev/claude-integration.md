@@ -1,0 +1,148 @@
+# Claude Integration
+
+All AI work in mypa goes through `src/main/services/claude.ts`, which spawns the `claude` CLI as a subprocess. There is no direct Anthropic API call — the CLI must be installed and authenticated separately.
+
+---
+
+## Binary discovery
+
+```ts
+// Priority order:
+1. which claude         (shell PATH)
+2. /usr/local/bin/claude
+3. $HOME/.local/bin/claude
+```
+
+The resolved path is cached in `_claudeBin` for the lifetime of the process. If none of the above are found, the function throws:
+
+```
+claude CLI not found — is Claude Code installed?
+```
+
+---
+
+## Model selection
+
+The model is read at every call from `readConfig().claude.model` (live — changes in Settings take effect immediately without restarting).
+
+Default: `claude-opus-4-8` (set in `DEFAULT_CONFIG`).
+
+Model args: `['--model', model]` — omitted if the config value is empty/unset (CLI uses its own default).
+
+---
+
+## `runClaude` — one-shot completion
+
+```ts
+export async function runClaude(
+  systemPrompt: string,
+  userPrompt: string
+): Promise<string>
+```
+
+- Concatenates system + user prompts into a single `-p` argument.
+- Flags: `--output-format text`.
+- Hard timeout: **120 seconds** — kills the process and rejects if exceeded.
+- Returns `stdout.trim()`.
+
+Used for: `generatePlanDraft`, `generateRoutineDigest`, `generateRoutineSetup`.
+
+---
+
+## `streamChat` — streaming multi-turn chat
+
+```ts
+export async function streamChat(
+  history: ChatMessage[],
+  userMessage: string,
+  onChunk: (chunk: string) => void,
+  onDone:  (fullText: string) => void,
+  rawContext?: string,
+  streamId?:   string
+): Promise<void>
+```
+
+Internally calls `runClaudeStream`:
+- Flags: `--output-format stream-json --verbose`.
+- Parses `assistant` events from the NDJSON stream, extracting `content[].text` blocks.
+- Calls `onChunk(text)` for each incremental chunk.
+- Calls `onDone(fullText)` when the process exits cleanly.
+
+### The `\x00SPLIT\x00` sentinel
+
+The `claude` CLI occasionally emits multiple `assistant` events in a single response (e.g. a thinking block followed by a text block). When `parseStreamEvent` sees a new `assistant` event while `full` is already non-empty, it emits `'\x00SPLIT\x00'` to `onChunk` before the new block. The renderer uses this sentinel to visually separate multi-block responses.
+
+### Context injection
+
+Pass `rawContext` to inject the raw MCP output as context in the system prompt:
+
+```
+You are mypa, {persona}. Be concise and action-oriented.
+
+Original data collected by this routine:
+{rawContext}
+```
+
+### Stream IDs and cancellation
+
+Every active stream is tracked in a `Map<streamId, { proc, killed }>`. Passing a `streamId` enables cancellation:
+
+```ts
+export function cancelStream(streamId: string): boolean
+```
+
+Sends `SIGTERM` to the subprocess and removes it from the active-streams map. Returns `true` if a stream was found and killed. The renderer calls `window.electron.routines.cancelStream(runId)` or `window.electron.plan.cancelStream(itemId)`.
+
+---
+
+## Generator helpers
+
+### `generatePlanDraft(intent)`
+
+Parses a free-text intent into a `PlanDraft`. Uses `runClaude` with a JSON-only system prompt. Includes the current time and hour so Claude can infer appropriate `timing` values.
+
+Returns:
+```ts
+{ title, detail, timing: PlanItemTiming, actions: McpActionRef[], original_intent }
+```
+
+Falls back gracefully: if Claude's output doesn't contain a JSON object, throws. If fields are missing, defaults are applied (`timing → 'anytime'`, `actions → []`).
+
+### `generateRoutineDigest(name, promptTemplate, rawOutput)`
+
+Summarizes MCP tool outputs for a routine run. Uses `runClaude` with a JSON-only prompt.
+
+Returns:
+```ts
+{ summary: string, items: string[], proposed_actions: string[] }
+```
+
+Falls back to `{ summary: 'Routine completed', items: [], proposed_actions: [] }` on parse failure.
+
+### `generateRoutineSetup(intent, servers)`
+
+Converts a natural-language routine description + the live MCP tool catalog into a validated `RoutineSetupDraft`.
+
+- Builds a `toolCatalog` string from connected `McpServerStatus[]` (only connected servers with ≥1 tool).
+- After parsing Claude's JSON response, **validates** the result:
+  - Strips any `actions` entries whose `server::tool` pair isn't in the live catalog.
+  - Validates the `cron` expression with `node-cron.validate()`.
+- Returns `{ name, actions, prompt, cron? }` — `cron` is `undefined` if Claude produced an invalid expression.
+
+---
+
+## Persona
+
+The persona string from `readConfig().persona` is injected into every system prompt:
+
+```
+You are {persona}.
+```
+
+Default (if unset or empty): `"a personal assistant"`.
+
+Users set their persona in the Settings panel.
+
+## Changelog
+
+- 2026-06-06 — initial documentation
