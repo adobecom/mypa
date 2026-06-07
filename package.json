@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "Local-first personal assistant for developers",
   "main": "out/main/index.js",
+  "homepage": "https://adobecom.github.io/mypa/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/adobecom/mypa.git"
+  },
+  "bugs": {
+    "url": "https://github.com/adobecom/mypa/issues"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",

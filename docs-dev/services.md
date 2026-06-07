@@ -1,0 +1,197 @@
+# Main Process Services
+
+All services live in `src/main/services/`. They run in the Node.js main process and are called from `src/main/ipc-handlers.ts` or from each other.
+
+---
+
+## `claude.ts` — Claude CLI integration
+
+Spawns the `claude` CLI for all AI work. See [claude-integration.md](claude-integration.md) for the detailed write-up.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `runClaude(systemPrompt, userPrompt)` | One-shot text completion (120 s timeout) |
+| `streamChat(history, userMessage, onChunk, onDone, rawContext?, streamId?)` | Streaming multi-turn chat |
+| `cancelStream(streamId)` | Kill an active stream by ID; returns `true` if found |
+| `generatePlanDraft(intent)` | Parse free-text intent → `PlanDraft` |
+| `generateRoutineDigest(name, promptTemplate, rawOutput)` | Summarize MCP output → `RoutineDigest` |
+| `generateRoutineSetup(intent, servers)` | Natural-language intent → validated `RoutineSetupDraft` |
+
+---
+
+## `mcp.ts` — MCP client manager
+
+Manages stdio MCP server connections using `@modelcontextprotocol/sdk`. See [mcp-and-oauth.md](mcp-and-oauth.md) for details.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `connectServer(cfg)` | Connect a single MCP server and cache it |
+| `disconnectServer(name)` | Gracefully disconnect and remove from cache |
+| `connectAllServers()` | Connect all enabled servers from config |
+| `disconnectAllServers()` | Disconnect all active connections |
+| `callTool(server, tool, params)` | Call a tool on a connected server |
+| `getServerStatus()` | Return `McpServerStatus[]` for all configured servers |
+| `testServer(cfg)` | Connect, list tools, disconnect — used by settings UI |
+
+---
+
+## `cron.ts` — Scheduler
+
+Wraps `node-cron` to schedule and manage routine execution.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `startScheduler()` | Load all enabled routines and schedule them |
+| `refreshSchedules()` | Re-read routines from DB and reschedule (called on create/update/delete) |
+| `scheduleRoutine(routine)` | Schedule a single routine |
+| `unscheduleRoutine(id)` | Cancel and remove a routine's task |
+| `stopScheduler()` | Cancel all scheduled tasks (app shutdown) |
+
+On fire, each task calls `executeRoutine(routine, widgetWin)` from `routines.ts`.
+
+---
+
+## `routines.ts` — Routine execution
+
+Orchestrates the full MCP → Claude → notification pipeline for a routine run.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `executeRoutine(routine, widgetWin)` | Run all MCP actions, call `generateRoutineDigest`, persist the run, fire OS notification, push events to renderer, upsert the routine as a `routine` graph node |
+| `handleRunMessage(runId, userMsg, widgetWin)` | Streaming follow-up chat on a run thread |
+| `dismissRun(runId, status)` | Mark a run as resolved/dismissed |
+
+---
+
+## `plan.ts` — Plan item lifecycle
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `createPlanDraft(intent)` | Delegates to `generatePlanDraft` in `claude.ts` |
+| `confirmPlanDraft(draft)` | Persists the draft as a `PlanItem`, mirrors it into the graph as a `plan_item` node with `targets` edges to referenced entities |
+| `updatePlanItemStatus(id, status)` | Update status; appends to `plan_item_history` |
+| `deletePlanItem(id)` | Delete item and cascade |
+| `handlePlanMessage(itemId, userMsg, widgetWin)` | Streaming chat on a plan-item thread |
+
+---
+
+## `config.ts` — Config file management
+
+Reads and writes `~/.mypa/config.json`. See [configuration.md](configuration.md) for the full config shape.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `ensureConfigDir()` | `mkdir -p ~/.mypa/` |
+| `readConfig()` | Read config, deep-merge with `DEFAULT_CONFIG`, decrypt secrets |
+| `writeConfig(config)` | Encrypt secrets, write config |
+| `updateConfig(partial)` | Deep-merge partial update, write, return updated config |
+
+Secrets encrypted at rest:
+- `mcp_servers[].env.*` values — MCP server API keys / tokens
+- `oauth_apps[provider].clientSecret` — OAuth client secrets
+
+Encryption uses Electron `safeStorage`; encrypted values are stored with an `enc:` prefix so unencrypted values remain readable on systems where `safeStorage` is unavailable.
+
+---
+
+## `oauth.ts` — OAuth flows
+
+Handles authentication with GitHub, Notion, and Linear. See [mcp-and-oauth.md](mcp-and-oauth.md) for details.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `handleOAuthCallback(url)` | Called on `mypa://oauth/callback` — validates `state` nonce, exchanges code for token |
+| `startDeviceFlow()` | Begin GitHub device flow; returns `DeviceFlowStart` |
+| `pollDeviceFlow(deviceCode)` | Poll until token issued; returns access token |
+| `startPkceFlow(provider)` | Generate PKCE verifier + challenge, return authorization URL |
+
+---
+
+## `ambient.ts` — Ambient polling loop
+
+Runs the recurring background poll cycle (default every 5 minutes). Reads config, calls each surface's trigger evaluator, generates intents, pushes `ambient:*` events to the renderer, and updates tray state.
+
+---
+
+## `autonomy.ts` — Trust tier engine
+
+Manages the `autonomy_policy` table and the promotion/demotion of action-type tiers. Handles approve/challenge/dismiss outcomes and updates consecutive-approval streaks used for automatic tier promotion.
+
+---
+
+## `triggers.ts` — Trigger evaluators
+
+One evaluator per `TriggerKind` (`spike`, `staleness`, `dependency`, `threshold`, `time`). Each evaluator queries the graph/signals DB and returns candidate `IntentObject`s passed to `inference.ts`.
+
+---
+
+## `ingestion.ts` — Signal ingestion pipeline
+
+Coordinates the flow from raw API payloads to structured `Signal` rows and graph entries. Deduplicates by `(surface, external_id)`. Calls `ingestSignalIntoGraph` from `memory-graph.ts`.
+
+---
+
+## `inference.ts` — Intent generation
+
+Takes a `ContextPacket` (assembled by `memory-graph.ts`) and produces scored `Intent` candidates that are persisted to the `intents` table and surfaced in the renderer.
+
+---
+
+## `embeddings.ts` — Local embeddings
+
+Generates text embeddings using [`@xenova/transformers`](https://github.com/xenova/transformers.js) entirely on-device (no network call). Used by `memory-graph.ts` to build semantic similarity edges.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `embedText(text)` | Returns a Float32Array embedding vector |
+| `cosineSim(a, b)` | Cosine similarity between two Float32Arrays |
+| `blobToFloat(blob)` | Deserialize a BLOB column value to Float32Array |
+
+---
+
+## `memories.ts` — Memory CRUD
+
+Typed wrappers around the DB query functions for the `memories` table. Provides `createMemory`, `getActiveMemories`, `getMemoriesForNode`, `supersedeMemory`, `updateMemory`.
+
+---
+
+## `memory-graph.ts` — Knowledge graph construction
+
+The core of the ambient intelligence pipeline. See [knowledge-graph.md](knowledge-graph.md) for the ontology and data-flow details.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `ingestSignalIntoGraph(signal)` | Map a signal to nodes/edges; bump weights; link timeline |
+| `kindToNodeType(kind)` | Map a signal kind string to a `NodeType` |
+| `buildSimilarityEdges()` | Embed top-12 node labels, link pairs with cosine similarity > 0.82 via `similar_to` edges |
+| `applyDecay()` | Hourly half-life decay on node and edge weights |
+| `assembleContextPacket(triggerKind)` | Build a `ContextPacket` from recent signals, top nodes, related edges, and memories |
+| `renderPacketForPrompt(packet)` | Serialize a `ContextPacket` to a prompt-ready string |
+
+---
+
+## `claude-import.ts` — Claude Code config import
+
+Reads an existing Claude Code config file (typically `~/.claude.json` or `~/Library/Application Support/Claude/claude.json`) and returns `DetectedMcpServer[]` that can be imported into mypa's MCP server list.
+
+## Changelog
+
+- 2026-06-06 — initial documentation; reflects services as of commit d8a8774
