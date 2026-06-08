@@ -545,6 +545,10 @@ export interface IpcApi {
     getByModel(range: UsageRange): Promise<UsageBreakdownRow[]>
     getRecent(limit: number, range: UsageRange): Promise<UsageEvent[]>
   }
+  update: {
+    checkNow(): Promise<void>
+    install(): Promise<void>
+  }
   on(
     channel:
       | 'routine:run-started'
@@ -557,7 +561,11 @@ export interface IpcApi {
       | 'ambient:intent-updated'
       | 'ambient:tray-state'
       | 'ambient:digest-ready'
-      | 'ambient:action-executed',
+      | 'ambient:action-executed'
+      | 'update:available'
+      | 'update:progress'
+      | 'update:downloaded'
+      | 'update:error',
     listener: (...args: unknown[]) => void
   ): () => void
 }

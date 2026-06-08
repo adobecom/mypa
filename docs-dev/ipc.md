@@ -164,6 +164,28 @@ Token usage and estimated cost dashboard data. All data is recorded from the mom
 
 IPC channels: `usage:get-summary`, `usage:get-daily`, `usage:get-by-source`, `usage:get-by-model`, `usage:get-recent`.
 
+---
+
+### `update`
+
+Trigger and install app updates delivered via GitHub Releases. Only meaningful in packaged builds — in dev mode all calls are no-ops.
+
+| Method | Signature | Description |
+|---|---|---|
+| `checkNow` | `() → void` | Manually trigger an update check |
+| `install` | `() → void` | Quit and install the downloaded update |
+
+IPC channels: `update:check-now`, `update:install`.
+
+Push channels (main → renderer):
+
+| Channel | Payload | Description |
+|---|---|---|
+| `update:available` | `{ version: string, releaseNotes: any }` | A newer version was found and is downloading |
+| `update:progress` | `{ percent: number }` | Download progress (0–100) |
+| `update:downloaded` | — | Download complete; ready to install |
+| `update:error` | `message: string` | Update check or download failed |
+
 ## Key types (abbreviated)
 
 Full definitions in `src/shared/types.ts`.
@@ -184,6 +206,7 @@ type MemoryType      = 'fact' | 'pattern' | 'preference' | 'status'
 
 ## Changelog
 
+- 2026-06-07 — added `update` namespace (`checkNow`, `install`); new push channels `update:available`, `update:progress`, `update:downloaded`, `update:error`
 - 2026-06-07 — added `usage` namespace (`getSummary`, `getDaily`, `getBySource`, `getByModel`, `getRecent`); new types `UsageSource`, `UsageEvent`, `UsageSummary`, `UsageDailyPoint`, `UsageBreakdownRow`, `UsageRange` in `@shared/types`
 - 2026-06-07 — added `ambient:action-executed` push channel (broadcast to both windows on tier-0 auto-execution); `routine:run-started` and `routine:run-completed` are now broadcast to both windows via `broadcast()` in `src/main/windows.ts` (previously widget-only)
 - 2026-06-07 — added `setup.resolveOwnerHandles` channel; added `AppConfig.owner` (`OwnerIdentity`) type; added `ResolvedOwnerHandles` / `ResolvedHandle` types to `@shared/types`

@@ -56,6 +56,7 @@ import {
 import { dbGetActionLog } from './db/index'
 import { buildMemoryExportMarkdown } from './services/memory-export'
 import { setTrayState } from './tray'
+import { checkForUpdatesNow, installUpdate } from './services/updater'
 import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, McpServerConfig, SetupHealth, DigestSlot, Tier, UsageRange } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 
@@ -431,5 +432,15 @@ export function registerIpcHandlers(
 
   ipcMain.handle('usage:get-recent', (_e, limit: number, range: UsageRange) => {
     return dbGetRecentUsage(limit, range)
+  })
+
+  // ─── Update ───────────────────────────────────────────────────────────────
+
+  ipcMain.handle('update:check-now', () => {
+    checkForUpdatesNow()
+  })
+
+  ipcMain.handle('update:install', () => {
+    installUpdate()
   })
 }

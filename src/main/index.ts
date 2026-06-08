@@ -7,7 +7,7 @@ import { connectAllServers, disconnectAllServers } from './services/mcp'
 import { startScheduler, stopScheduler } from './services/cron'
 import { startAmbient, stopAmbient, ambientComputeTrayState } from './services/ambient'
 import { registerIpcHandlers } from './ipc-handlers'
-import { createTray, setTrayState, destroyTray, resolveIconPath } from './tray'
+import { createTray, setTrayState, setUpdateReady, destroyTray, resolveIconPath } from './tray'
 import {
   createWidgetWindow,
   toggleWidget,
@@ -15,6 +15,7 @@ import {
   getWidgetWindow,
   setQuitting
 } from './windows'
+import { initUpdater, checkForUpdatesNow, installUpdate } from './services/updater'
 
 // Keep app running when all windows closed on macOS
 app.on('window-all-closed', () => {
@@ -73,8 +74,13 @@ async function main(): Promise<void> {
       disconnectAllServers()
       destroyTray()
       app.exit(0)
-    }
+    },
+    () => checkForUpdatesNow(),
+    () => installUpdate()
   )
+
+  // Initialize auto-updater (no-op in dev mode)
+  initUpdater(() => getWidgetWindow())
 
   // Connect MCP servers
   connectAllServers().catch((err) => console.error('[mcp] startup error:', err))

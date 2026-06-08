@@ -81,6 +81,10 @@ const api: IpcApi = {
     getByModel: (range) => ipcRenderer.invoke('usage:get-by-model', range),
     getRecent: (limit, range) => ipcRenderer.invoke('usage:get-recent', limit, range)
   },
+  update: {
+    checkNow: () => ipcRenderer.invoke('update:check-now'),
+    install:  () => ipcRenderer.invoke('update:install')
+  },
   on: (channel, listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => listener(...args)
     ipcRenderer.on(channel, wrapped)

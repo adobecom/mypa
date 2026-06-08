@@ -72,6 +72,52 @@ function useRunToasts(setPage: (p: Page) => void): void {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps — setPage and toast are stable refs
 }
 
+function useUpdateToasts(): void {
+  const toast = useToast()
+  const toastIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    const offAvailable = window.electron.on('update:available', (...args) => {
+      const info = args[0] as { version: string }
+      const id = toast.loading(`Downloading update v${info.version}`)
+      toastIdRef.current = id
+    })
+
+    const offDownloaded = window.electron.on('update:downloaded', () => {
+      const id = toastIdRef.current
+      const opts = {
+        duration: 0,
+        action: {
+          label: 'Restart to install',
+          onClick: () => window.electron.update.install()
+        }
+      }
+      if (id) {
+        toast.update(id, { variant: 'success', title: 'Update ready', ...opts })
+      } else {
+        toast.show({ variant: 'success', title: 'Update ready', ...opts })
+      }
+    })
+
+    const offError = window.electron.on('update:error', (...args) => {
+      const message = args[0] as string
+      const id = toastIdRef.current
+      toastIdRef.current = null
+      if (id) {
+        toast.update(id, { variant: 'error', title: 'Update failed', message })
+      } else {
+        toast.error('Update failed', { message })
+      }
+    })
+
+    return () => {
+      offAvailable()
+      offDownloaded()
+      offError()
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps — toast is stable
+}
+
 const NAV: { id: Page; icon: React.ReactNode; label: string }[] = [
   { id: 'routines', icon: <Zap size={14} strokeWidth={2} />, label: 'Routines' },
   { id: 'logs', icon: <List size={14} strokeWidth={2} />, label: 'Run Logs' },
@@ -87,6 +133,7 @@ function AppShell(): React.ReactElement {
   const [config, setConfig] = useState<AppConfig | null>(null)
 
   useRunToasts(setPage)
+  useUpdateToasts()
 
   useEffect(() => {
     window.electron.config.get().then(setConfig)

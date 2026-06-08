@@ -17,12 +17,13 @@
     "preview": "electron-vite preview",
     "postinstall": "electron-rebuild -f -w better-sqlite3",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "dist": "electron-builder --publish=never"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "@xenova/transformers": "^2.17.2",
     "better-sqlite3": "^11.3.0",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^1.17.0",
     "node-cron": "^3.0.3",
     "react": "^18.3.1",
@@ -71,12 +72,18 @@
       "**/node_modules/better-sqlite3/**",
       "**/node_modules/onnxruntime-node/**"
     ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "adobecom",
+        "repo": "mypa"
+      }
+    ],
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
-        {
-          "target": "dmg"
-        }
+        { "target": "dmg" },
+        { "target": "zip" }
       ]
     },
     "linux": {
