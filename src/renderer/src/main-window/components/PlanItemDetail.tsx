@@ -32,6 +32,16 @@ export default function PlanItemDetail({ itemId, onBack }: Props): React.ReactEl
 
   useEffect(() => {
     if (!itemId) return
+    const unsub = api.on('plan:item-updated', (payload) => {
+      const p = payload as { id: string; status: string }
+      if (p.id !== itemId) return
+      setItem((prev) => prev ? { ...prev, status: p.status as PlanItem['status'] } : prev)
+    })
+    return unsub
+  }, [itemId])
+
+  useEffect(() => {
+    if (!itemId) return
     const unsub = api.on('plan:item-message', (payload) => {
       const p = payload as { itemId: string; chunk: string; done: boolean; error?: string }
       if (p.itemId !== itemId) return

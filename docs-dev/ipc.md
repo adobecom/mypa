@@ -94,6 +94,7 @@ OS-level and window utilities.
 | `openMainWindow` | `(routineId?) → void` | Open (or focus) the main window; optionally navigate to a specific routine |
 | `getBadgeCount` | `() → number` | Current unread badge count |
 | `getWindowType` | `() → 'widget' \| 'main-window'` | Which window is calling — useful for shared components |
+| `openExternal` | `(url: string) → void` | Open a URL in the OS default browser via `shell.openExternal` |
 
 ### `ambient`
 
@@ -139,6 +140,7 @@ Subscribed with `window.electron.on(channel, listener)`. Returns an unsubscribe 
 | `routine:run-completed` | `RoutineRun` | A routine run finishes (success or error — inspect `run.status`) | **widget + main** |
 | `routine:run-message` | `{ runId, chunk: string, done: boolean, error?: string }` | Streaming chat chunk on a run thread | widget only |
 | `plan:item-message` | `{ itemId, chunk: string, done: boolean, error?: string }` | Streaming chat chunk on a plan-item thread | widget only |
+| `plan:item-updated` | `{ id: string, status: PlanItemStatus }` | Plan item status changed (e.g. done/skipped from widget) | **widget + main** |
 | `badge:updated` | `number` | Badge count changed | widget only |
 | `navigate:edit-routine` | `routineId: string` | Main window should navigate to the routine editor | main only |
 | `navigate:run-chat` | `runId: string` | Main window should navigate to Run Logs and open that run in conversation view | main only |
@@ -211,6 +213,7 @@ type MemoryType      = 'fact' | 'pattern' | 'preference' | 'status'
 
 ## Changelog
 
+- 2026-06-08 — added `system.openExternal` method + `system:open-external` IPC handler (opens URL in default browser via `shell.openExternal`); added `plan:item-updated` push channel (broadcast to both windows when plan item status changes); both windows now have `will-navigate` + `setWindowOpenHandler` guards that redirect external URLs to the default browser
 - 2026-06-08 — added `plan.getItem`, `plan.openInMainWindow`; `routines.openRunInMainWindow`; new push channels `navigate:run-chat` and `navigate:plan-item`; `Intent` type gained `challenge_reason: string | null`
 - 2026-06-07 — added `update` namespace (`checkNow`, `install`); new push channels `update:available`, `update:progress`, `update:downloaded`, `update:error`
 - 2026-06-07 — added `usage` namespace (`getSummary`, `getDaily`, `getBySource`, `getByModel`, `getRecent`); new types `UsageSource`, `UsageEvent`, `UsageSummary`, `UsageDailyPoint`, `UsageBreakdownRow`, `UsageRange` in `@shared/types`

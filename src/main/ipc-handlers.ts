@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, dialog } from 'electron'
+import { ipcMain, BrowserWindow, dialog, shell } from 'electron'
 import { execFileSync } from 'child_process'
 import { writeFileSync } from 'fs'
 import {
@@ -60,6 +60,7 @@ import { setTrayState } from './tray'
 import { checkForUpdatesNow, installUpdate } from './services/updater'
 import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, McpServerConfig, SetupHealth, DigestSlot, Tier, UsageRange } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
+import { broadcast } from './windows'
 
 export function registerIpcHandlers(
   getWidgetWin: () => BrowserWindow | null,
@@ -82,6 +83,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle('plan:update-status', async (_e, id: string, status: PlanItemStatus) => {
     updatePlanItemStatus(id, status)
+    broadcast('plan:item-updated', { id, status })
   })
 
   ipcMain.handle('plan:delete', async (_e, id: string) => {
@@ -322,6 +324,12 @@ export function registerIpcHandlers(
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win) return 'unknown'
     return win.getTitle().includes('widget') ? 'widget' : 'main-window'
+  })
+
+  ipcMain.handle('system:open-external', async (_e, url: string) => {
+    if (typeof url === 'string' && (url.startsWith('https://') || url.startsWith('http://'))) {
+      await shell.openExternal(url)
+    }
   })
 
   // ─── Ambient ───────────────────────────────────────────────────────────────
