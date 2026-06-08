@@ -519,6 +519,7 @@ export interface IpcApi {
     openMainWindow(routineId?: string): Promise<void>
     getBadgeCount(): Promise<number>
     getWindowType(): 'widget' | 'main-window'
+    openExternal(url: string): Promise<void>
   }
   ambient: {
     getIntents(): Promise<Intent[]>
@@ -559,6 +560,7 @@ export interface IpcApi {
       | 'routine:run-completed'
       | 'routine:run-message'
       | 'plan:item-message'
+      | 'plan:item-updated'
       | 'badge:updated'
       | 'navigate:edit-routine'
       | 'navigate:run-chat'

@@ -52,7 +52,8 @@ const api: IpcApi = {
     getWindowType: () => {
       // Determined by the HTML file loaded
       return window.location.pathname.includes('widget') ? 'widget' : 'main-window'
-    }
+    },
+    openExternal: (url: string) => ipcRenderer.invoke('system:open-external', url)
   },
   ambient: {
     getIntents: () => ipcRenderer.invoke('ambient:get-intents'),

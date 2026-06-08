@@ -1,4 +1,4 @@
-import { BrowserWindow, screen } from 'electron'
+import { BrowserWindow, screen, shell } from 'electron'
 import { join } from 'path'
 import { readConfig } from './services/config'
 
@@ -34,6 +34,7 @@ export function createWidgetWindow(): BrowserWindow {
   })
 
   widgetWin.setTitle('mypa-widget')
+  attachExternalLinkGuards(widgetWin)
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     widgetWin.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/widget.html`)
@@ -78,6 +79,7 @@ export function createMainWindow(): BrowserWindow {
   })
 
   mainWin.setTitle('mypa')
+  attachExternalLinkGuards(mainWin)
 
   const loadMain = (): void => {
     if (process.env['ELECTRON_RENDERER_URL']) {
@@ -146,6 +148,21 @@ export function getWidgetWindow(): BrowserWindow | null {
 
 export function getMainWindow(): BrowserWindow | null {
   return mainWin
+}
+
+function attachExternalLinkGuards(win: BrowserWindow): void {
+  win.webContents.on('will-navigate', (e, url) => {
+    if (url.startsWith('https://') || url.startsWith('http://')) {
+      e.preventDefault()
+      shell.openExternal(url)
+    }
+  })
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('https://') || url.startsWith('http://')) {
+      shell.openExternal(url)
+    }
+    return { action: 'deny' }
+  })
 }
 
 /**

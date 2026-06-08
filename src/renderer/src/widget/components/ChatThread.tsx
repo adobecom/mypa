@@ -14,6 +14,22 @@ interface Props {
   onStop?: () => void
 }
 
+const markdownComponents = {
+  a: ({ href, children }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { children?: React.ReactNode }) => (
+    <a
+      href={href}
+      onClick={(e) => {
+        if (href) {
+          e.preventDefault()
+          window.electron.system.openExternal(href)
+        }
+      }}
+    >
+      {children}
+    </a>
+  )
+}
+
 export default function ChatThread({
   messages,
   streaming,
@@ -59,7 +75,7 @@ export default function ChatThread({
                 <div key={i} className="chat-message chat-message--assistant">
                   <div className="chat-message__avatar"><Sparkles size={10} /></div>
                   <div className="chat-message__bubble md-text">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{seg}</ReactMarkdown>
                   </div>
                 </div>
               ))}
@@ -122,7 +138,7 @@ function ChatBubble({ message }: { message: ChatMessage }): React.ReactElement {
     <div className={`chat-message chat-message--${message.role}`}>
       <div className="chat-message__avatar">{isUser ? 'U' : <Sparkles size={10} />}</div>
       <div className="chat-message__bubble md-text">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{message.content}</ReactMarkdown>
       </div>
     </div>
   )
