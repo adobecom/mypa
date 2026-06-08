@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { Check, AlertTriangle, XCircle, RefreshCw } from 'lucide-react'
-import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType } from '@shared/types'
+import { Check, AlertTriangle, XCircle, RefreshCw, Wand2 } from 'lucide-react'
+import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import ServerCatalogPicker from './ServerCatalogPicker'
+import { useToast } from '../toast/ToastProvider'
+
+const OWNER_SURFACES = ['github', 'slack', 'jira', 'linear', 'notion'] as const
+type OwnerSurface = typeof OWNER_SURFACES[number]
 
 export default function Settings(): React.ReactElement {
   const [config, setConfig] = useState<AppConfig | null>(null)
@@ -20,8 +24,11 @@ export default function Settings(): React.ReactElement {
     polling: boolean
     error: string
   } | null>(null)
+  const [autoFilling, setAutoFilling] = useState(false)
+  const [handleStatus, setHandleStatus] = useState<ResolvedOwnerHandles>({})
 
   const api = window.electron
+  const toast = useToast()
 
   const refreshHealth = useCallback(async () => {
     setHealthLoading(true)
@@ -47,6 +54,11 @@ export default function Settings(): React.ReactElement {
     return providers
   }, [config?.mcp_servers])
 
+  const visibleSurfaces = useMemo(
+    () => OWNER_SURFACES.filter((s) => (config?.mcp_servers ?? []).some((m) => m.name === s)),
+    [config?.mcp_servers]
+  )
+
   if (!config) return <div style={{ padding: 24, color: 'var(--text-muted)' }}>Loading…</div>
 
   const handleSave = async () => {
@@ -57,6 +69,9 @@ export default function Settings(): React.ReactElement {
       setTimeout(() => setSaved(false), 2500)
       const [newStatus] = await Promise.all([api.config.getMcpStatus(), refreshHealth()])
       setStatus(newStatus)
+      toast.success('Settings saved')
+    } catch (err: any) {
+      toast.error('Failed to save settings', { message: err?.message })
     } finally {
       setSaving(false)
     }
@@ -71,16 +86,50 @@ export default function Settings(): React.ReactElement {
       setShowNewServer(false)
       await api.config.update(updated)
       await refreshHealth()
+      toast.success(`Server "${srv.name}" added`)
+      // Silently try to detect identity for this surface. config:update already
+      // connected the server so resolveOwnerHandles can reach it immediately.
+      if ((OWNER_SURFACES as readonly string[]).includes(srv.name)) {
+        const surface = srv.name as OwnerSurface
+        api.setup.resolveOwnerHandles().then((resolved) => {
+          const entry = resolved[surface]
+          if (!entry) return
+          if (updated.owner?.handles?.[surface]) return  // user already set one
+          setConfig((prev) => {
+            if (!prev) return prev
+            return {
+              ...prev,
+              owner: {
+                ...(prev.owner ?? {}),
+                handles: { ...(prev.owner?.handles ?? {}), [surface]: entry.value }
+              }
+            }
+          })
+          setHandleStatus((prev) => ({ ...prev, [surface]: entry }))
+          if (entry.needsReview) {
+            toast.info(`Detected your ${srv.name} identity — review it in About You`)
+          } else {
+            toast.success(`Detected your ${srv.name} identity: ${entry.value}`)
+          }
+        }).catch(() => {})
+      }
+    } catch (err: any) {
+      toast.error('Failed to add server', { message: err?.message })
     } finally {
       setSaving(false)
     }
   }
 
   const handleRemoveServer = async (name: string) => {
-    const updated = { ...config, mcp_servers: config.mcp_servers.filter((s) => s.name !== name) }
-    setConfig(updated)
-    await api.config.update(updated)
-    await refreshHealth()
+    try {
+      const updated = { ...config, mcp_servers: config.mcp_servers.filter((s) => s.name !== name) }
+      setConfig(updated)
+      await api.config.update(updated)
+      await refreshHealth()
+      toast.success(`Server "${name}" removed`)
+    } catch (err: any) {
+      toast.error('Failed to remove server', { message: err?.message })
+    }
   }
 
   const handleTestServer = async (srv: McpServerConfig) => {
@@ -111,6 +160,7 @@ export default function Settings(): React.ReactElement {
           await api.config.update(updated)
           setOauthState(null)
           await refreshHealth()
+          toast.success(`${srv.name} connected`)
         })
         .catch((err: Error) =>
           setOauthState((prev) => prev ? { ...prev, deviceFlow: null, polling: false, error: err.message } : null)
@@ -118,6 +168,37 @@ export default function Settings(): React.ReactElement {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Connection failed'
       setOauthState((prev) => prev ? { ...prev, error: msg } : null)
+    }
+  }
+
+  const handleAutoFillOwner = async () => {
+    setAutoFilling(true)
+    try {
+      const resolved = await api.setup.resolveOwnerHandles()
+      setHandleStatus(resolved)
+      const found = Object.keys(resolved).length
+      if (found === 0) {
+        toast.info('No identity tools found', { message: 'No identity tools found on connected servers — fill in your handles manually.' })
+      } else {
+        const reviewCount = Object.values(resolved).filter((e) => e?.needsReview).length
+        if (reviewCount > 0) {
+          toast.success(`Found ${found} handle${found === 1 ? '' : 's'}`, {
+            message: `${reviewCount} ${reviewCount === 1 ? 'handle' : 'handles'} marked for review — may not match your graph.`
+          })
+        } else {
+          toast.success(`Found ${found} handle${found === 1 ? '' : 's'}`)
+        }
+        const currentHandles = config.owner?.handles ?? {}
+        const mergedHandles = { ...currentHandles }
+        for (const [surface, entry] of Object.entries(resolved) as [keyof typeof resolved, typeof resolved[keyof typeof resolved]][]) {
+          if (entry && !currentHandles[surface]) {
+            mergedHandles[surface] = entry.value
+          }
+        }
+        setConfig({ ...config, owner: { ...(config.owner ?? {}), handles: mergedHandles } })
+      }
+    } finally {
+      setAutoFilling(false)
     }
   }
 
@@ -140,12 +221,17 @@ export default function Settings(): React.ReactElement {
   }
 
   const handleCredentialSave = async (provider: OAuthProvider, creds: OAuthAppCredential) => {
-    await api.config.update({
-      oauth_apps: { [provider]: creds } as Partial<AppConfig>['oauth_apps'],
-      oauth_connected_at: { [provider]: new Date().toISOString() } as Partial<AppConfig>['oauth_connected_at']
-    } as Partial<AppConfig>)
-    setConfig({ ...config, oauth_apps: { ...config.oauth_apps, [provider]: creds } })
-    await refreshHealth()
+    try {
+      await api.config.update({
+        oauth_apps: { [provider]: creds } as Partial<AppConfig>['oauth_apps'],
+        oauth_connected_at: { [provider]: new Date().toISOString() } as Partial<AppConfig>['oauth_connected_at']
+      } as Partial<AppConfig>)
+      setConfig({ ...config, oauth_apps: { ...config.oauth_apps, [provider]: creds } })
+      await refreshHealth()
+      toast.success(`${provider} credentials saved`)
+    } catch (err: any) {
+      toast.error('Failed to save credentials', { message: err?.message })
+    }
   }
 
   return (
@@ -164,6 +250,83 @@ export default function Settings(): React.ReactElement {
 
       {/* Setup Health */}
       <HealthCard health={health} loading={healthLoading} onRefresh={refreshHealth} />
+
+      {/* About You */}
+      <div className="card">
+        <div className="card__header">
+          <div>
+            <div className="card__title">About You</div>
+            <div className="card__subtitle">Tell mypa who you are so it addresses you directly.</div>
+          </div>
+          {visibleSurfaces.length > 0 && (
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={handleAutoFillOwner}
+              disabled={autoFilling}
+              style={{ display: 'flex', alignItems: 'center', gap: 5 }}
+              title="Pre-fill handles from connected MCP tools"
+            >
+              {autoFilling ? <span className="spinner" /> : <Wand2 size={12} />}
+              {autoFilling ? 'Resolving…' : 'Auto-fill'}
+            </button>
+          )}
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Your name</label>
+          <input
+            className="form-input"
+            type="text"
+            placeholder="Your name"
+            value={config.owner?.name ?? ''}
+            onChange={(e) => setConfig({ ...config, owner: { ...(config.owner ?? {}), name: e.target.value } })}
+          />
+          <div className="form-hint">How the assistant refers to you in summaries.</div>
+        </div>
+
+        {visibleSurfaces.length > 0 ? (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px' }}>
+              {visibleSurfaces.map((surface) => {
+                const surfaceStatus = handleStatus[surface]
+                return (
+                  <div key={surface} className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <span style={{ textTransform: 'capitalize' }}>{surface}</span>
+                      {surfaceStatus && (
+                        surfaceStatus.needsReview
+                          ? <AlertTriangle size={11} color="var(--color-warning, #f59e0b)" title="Confirm — may not match your graph" />
+                          : <Check size={11} color="var(--color-success, #22c55e)" title="Auto-filled" />
+                      )}
+                    </label>
+                    <input
+                      className="form-input"
+                      type="text"
+                      placeholder={surface === 'jira' ? 'Display Name' : `handle, handle2`}
+                      value={config.owner?.handles?.[surface] ?? ''}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        owner: {
+                          ...(config.owner ?? {}),
+                          handles: { ...(config.owner?.handles ?? {}), [surface]: e.target.value }
+                        }
+                      })}
+                      style={surfaceStatus?.needsReview ? { borderColor: 'var(--color-warning, #f59e0b)' } : undefined}
+                    />
+                  </div>
+                )
+              })}
+            </div>
+            <div className="form-hint" style={{ marginTop: 10 }}>
+              Used to recognise you in your connected surface data. Separate multiple handles with a comma.
+            </div>
+          </>
+        ) : (
+          <div className="form-hint">
+            Add a GitHub, Slack, Jira, Linear, or Notion MCP server to configure your identity handles.
+          </div>
+        )}
+      </div>
 
       {/* Assistant Identity */}
       <div className="card">
@@ -440,6 +603,7 @@ const TIER_HINTS: Record<number, string> = {
 
 function AmbientAutonomyCard(): React.ReactElement {
   const api = window.electron
+  const toast = useToast()
   const [policies, setPolicies] = useState<AutonomyPolicy[]>([])
   const [resetting, setResetting] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
@@ -452,17 +616,31 @@ function AmbientAutonomyCard(): React.ReactElement {
 
   async function handleToggleEnabled(next: boolean): Promise<void> {
     setEnabled(next)
-    await api.config.update({ ambient: { enabled: next } } as any)
+    try {
+      await api.config.update({ ambient: { enabled: next } } as any)
+      toast.success(next ? 'Ambient intelligence enabled' : 'Ambient intelligence disabled')
+    } catch (err: any) {
+      setEnabled(!next) // revert
+      toast.error('Failed to update ambient setting', { message: err?.message })
+    }
   }
 
   function getTierForType(type: IntentType): Tier {
-    return (policies.find((p) => p.action_type.startsWith(type))?.tier ?? 2) as Tier
+    // Match the intent-type-level policy exactly (e.g. action_type === 'action').
+    // Per-surface:verb policies (e.g. 'github:comment') are earned autonomously
+    // and are NOT displayed here — this control sets the per-type default tier.
+    return (policies.find((p) => p.action_type === type)?.tier ?? 2) as Tier
   }
 
   async function handleSetTier(type: IntentType, tier: Tier): Promise<void> {
-    await api.ambient.setTier(type, tier)
-    const updated = await api.ambient.getPolicy()
-    setPolicies(updated as AutonomyPolicy[])
+    try {
+      await api.ambient.setTier(type, tier)
+      const updated = await api.ambient.getPolicy()
+      setPolicies(updated as AutonomyPolicy[])
+      toast.success(`Trust tier updated to "${TIER_LABELS[tier]}"`)
+    } catch (err: any) {
+      toast.error('Failed to update trust tier', { message: err?.message })
+    }
   }
 
   async function handleReset(): Promise<void> {
@@ -472,6 +650,9 @@ function AmbientAutonomyCard(): React.ReactElement {
       const updated = await api.ambient.getPolicy()
       setPolicies(updated as AutonomyPolicy[])
       setConfirmReset(false)
+      toast.success('Trust history reset')
+    } catch (err: any) {
+      toast.error('Failed to reset trust', { message: err?.message })
     } finally {
       setResetting(false)
     }

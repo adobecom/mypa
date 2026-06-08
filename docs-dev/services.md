@@ -12,12 +12,24 @@ Spawns the `claude` CLI for all AI work. See [claude-integration.md](claude-inte
 
 | Export | Description |
 |---|---|
-| `runClaude(systemPrompt, userPrompt)` | One-shot text completion (120 s timeout) |
-| `streamChat(history, userMessage, onChunk, onDone, rawContext?, streamId?)` | Streaming multi-turn chat |
+| `runClaude(systemPrompt, userPrompt, source?)` | One-shot JSON completion (120 s timeout); records usage |
+| `streamChat(history, userMessage, onChunk, onDone, rawContext?, streamId?, source?)` | Streaming multi-turn chat; records usage on completion |
 | `cancelStream(streamId)` | Kill an active stream by ID; returns `true` if found |
 | `generatePlanDraft(intent)` | Parse free-text intent → `PlanDraft` |
 | `generateRoutineDigest(name, promptTemplate, rawOutput)` | Summarize MCP output → `RoutineDigest` |
 | `generateRoutineSetup(intent, servers)` | Natural-language intent → validated `RoutineSetupDraft` |
+
+---
+
+## `usage.ts` — Usage recorder
+
+Thin wrapper around `dbInsertUsage` so `claude.ts` doesn't import the DB layer directly. All errors are swallowed — telemetry never breaks an AI call.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `recordUsage(source, model, cliResult)` | Persist a `usage_events` row from a CLI result object |
 
 ---
 
@@ -97,6 +109,8 @@ Reads and writes `~/.mypa/config.json`. See [configuration.md](configuration.md)
 | `readConfig()` | Read config, deep-merge with `DEFAULT_CONFIG`, decrypt secrets |
 | `writeConfig(config)` | Encrypt secrets, write config |
 | `updateConfig(partial)` | Deep-merge partial update, write, return updated config |
+| `getOwnerHandles()` | Flat list of configured owner handles (non-empty, trimmed) — used for graph-render tagging |
+| `buildOwnerClause()` | Returns a one-sentence system-prompt instruction addressing the owner as "you"; returns `''` when `AppConfig.owner` is not set |
 
 Secrets encrypted at rest:
 - `mcp_servers[].env.*` values — MCP server API keys / tokens
@@ -130,6 +144,8 @@ Runs the recurring background poll cycle (default every 5 minutes). Reads config
 ## `autonomy.ts` — Trust tier engine
 
 Manages the `autonomy_policy` table and the promotion/demotion of action-type tiers. Handles approve/challenge/dismiss outcomes and updates consecutive-approval streaks used for automatic tier promotion.
+
+**Two-level tier resolution:** `resolveTier(obj)` looks up the earned per-`surface:verb` policy first, then falls back to the intent-type-level policy (what the user set in Settings for e.g. all "action" intents), then to the hardcoded default (tier 2). This means user Settings choices are live defaults that earned trust can refine on top of.
 
 ---
 
@@ -188,10 +204,49 @@ The core of the ambient intelligence pipeline. See [knowledge-graph.md](knowledg
 
 ---
 
+## `memory-export.ts` — Memory export
+
+Builds a self-contained Markdown export of all memories and the full knowledge graph, suitable for direct LLM ingestion and migration. Called by the `memory:export-markdown` IPC handler.
+
+**Key export:**
+
+| Export | Description |
+|---|---|
+| `buildMemoryExportMarkdown(memories, nodes, edges)` | Returns a Markdown string with migration prompt, human-readable memories (grouped by type), graph nodes + edges, and a JSON data appendix |
+
+---
+
 ## `claude-import.ts` — Claude Code config import
 
 Reads an existing Claude Code config file (typically `~/.claude.json` or `~/Library/Application Support/Claude/claude.json`) and returns `DetectedMcpServer[]` that can be imported into mypa's MCP server list.
 
+---
+
+## `updater.ts` — Auto-update
+
+Wraps `electron-updater` to check GitHub Releases for a newer version of mypa. Only active in packaged builds (`app.isPackaged`); silently skipped in dev mode to avoid errors without a live feed.
+
+**Behaviour:**
+- First check runs 30 s after startup to avoid blocking cold start
+- Subsequent checks every 4 hours via `setInterval`
+- Downloads automatically (`autoDownload = true`)
+- On download complete: calls `setUpdateReady(true)` in `tray.ts` (switches "Check for Updates" → "Restart to Update" in the tray menu) and pushes `update:downloaded` to all renderer windows
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `initUpdater(getWindow)` | Wire up events and start the check schedule |
+| `checkForUpdatesNow()` | Manually trigger an update check (from tray menu or IPC) |
+| `installUpdate()` | Call `autoUpdater.quitAndInstall()` to apply the downloaded update |
+
+**electron-builder publish config** (`package.json` `build.publish`): GitHub, repo `adobecom/mypa`. The CI workflow uploads `*.dmg`, `*.zip`, `*.blockmap`, and `latest-mac.yml` to each GitHub Release. `electron-updater` reads `latest-mac.yml` to detect new versions and downloads the `.zip` for the in-place update.
+
 ## Changelog
 
+- 2026-06-07 — added `updater.ts`; wraps `electron-updater` for GitHub Releases auto-update; adds `checkForUpdatesNow` and `installUpdate` exports; pushes `update:available`, `update:progress`, `update:downloaded`, `update:error` channels to all windows
+- 2026-06-07 — new `usage.ts` recorder; `claude.ts` switched `runClaude` to `--output-format json` and added `source: UsageSource` param; both `runClaude` and `runClaudeStream` call `recordUsage()` after each Claude call; `streamChat` and all callers (`routines.ts`, `plan.ts`, `inference.ts`, `memories.ts`) updated with source labels
+- 2026-06-07 — `routines.ts`: `routine:run-started` and `routine:run-completed` now sent via `broadcast()` (both widget + main windows) instead of widget-only `webContents.send`; `ambient.ts`: emits new `ambient:action-executed` broadcast after a tier-0 intent auto-executes successfully; added `broadcast()` helper to `windows.ts`
+- 2026-06-07 — added `getOwnerHandles()` and `buildOwnerClause()` to `config.ts`; added `resolveOwnerHandles()` to `mcp.ts`; owner clause injected into all AI system prompts; owner nodes tagged `you (handle)` in `renderPacketForPrompt`
+- 2026-06-07 — added `memory-export.ts` service; fixed `autonomy.ts` two-level tier resolution + streak reset; hardened `generateRoutineDigest` to never throw (returns graceful default)
 - 2026-06-06 — initial documentation; reflects services as of commit d8a8774

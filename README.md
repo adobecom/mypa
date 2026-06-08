@@ -11,6 +11,8 @@ A local-first personal assistant for developers, built as a macOS/Linux/Windows 
 - **Ambient intelligence** — background polling of GitHub, Jira, and Slack; the assistant proposes intents (actions, suggestions, flags) for you to approve or dismiss
 - **Autonomy / trust tiers** — per-action trust levels that adapt based on your approve/challenge/dismiss history; fully configurable and resettable
 - **Memory graph** — a visual knowledge graph of people, work items, topics, and the assistant's own decisions, built from local embeddings; inspect and edit from the Memory page
+- **Owner identity** — set your name and per-surface handles (GitHub, Slack, Jira, Linear, Notion) so the assistant addresses you as "you" rather than by handle; auto-fills from connected MCP servers with one click
+- **Usage dashboard** — detailed token usage and estimated cost breakdown by feature, model, and time period; powered by data the Claude CLI already reports
 - **MCP integration** — connect to any MCP server (local stdio process) from a built-in catalog or custom config; auto-import from an existing Claude Code config
 - **OAuth integrations** — GitHub device flow, Notion PKCE, and Linear PKCE for enriching routines with live data
 
@@ -89,7 +91,7 @@ Full developer reference in [`docs-dev/`](docs-dev/README.md):
 |---|---|
 | [Architecture](docs-dev/architecture.md) | Process map, boot sequence, data flow |
 | [IPC reference](docs-dev/ipc.md) | All API namespaces, methods, push channels |
-| [Database](docs-dev/database.md) | SQLite schema — all 13 tables |
+| [Database](docs-dev/database.md) | SQLite schema — all 14 tables |
 | [Services](docs-dev/services.md) | Main-process service modules |
 | [Knowledge graph](docs-dev/knowledge-graph.md) | 14-node-type ontology, decay, context assembly |
 | [Ambient intelligence](docs-dev/ambient-intelligence.md) | Signals → intents pipeline, trust tiers |

@@ -20,8 +20,16 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      - name: Cache Electron binary
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+
       - name: Install dependencies
         run: npm ci
+        env:
+          ELECTRON_CACHE: ~/Library/Caches/electron
 
       - name: Rebuild native modules
         run: npm run postinstall
@@ -39,7 +47,11 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/**/*.dmg
+          files: |
+            dist/**/*.dmg
+            dist/**/*.zip
+            dist/**/*.blockmap
+            dist/**/latest-mac.yml
           generate_release_notes: true
 
       - name: Upload as workflow artifact

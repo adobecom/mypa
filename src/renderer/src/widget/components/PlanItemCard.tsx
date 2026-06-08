@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Check, Minus, MessageSquare, ChevronUp, CornerUpLeft } from 'lucide-react'
+import { Check, Minus, MessageSquare, ChevronUp, CornerUpLeft, ExternalLink } from 'lucide-react'
 import ChatThread from './ChatThread'
 import type { PlanItem, ChatMessage } from '../../../../../../shared/types'
 
@@ -127,6 +127,15 @@ export default function PlanItemCard({
           >
             {expanded ? <ChevronUp size={11} /> : <MessageSquare size={11} />}
           </button>
+          {expanded && (
+            <button
+              className="plan-item__thread-btn"
+              onClick={(e) => { e.stopPropagation(); api.plan.openInMainWindow(item.id) }}
+              title="Open full chat in main window"
+            >
+              <ExternalLink size={11} />
+            </button>
+          )}
           <button
             className="plan-item__skip-btn"
             onClick={(e) => { e.stopPropagation(); handleSkip() }}

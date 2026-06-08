@@ -1,5 +1,6 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, dialog } from 'electron'
 import { execFileSync } from 'child_process'
+import { writeFileSync } from 'fs'
 import {
   dbGetRoutines,
   dbCreateRoutine,
@@ -10,10 +11,12 @@ import {
   dbGetRunThread,
   dbUpdateRun,
   dbGetPlanItems,
+  dbGetPlanItem,
   dbGetPlanThread,
   dbGetBadgeCount,
   dbGetAllNodes,
   dbGetAllEdges,
+  dbGetAllMemories,
   dbGetNodeById,
   dbGetEdgesFrom,
   dbGetEdgesTo,
@@ -22,10 +25,15 @@ import {
   dbDeleteNode,
   dbDeleteEdge,
   dbDeleteMemory,
-  dbUpdateMemory
+  dbUpdateMemory,
+  dbGetUsageSummary,
+  dbGetUsageByDay,
+  dbGetUsageBySource,
+  dbGetUsageByModel,
+  dbGetRecentUsage
 } from './db/index'
 import { readConfig, updateConfig } from './services/config'
-import { testServer, getServerStatus, connectAllServers } from './services/mcp'
+import { testServer, getServerStatus, connectAllServers, resolveOwnerHandles } from './services/mcp'
 import { startDeviceFlow, pollDeviceFlow, startPkceFlow } from './services/oauth'
 import { detectClaudeMcpServers } from './services/claude-import'
 import { executeRoutine, handleRunMessage } from './services/routines'
@@ -47,8 +55,10 @@ import {
   stopAmbient
 } from './services/ambient'
 import { dbGetActionLog } from './db/index'
+import { buildMemoryExportMarkdown } from './services/memory-export'
 import { setTrayState } from './tray'
-import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, McpServerConfig, SetupHealth, DigestSlot, Tier } from '@shared/types'
+import { checkForUpdatesNow, installUpdate } from './services/updater'
+import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, McpServerConfig, SetupHealth, DigestSlot, Tier, UsageRange } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 
 export function registerIpcHandlers(
@@ -88,6 +98,22 @@ export function registerIpcHandlers(
 
   ipcMain.handle('plan:cancel-stream', (_e, itemId: string) => {
     cancelStream(itemId)
+  })
+
+  ipcMain.handle('plan:get-item', async (_e, itemId: string) => {
+    return dbGetPlanItem(itemId)
+  })
+
+  ipcMain.handle('plan:open-in-main-window', async (_e, itemId: string) => {
+    const win = openMainWindow()
+    const send = (): void => win.webContents.send('navigate:plan-item', itemId)
+    const url = win.webContents.getURL()
+    const ready = url !== '' && url !== 'about:blank' && !win.webContents.isLoading()
+    if (ready) {
+      send()
+    } else {
+      win.webContents.once('did-finish-load', send)
+    }
   })
 
   // ─── Routines ──────────────────────────────────────────────────────────────
@@ -148,6 +174,18 @@ export function registerIpcHandlers(
 
   ipcMain.handle('routines:cancel-stream', (_e, runId: string) => {
     cancelStream(runId)
+  })
+
+  ipcMain.handle('routines:open-run-in-main-window', async (_e, runId: string) => {
+    const win = openMainWindow()
+    const send = (): void => win.webContents.send('navigate:run-chat', runId)
+    const url = win.webContents.getURL()
+    const ready = url !== '' && url !== 'about:blank' && !win.webContents.isLoading()
+    if (ready) {
+      send()
+    } else {
+      win.webContents.once('did-finish-load', send)
+    }
   })
 
   // ─── Config ────────────────────────────────────────────────────────────────
@@ -257,6 +295,8 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('setup:detect-claude-mcp', () => detectClaudeMcpServers())
+
+  ipcMain.handle('setup:resolve-owner-handles', () => resolveOwnerHandles())
 
   // ─── System ────────────────────────────────────────────────────────────────
 
@@ -381,5 +421,55 @@ export function registerIpcHandlers(
 
   ipcMain.handle('memory:update-memory', async (_e, id: string, update: { content?: string; importance?: number; status?: 'active' | 'superseded' }) => {
     dbUpdateMemory(id, update)
+  })
+
+  ipcMain.handle('memory:export-markdown', async () => {
+    const dateStr = new Date().toISOString().slice(0, 10)
+    const result = await dialog.showSaveDialog({
+      title: 'Export memory',
+      defaultPath: `mypa-memory-export-${dateStr}.md`,
+      filters: [{ name: 'Markdown', extensions: ['md'] }]
+    })
+    if (result.canceled || !result.filePath) {
+      return { saved: false }
+    }
+    const memories = dbGetAllMemories()
+    const nodes = dbGetAllNodes()
+    const edges = dbGetAllEdges()
+    const markdown = buildMemoryExportMarkdown(memories, nodes, edges)
+    writeFileSync(result.filePath, markdown, 'utf8')
+    return { saved: true, path: result.filePath }
+  })
+
+  // ─── Usage ────────────────────────────────────────────────────────────────
+
+  ipcMain.handle('usage:get-summary', (_e, range: UsageRange) => {
+    return dbGetUsageSummary(range)
+  })
+
+  ipcMain.handle('usage:get-daily', (_e, range: UsageRange) => {
+    return dbGetUsageByDay(range)
+  })
+
+  ipcMain.handle('usage:get-by-source', (_e, range: UsageRange) => {
+    return dbGetUsageBySource(range)
+  })
+
+  ipcMain.handle('usage:get-by-model', (_e, range: UsageRange) => {
+    return dbGetUsageByModel(range)
+  })
+
+  ipcMain.handle('usage:get-recent', (_e, limit: number, range: UsageRange) => {
+    return dbGetRecentUsage(limit, range)
+  })
+
+  // ─── Update ───────────────────────────────────────────────────────────────
+
+  ipcMain.handle('update:check-now', () => {
+    checkForUpdatesNow()
+  })
+
+  ipcMain.handle('update:install', () => {
+    installUpdate()
   })
 }

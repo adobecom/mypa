@@ -2,7 +2,7 @@ import { BrowserWindow, screen } from 'electron'
 import { join } from 'path'
 import { readConfig } from './services/config'
 
-const WIDGET_WIDTH = 380
+const WIDGET_WIDTH = 440
 const WIDGET_HEIGHT = 580
 
 let widgetWin: BrowserWindow | null = null
@@ -146,6 +146,18 @@ export function getWidgetWindow(): BrowserWindow | null {
 
 export function getMainWindow(): BrowserWindow | null {
   return mainWin
+}
+
+/**
+ * Send an IPC event to every open, non-destroyed window (widget + main).
+ * Callers targeting a specific window should continue using the direct getter.
+ */
+export function broadcast(channel: string, ...args: unknown[]): void {
+  for (const win of [widgetWin, mainWin]) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(channel, ...args)
+    }
+  }
 }
 
 export function openOrFocusMainWindow(): BrowserWindow {

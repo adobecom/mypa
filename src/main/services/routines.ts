@@ -11,6 +11,7 @@ import {
 } from '../db/index'
 import { callTool } from './mcp'
 import { generateRoutineDigest, streamChat } from './claude'
+import { broadcast } from '../windows'
 import type { Routine, RunStatus } from '@shared/types'
 
 export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow | null): Promise<void> {
@@ -27,8 +28,8 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
 
   const run = dbCreateRun(routine.id, routine.name)
 
-  // Notify renderer: run started
-  widgetWin?.webContents.send('routine:run-started', run)
+  // Notify both windows: run started (widget shows inline run card; main window shows toast)
+  broadcast('routine:run-started', run)
 
   try {
     // Step 1: execute MCP actions
@@ -45,20 +46,11 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
     const rawOutput = results.join('\n\n---\n\n')
 
     // Step 2: Claude digest
-    let digest = ''
-    let summary = ''
-    try {
-      const digestResult = await generateRoutineDigest(routine.name, routine.prompt, rawOutput)
-      digest = JSON.stringify(digestResult)
-      summary = digestResult.summary
-
-      // Add assistant message with digest
-      dbAddRunMessage(run.id, 'assistant', buildDigestMessage(digestResult))
-    } catch (err: any) {
-      digest = ''
-      summary = `${routine.name} completed`
-      dbAddRunMessage(run.id, 'assistant', `Routine completed.\n\nRaw output:\n${rawOutput}`)
-    }
+    // generateRoutineDigest never throws — returns a default digest on parse failure
+    const digestResult = await generateRoutineDigest(routine.name, routine.prompt, rawOutput)
+    const digest = JSON.stringify(digestResult)
+    const summary = digestResult.summary
+    dbAddRunMessage(run.id, 'assistant', buildDigestMessage(digestResult))
 
     // Update run record
     dbUpdateRun(run.id, {
@@ -77,9 +69,9 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
     notification.show()
     notification.on('click', () => widgetWin?.show())
 
-    // Step 4: push to renderer
+    // Step 4: push to both windows (widget: inline card update; main: toast)
     const updatedRun = dbGetRun(run.id)
-    widgetWin?.webContents.send('routine:run-completed', updatedRun)
+    broadcast('routine:run-completed', updatedRun)
     widgetWin?.webContents.send('badge:updated', dbGetBadgeCount())
   } catch (err: any) {
     dbUpdateRun(run.id, {
@@ -87,7 +79,7 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
       status: 'error',
       error: err?.message ?? String(err)
     })
-    widgetWin?.webContents.send('routine:run-completed', dbGetRun(run.id))
+    broadcast('routine:run-completed', dbGetRun(run.id))
   }
 }
 
@@ -139,21 +131,22 @@ export async function handleRunMessage(
         } else {
           segments[segments.length - 1] += chunk
         }
-        widgetWin?.webContents.send('routine:run-message', { runId, chunk, done: false })
+        broadcast('routine:run-message', { runId, chunk, done: false })
       },
       (full) => {
         fullResponse = full
       },
       run.raw_output ?? undefined,
-      runId
+      runId,
+      'routine_chat'
     )
     const toSave = segments.filter((s) => s.trim())
     for (const seg of toSave.length > 0 ? toSave : [fullResponse]) {
       if (seg.trim()) dbAddRunMessage(runId, 'assistant', seg)
     }
-    widgetWin?.webContents.send('routine:run-message', { runId, chunk: '', done: true })
+    broadcast('routine:run-message', { runId, chunk: '', done: true })
   } catch (err: any) {
-    widgetWin?.webContents.send('routine:run-message', {
+    broadcast('routine:run-message', {
       runId,
       chunk: '',
       done: true,

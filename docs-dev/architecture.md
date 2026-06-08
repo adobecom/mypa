@@ -113,4 +113,5 @@ See [ipc.md](ipc.md) for the full reference.
 
 ## Changelog
 
+- 2026-06-07 — `src/main/windows.ts` gained `broadcast(channel, ...args)` — sends an IPC event to every open, non-destroyed window (widget + main); used by `routines.ts` and `ambient.ts` for events that should reach both windows
 - 2026-06-06 — initial documentation

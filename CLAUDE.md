@@ -18,6 +18,10 @@ npm run postinstall   # Runs electron-rebuild for better-sqlite3
 
 There are no test commands — the project has no test suite.
 
+## UI conventions
+
+**No emojis — ever.** Do not use emoji characters anywhere in the codebase: source files, UI text, comments, or documentation. The project uses `lucide-react` for all icons. When you need a visual indicator (empty states, status icons, decorative marks), choose an appropriate lucide icon (`import { IconName } from 'lucide-react'`) instead of an emoji.
+
 ## Documentation maintenance
 
 > **Rule: any code change that affects a documented area MUST update the matching doc(s) in the same commit, and add a dated entry to that doc's `## Changelog` section.**

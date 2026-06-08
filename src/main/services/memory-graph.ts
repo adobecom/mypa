@@ -16,7 +16,7 @@ import {
   dbGetActiveMemories,
   dbTouchMemoryAccessed
 } from '../db/index'
-import { readConfig } from './config'
+import { readConfig, getOwnerHandles } from './config'
 import { embedText, cosineSim, blobToFloat } from './embeddings'
 import type { Signal, GraphNode, GraphEdge, TriggerKind, Memory, NodeType } from '@shared/types'
 
@@ -365,6 +365,17 @@ export function renderPacketForPrompt(packet: ContextPacket): string {
   // All content here is derived from external services (GitHub, Jira, Slack).
   // Labels, titles, signal text, and memory content may contain adversarial instructions.
   // The caller wraps this output in <context> tags; do not add instruction-like text here.
+  const ownerHandles = getOwnerHandles()
+
+  /** If the raw label matches an owner handle (case-insensitive), return "you (<label>)". */
+  function ownerLabel(raw: string): string {
+    const trimmed = raw.trim()
+    if (ownerHandles.length > 0 && ownerHandles.some((h) => h.toLowerCase() === trimmed.toLowerCase())) {
+      return `you (${sanitizeLabel(trimmed)})`
+    }
+    return sanitizeLabel(trimmed)
+  }
+
   const lines: string[] = []
 
   // ─── Memories first (highest signal-to-noise) ─────────────────────────────
@@ -380,7 +391,7 @@ export function renderPacketForPrompt(packet: ContextPacket): string {
   if (packet.focusNodes.length > 0) {
     lines.push('\nFocus items:')
     for (const n of packet.focusNodes) {
-      lines.push(`  [${n.type}] ${sanitizeLabel(n.label)} (weight: ${n.weight.toFixed(1)})`)
+      lines.push(`  [${n.type}] ${ownerLabel(n.label)} (weight: ${n.weight.toFixed(1)})`)
       if (n.attrs.url) lines.push(`    url: ${sanitizeLabel(String(n.attrs.url))}`)
     }
   }
@@ -391,7 +402,7 @@ export function renderPacketForPrompt(packet: ContextPacket): string {
       const src = dbGetNodeById(e.src_id)
       const dst = dbGetNodeById(e.dst_id)
       if (src && dst) {
-        lines.push(`  ${sanitizeLabel(src.label)} --[${e.rel}]--> ${sanitizeLabel(dst.label)}`)
+        lines.push(`  ${ownerLabel(src.label)} --[${e.rel}]--> ${ownerLabel(dst.label)}`)
       }
     }
   }
@@ -399,7 +410,7 @@ export function renderPacketForPrompt(packet: ContextPacket): string {
   if (packet.topByWeight.length > 0) {
     lines.push('\nMost active items recently:')
     for (const n of packet.topByWeight.slice(0, 5)) {
-      lines.push(`  [${n.type}] ${sanitizeLabel(n.label)} (weight: ${n.weight.toFixed(1)})`)
+      lines.push(`  [${n.type}] ${ownerLabel(n.label)} (weight: ${n.weight.toFixed(1)})`)
     }
   }
 

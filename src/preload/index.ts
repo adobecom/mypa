@@ -10,7 +10,9 @@ const api: IpcApi = {
     delete: (id) => ipcRenderer.invoke('plan:delete', id),
     sendMessage: (itemId, message) => ipcRenderer.invoke('plan:send-message', itemId, message),
     getThread: (itemId) => ipcRenderer.invoke('plan:get-thread', itemId),
-    cancelStream: (itemId) => ipcRenderer.invoke('plan:cancel-stream', itemId)
+    cancelStream: (itemId) => ipcRenderer.invoke('plan:cancel-stream', itemId),
+    getItem: (itemId) => ipcRenderer.invoke('plan:get-item', itemId),
+    openInMainWindow: (itemId) => ipcRenderer.invoke('plan:open-in-main-window', itemId)
   },
   routines: {
     getAll: () => ipcRenderer.invoke('routines:get-all'),
@@ -24,7 +26,8 @@ const api: IpcApi = {
     sendMessage: (runId, message) => ipcRenderer.invoke('routines:send-message', runId, message),
     updateRunStatus: (runId, status) => ipcRenderer.invoke('routines:update-run-status', runId, status),
     generateSetup: (intent) => ipcRenderer.invoke('routines:generate-setup', intent),
-    cancelStream: (runId) => ipcRenderer.invoke('routines:cancel-stream', runId)
+    cancelStream: (runId) => ipcRenderer.invoke('routines:cancel-stream', runId),
+    openRunInMainWindow: (runId) => ipcRenderer.invoke('routines:open-run-in-main-window', runId)
   },
   config: {
     get: () => ipcRenderer.invoke('config:get'),
@@ -40,7 +43,8 @@ const api: IpcApi = {
   setup: {
     checkPrerequisites: () => ipcRenderer.invoke('setup:check-prerequisites'),
     getHealth: () => ipcRenderer.invoke('setup:get-health'),
-    detectClaudeMcp: () => ipcRenderer.invoke('setup:detect-claude-mcp')
+    detectClaudeMcp: () => ipcRenderer.invoke('setup:detect-claude-mcp'),
+    resolveOwnerHandles: () => ipcRenderer.invoke('setup:resolve-owner-handles')
   },
   system: {
     openMainWindow: (routineId?: string) => ipcRenderer.invoke('system:open-main-window', routineId),
@@ -70,7 +74,19 @@ const api: IpcApi = {
     deleteNode: (id: string) => ipcRenderer.invoke('memory:delete-node', id),
     deleteEdge: (id: string) => ipcRenderer.invoke('memory:delete-edge', id),
     deleteMemory: (id: string) => ipcRenderer.invoke('memory:delete-memory', id),
-    updateMemory: (id: string, update: object) => ipcRenderer.invoke('memory:update-memory', id, update)
+    updateMemory: (id: string, update: object) => ipcRenderer.invoke('memory:update-memory', id, update),
+    exportMarkdown: () => ipcRenderer.invoke('memory:export-markdown')
+  },
+  usage: {
+    getSummary: (range) => ipcRenderer.invoke('usage:get-summary', range),
+    getDaily: (range) => ipcRenderer.invoke('usage:get-daily', range),
+    getBySource: (range) => ipcRenderer.invoke('usage:get-by-source', range),
+    getByModel: (range) => ipcRenderer.invoke('usage:get-by-model', range),
+    getRecent: (limit, range) => ipcRenderer.invoke('usage:get-recent', limit, range)
+  },
+  update: {
+    checkNow: () => ipcRenderer.invoke('update:check-now'),
+    install:  () => ipcRenderer.invoke('update:install')
   },
   on: (channel, listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => listener(...args)

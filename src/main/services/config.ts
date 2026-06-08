@@ -110,6 +110,44 @@ export function updateConfig(partial: Partial<AppConfig>): AppConfig {
   return updated
 }
 
+// ─── Owner identity helpers ──────────────────────────────────────────────────
+
+/**
+ * Returns a flat list of the owner's per-surface handles (non-empty, trimmed).
+ * Used by renderPacketForPrompt to tag owner nodes inline.
+ */
+export function getOwnerHandles(): string[] {
+  const handles = readConfig().owner?.handles ?? {}
+  return Object.values(handles)
+    .filter((h): h is string => typeof h === 'string' && h.trim() !== '')
+    .flatMap((h) => h.split(',').map((s) => s.trim()).filter(Boolean))
+}
+
+/**
+ * Builds a one-sentence owner instruction appended to system prompts so the
+ * model addresses the owner as "you" rather than by handle or in the third person.
+ * Returns '' when no owner identity is configured.
+ */
+export function buildOwnerClause(): string {
+  const owner = readConfig().owner
+  if (!owner?.name && !owner?.handles) return ''
+
+  const name = owner.name?.trim() || 'the user you assist'
+  const handles = owner.handles ?? {}
+  const handleEntries = Object.entries(handles)
+    .flatMap(([surface, v]) => {
+      if (typeof v !== 'string' || !v.trim()) return []
+      const vals = v.split(',').map((h) => h.trim()).filter(Boolean)
+      return vals.length > 0 ? [`${surface}: ${vals.join(', ')}`] : []
+    })
+
+  const handlePart = handleEntries.length > 0
+    ? ` They appear across connected surfaces under these handles — ${handleEntries.join(', ')}.`
+    : ''
+
+  return `\n\nThe person you assist is ${name}.${handlePart} When activity references any of those handles, that is ${name} themselves — address them in the second person ("you"), never in the third person or by their handle.`
+}
+
 function deepMerge(base: any, override: any): any {
   const result = { ...base }
   for (const key of Object.keys(override ?? {})) {

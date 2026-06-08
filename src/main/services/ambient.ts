@@ -6,6 +6,7 @@ import {
   dbGetPendingIntents,
   dbGetAllIntents,
   dbUpdateIntentStatus,
+  dbSetIntentChallengeReason,
   dbGetBadgeCount,
   dbAppendActionLog,
   dbGetAllPolicies,
@@ -33,6 +34,7 @@ import {
   resetTrust as resetTrustPolicy
 } from './autonomy'
 import { setTrayState } from '../tray'
+import { broadcast } from '../windows'
 import type { Signal, Intent, IntentObject, TriggerKind, TrayState, DigestSlot, AmbientDigest, Tier } from '@shared/types'
 
 // ─── Module state ─────────────────────────────────────────────────────────────
@@ -277,6 +279,11 @@ async function executeIntent(intent: Intent, win: BrowserWindow | null): Promise
   const updated = dbGetIntent(intent.id)!
   pushIntent(updated, win)
   refreshTray(win)
+
+  // Notify main window of the auto-executed action so it can surface a toast
+  if (updated.status === 'executed') {
+    broadcast('ambient:action-executed', updated)
+  }
 }
 
 // Verb → MCP tool mapping. Only mapped (surface, verb) pairs may be executed.
@@ -351,6 +358,7 @@ export async function ambientChallengeIntent(id: string, reason: string): Promis
   const intent = dbGetIntent(id)
   if (!intent) throw new Error(`Intent ${id} not found`)
   dbUpdateIntentStatus(id, 'challenged')
+  dbSetIntentChallengeReason(id, reason)
   recordChallenge(`${intent.surface}:${intent.verb}`, reason)
   dbAppendActionLog({
     intent_id: id,

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Zap, Play } from 'lucide-react'
 import RoutineForm from './RoutineForm'
 import { describeCron } from './cronUtils'
+import { useToast } from '../toast/ToastProvider'
 import type { Routine, RoutineSetupDraft } from '@shared/types'
 
 function RoutineAiSetup({
@@ -87,6 +88,7 @@ export default function RoutinesManager({ editRoutineId, onEditHandled }: Props)
   const [loading, setLoading] = useState(true)
 
   const api = window.electron
+  const toast = useToast()
 
   useEffect(() => {
     api.routines.getAll().then((r) => { setRoutines(r); setLoading(false) })
@@ -102,31 +104,58 @@ export default function RoutinesManager({ editRoutineId, onEditHandled }: Props)
   }, [editRoutineId, routines])
 
   const handleCreate = async (data: Omit<Routine, 'id' | 'created_at'>) => {
-    const r = await api.routines.create(data)
-    setRoutines((prev) => [...prev, r])
-    setShowForm(false)
+    try {
+      const r = await api.routines.create(data)
+      setRoutines((prev) => [...prev, r])
+      setShowForm(false)
+      toast.success(`Routine "${r.name}" created`)
+    } catch (err: any) {
+      toast.error('Failed to create routine', { message: err?.message })
+    }
   }
 
   const handleUpdate = async (data: Omit<Routine, 'id' | 'created_at'>) => {
     if (!editing) return
-    const r = await api.routines.update(editing.id, data)
-    setRoutines((prev) => prev.map((x) => (x.id === r.id ? r : x)))
-    setEditing(null)
+    try {
+      const r = await api.routines.update(editing.id, data)
+      setRoutines((prev) => prev.map((x) => (x.id === r.id ? r : x)))
+      setEditing(null)
+      toast.success(`Routine "${r.name}" saved`)
+    } catch (err: any) {
+      toast.error('Failed to save routine', { message: err?.message })
+    }
   }
 
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this routine?')) return
-    await api.routines.delete(id)
-    setRoutines((prev) => prev.filter((r) => r.id !== id))
+    const name = routines.find((r) => r.id === id)?.name ?? 'Routine'
+    try {
+      await api.routines.delete(id)
+      setRoutines((prev) => prev.filter((r) => r.id !== id))
+      toast.success(`"${name}" deleted`)
+    } catch (err: any) {
+      toast.error('Failed to delete routine', { message: err?.message })
+    }
   }
 
   const handleToggle = async (r: Routine) => {
-    const updated = await api.routines.update(r.id, { ...r, enabled: !r.enabled })
-    setRoutines((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))
+    try {
+      const updated = await api.routines.update(r.id, { ...r, enabled: !r.enabled })
+      setRoutines((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))
+    } catch (err: any) {
+      toast.error('Failed to update routine', { message: err?.message })
+    }
   }
 
   const handleRunNow = async (id: string) => {
-    await api.routines.runNow(id)
+    // Fire-and-forget: run-started / run-completed events will drive toasts via
+    // the useRunToasts bridge in App.tsx. We only need error handling here for
+    // the case where the IPC invoke itself fails (e.g. routine not found).
+    try {
+      await api.routines.runNow(id)
+    } catch (err: any) {
+      toast.error('Failed to start routine', { message: err?.message })
+    }
   }
 
   if (showAiSetup) {

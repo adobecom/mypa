@@ -7,6 +7,14 @@ let tray: Tray | null = null
 let logoImage: Electron.NativeImage | null = null
 let badgedLogoImage: Electron.NativeImage | null = null
 let currentState: TrayState = 'idle'
+let updateReady = false
+
+// Callbacks set by createTray
+let _toggleWidget: (() => void) | null = null
+let _openMainWindow: (() => void) | null = null
+let _quit: (() => void) | null = null
+let _checkForUpdates: (() => void) | null = null
+let _installUpdate: (() => void) | null = null
 
 /** Resolve the tray icon PNG path in both dev and packaged mode. */
 export function resolveIconPath(): string {
@@ -97,27 +105,51 @@ function getBadgedLogoImage(): Electron.NativeImage {
   return badgedLogoImage!
 }
 
+function buildMenu(): Electron.Menu {
+  const template: Electron.MenuItemConstructorOptions[] = [
+    { label: 'Open mypa', click: () => _openMainWindow?.() },
+    { type: 'separator' }
+  ]
+
+  if (updateReady) {
+    template.push({ label: 'Restart to Update', click: () => _installUpdate?.() })
+  } else {
+    template.push({ label: 'Check for Updates', click: () => _checkForUpdates?.() })
+  }
+
+  template.push({ type: 'separator' })
+  template.push({ label: 'Quit', click: () => _quit?.() })
+
+  return Menu.buildFromTemplate(template)
+}
+
 export function createTray(
   toggleWidget: () => void,
   openMainWindow: () => void,
-  quit: () => void
+  quit: () => void,
+  checkForUpdates?: () => void,
+  installUpdate?: () => void
 ): Tray {
+  _toggleWidget = toggleWidget
+  _openMainWindow = openMainWindow
+  _quit = quit
+  _checkForUpdates = checkForUpdates ?? null
+  _installUpdate = installUpdate ?? null
+
   const icon = getLogoImage()
   tray = new Tray(icon)
   tray.setToolTip('mypa')
 
-  const contextMenu = Menu.buildFromTemplate([
-    { label: 'Open mypa', click: openMainWindow },
-    { type: 'separator' },
-    { label: 'Quit', click: quit }
-  ])
-
   tray.on('click', toggleWidget)
   tray.on('right-click', () => {
-    tray?.popUpContextMenu(contextMenu)
+    tray?.popUpContextMenu(buildMenu())
   })
 
   return tray
+}
+
+export function setUpdateReady(ready: boolean): void {
+  updateReady = ready
 }
 
 /**

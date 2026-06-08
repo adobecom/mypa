@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { ChevronDown, Settings } from 'lucide-react'
+import { ChevronDown, Settings, ExternalLink } from 'lucide-react'
 import ChatThread from './ChatThread'
 import type { RoutineRun, ChatMessage } from '../../../../../../shared/types'
 
@@ -160,7 +160,16 @@ export default function RoutineCard({ run, onRunChange, collapsed }: Props): Rea
             error={chatError}
           />
 
-          <div style={{ marginTop: 8, display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>
+            <button
+              className="btn btn--ghost"
+              style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, marginRight: 'auto' }}
+              onClick={() => window.electron.routines.openRunInMainWindow(run.id)}
+              title="Open full chat in main window"
+            >
+              <ExternalLink size={11} />
+              Open in main window
+            </button>
             {run.status !== 'dismissed' && run.status !== 'resolved' && (
               <button className="btn btn--ghost" onClick={handleDismiss} style={{ fontSize: 11 }}>
                 Dismiss

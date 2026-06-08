@@ -142,11 +142,27 @@ export interface OAuthAppCredential {
   clientSecret?: string
 }
 
+export interface OwnerIdentity {
+  name?: string
+  handles?: {
+    github?: string
+    slack?: string
+    jira?: string
+    linear?: string
+    notion?: string
+  }
+}
+
+/** Return type for setup.resolveOwnerHandles — one entry per surface where a handle was found */
+export type ResolvedHandle = { value: string; needsReview: boolean }
+export type ResolvedOwnerHandles = Partial<Record<'github' | 'slack' | 'jira' | 'linear' | 'notion', ResolvedHandle>>
+
 export interface AppConfig {
   claude: ClaudeConfig
   mcp_servers: McpServerConfig[]
   preferences: AppPreferences
   persona?: string
+  owner?: OwnerIdentity
   oauth_apps?: {
     github?: OAuthAppCredential
     notion?: OAuthAppCredential
@@ -273,6 +289,7 @@ export interface Intent {
   created_at: string
   resolved_at: string | null
   error: string | null
+  challenge_reason: string | null
 }
 
 export interface Signal {
@@ -384,6 +401,57 @@ export interface NodeSignalLink {
   observed_at: string
 }
 
+// ─── Usage tracking ──────────────────────────────────────────────────────────
+
+export type UsageSource =
+  | 'plan_draft'
+  | 'routine_digest'
+  | 'routine_setup'
+  | 'routine_chat'
+  | 'plan_chat'
+  | 'inference'
+  | 'memory'
+  | 'chat'
+  | 'other'
+
+export type UsageRange = '7d' | '30d' | '90d' | 'all'
+
+export interface UsageEvent {
+  id: string
+  source: UsageSource
+  model: string
+  input_tokens: number
+  output_tokens: number
+  cache_creation_tokens: number
+  cache_read_tokens: number
+  cost_usd: number
+  created_at: string
+}
+
+export interface UsageSummary {
+  total_input: number
+  total_output: number
+  total_cache_creation: number
+  total_cache_read: number
+  total_cost: number
+  call_count: number
+}
+
+export interface UsageDailyPoint {
+  day: string
+  input_tokens: number
+  output_tokens: number
+  cost: number
+  calls: number
+}
+
+export interface UsageBreakdownRow {
+  key: string
+  tokens: number
+  cost: number
+  calls: number
+}
+
 // ─── Setup / Health ───────────────────────────────────────────────────────────
 
 export interface SetupHealthServer {
@@ -412,6 +480,8 @@ export interface IpcApi {
     sendMessage(itemId: string, message: string): Promise<void>
     getThread(itemId: string): Promise<ChatMessage[]>
     cancelStream(itemId: string): Promise<void>
+    getItem(itemId: string): Promise<PlanItem | null>
+    openInMainWindow(itemId: string): Promise<void>
   }
   routines: {
     getAll(): Promise<Routine[]>
@@ -426,6 +496,7 @@ export interface IpcApi {
     updateRunStatus(runId: string, status: RunStatus): Promise<void>
     generateSetup(intent: string): Promise<RoutineSetupDraft>
     cancelStream(runId: string): Promise<void>
+    openRunInMainWindow(runId: string): Promise<void>
   }
   config: {
     get(): Promise<AppConfig>
@@ -442,6 +513,7 @@ export interface IpcApi {
     checkPrerequisites(): Promise<{ claudeCli: boolean }>
     getHealth(): Promise<SetupHealth>
     detectClaudeMcp(): Promise<DetectedMcpServer[]>
+    resolveOwnerHandles(): Promise<ResolvedOwnerHandles>
   }
   system: {
     openMainWindow(routineId?: string): Promise<void>
@@ -468,6 +540,18 @@ export interface IpcApi {
     deleteEdge(id: string): Promise<void>
     deleteMemory(id: string): Promise<void>
     updateMemory(id: string, update: { content?: string; importance?: number; status?: 'active' | 'superseded' }): Promise<void>
+    exportMarkdown(): Promise<{ saved: boolean; path?: string }>
+  }
+  usage: {
+    getSummary(range: UsageRange): Promise<UsageSummary>
+    getDaily(range: UsageRange): Promise<UsageDailyPoint[]>
+    getBySource(range: UsageRange): Promise<UsageBreakdownRow[]>
+    getByModel(range: UsageRange): Promise<UsageBreakdownRow[]>
+    getRecent(limit: number, range: UsageRange): Promise<UsageEvent[]>
+  }
+  update: {
+    checkNow(): Promise<void>
+    install(): Promise<void>
   }
   on(
     channel:
@@ -477,10 +561,17 @@ export interface IpcApi {
       | 'plan:item-message'
       | 'badge:updated'
       | 'navigate:edit-routine'
+      | 'navigate:run-chat'
+      | 'navigate:plan-item'
       | 'ambient:intent-created'
       | 'ambient:intent-updated'
       | 'ambient:tray-state'
-      | 'ambient:digest-ready',
+      | 'ambient:digest-ready'
+      | 'ambient:action-executed'
+      | 'update:available'
+      | 'update:progress'
+      | 'update:downloaded'
+      | 'update:error',
     listener: (...args: unknown[]) => void
   ): () => void
 }

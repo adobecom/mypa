@@ -57,6 +57,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
   const [challenging, setChallenging] = useState(false)
   const [challengeReason, setChallengeReason] = useState('')
   const [loading, setLoading] = useState(false)
+  const [challengeConfirmed, setChallengeConfirmed] = useState(false)
 
   const api = window.electron
   const isTerminal = TERMINAL_STATUSES.includes(intent.status)
@@ -104,6 +105,8 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
       onIntentChange(updated as Intent)
       setChallenging(false)
       setChallengeReason('')
+      setChallengeConfirmed(true)
+      setTimeout(() => setChallengeConfirmed(false), 3500)
     } catch (e) {
       console.error('challenge error:', e)
     } finally {
@@ -260,10 +263,26 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
       {/* ── Status line for terminal states ── */}
       {isTerminal && (
         <div className="routine-card__body" style={{ fontSize: 11, color: 'var(--text-muted)', paddingTop: 0 }}>
-          {intent.status === 'executed' ? '✓ Executed' :
-           intent.status === 'challenged' ? '✗ Challenged' :
+          {intent.status === 'executed' ? 'Executed' :
+           intent.status === 'challenged' ? (
+             <>
+               <span>Challenged</span>
+               {intent.challenge_reason && (
+                 <div className="intent-detail__quote" style={{ marginTop: 4, fontSize: 11 }}>
+                   {intent.challenge_reason}
+                 </div>
+               )}
+             </>
+           ) :
            intent.status === 'dismissed' ? 'Dismissed' :
            intent.status === 'failed' ? `Failed: ${intent.error ?? ''}` : intent.status}
+        </div>
+      )}
+
+      {/* ── Challenge confirmation banner ── */}
+      {challengeConfirmed && (
+        <div className="routine-card__body" style={{ fontSize: 11, color: 'var(--green)', paddingTop: 0 }}>
+          Challenge recorded — {intent.surface}:{intent.verb} will ask for approval more often
         </div>
       )}
 

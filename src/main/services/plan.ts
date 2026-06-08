@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron'
+import { broadcast } from '../windows'
 import {
   dbCreatePlanItem,
   dbUpdatePlanItemStatus,
@@ -62,22 +63,23 @@ export async function handlePlanMessage(
         } else {
           segments[segments.length - 1] += chunk
         }
-        widgetWin?.webContents.send('plan:item-message', { itemId, chunk, done: false })
+        broadcast('plan:item-message', { itemId, chunk, done: false })
       },
       (full) => {
         fullResponse = full
       },
       undefined,
-      itemId
+      itemId,
+      'plan_chat'
     )
     const toSave = segments.filter((s) => s.trim())
     for (const seg of toSave.length > 0 ? toSave : [fullResponse]) {
       if (seg.trim()) dbAddPlanMessage(itemId, 'assistant', seg)
     }
-    widgetWin?.webContents.send('plan:item-message', { itemId, chunk: '', done: true })
+    broadcast('plan:item-message', { itemId, chunk: '', done: true })
     widgetWin?.webContents.send('badge:updated', dbGetBadgeCount())
   } catch (err: any) {
-    widgetWin?.webContents.send('plan:item-message', {
+    broadcast('plan:item-message', {
       itemId,
       chunk: '',
       done: true,

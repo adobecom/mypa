@@ -30,7 +30,12 @@ import type {
   Tier,
   Memory,
   MemoryInput,
-  NodeSignalLink
+  NodeSignalLink,
+  UsageEvent,
+  UsageSource,
+  UsageSummary,
+  UsageDailyPoint,
+  UsageBreakdownRow
 } from '@shared/types'
 import { createHash } from 'crypto'
 
@@ -628,12 +633,17 @@ export function dbUpdateIntentStatus(id: string, status: IntentStatus, error?: s
   }
 }
 
+export function dbSetIntentChallengeReason(id: string, reason: string): void {
+  getDb().prepare('UPDATE intents SET challenge_reason = ? WHERE id = ?').run(reason, id)
+}
+
 function deserializeIntent(row: any): Intent {
   return {
     ...row,
     required_approval: row.required_approval === 1,
     payload: safeJsonParse<Record<string, unknown>>(row.payload, {}),
-    context_packet: safeJsonParse<Record<string, unknown>>(row.context_packet, {})
+    context_packet: safeJsonParse<Record<string, unknown>>(row.context_packet, {}),
+    challenge_reason: row.challenge_reason ?? null
   }
 }
 
@@ -870,6 +880,13 @@ export function dbGetActiveMemories(limit = 10): Memory[] {
   return rows.map(deserializeMemory)
 }
 
+export function dbGetAllMemories(): Memory[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM memories ORDER BY created_at ASC')
+    .all() as any[]
+  return rows.map(deserializeMemory)
+}
+
 export function dbGetMemoriesForNode(nodeId: string): Memory[] {
   const rows = getDb()
     .prepare("SELECT * FROM memories WHERE node_id = ? AND status = 'active'")
@@ -903,4 +920,167 @@ export function computeFingerprint(surface: string, externalId: string, changeFi
     .update(`${surface}|${externalId}|${JSON.stringify(changeFields)}`)
     .digest('hex')
     .slice(0, 16)
+}
+
+// ─── Usage tracking ───────────────────────────────────────────────────────────
+
+export function dbInsertUsage(
+  e: Omit<UsageEvent, 'id' | 'created_at'>
+): void {
+  const id = uuidv4()
+  const created_at = new Date().toISOString()
+  getDb()
+    .prepare(
+      `INSERT INTO usage_events
+        (id, source, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`
+    )
+    .run(
+      id,
+      e.source,
+      e.model,
+      e.input_tokens,
+      e.output_tokens,
+      e.cache_creation_tokens,
+      e.cache_read_tokens,
+      e.cost_usd,
+      created_at
+    )
+}
+
+function usageSince(range: string): string | undefined {
+  if (range === 'all') return undefined
+  const days = range === '7d' ? 7 : range === '30d' ? 30 : 90
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+}
+
+export function dbGetUsageSummary(range: string): UsageSummary {
+  const since = usageSince(range)
+  const sql = since
+    ? `SELECT
+         COALESCE(SUM(input_tokens), 0)          AS total_input,
+         COALESCE(SUM(output_tokens), 0)         AS total_output,
+         COALESCE(SUM(cache_creation_tokens), 0) AS total_cache_creation,
+         COALESCE(SUM(cache_read_tokens), 0)     AS total_cache_read,
+         COALESCE(SUM(cost_usd), 0)              AS total_cost,
+         COUNT(*)                                AS call_count
+       FROM usage_events WHERE created_at >= ?`
+    : `SELECT
+         COALESCE(SUM(input_tokens), 0)          AS total_input,
+         COALESCE(SUM(output_tokens), 0)         AS total_output,
+         COALESCE(SUM(cache_creation_tokens), 0) AS total_cache_creation,
+         COALESCE(SUM(cache_read_tokens), 0)     AS total_cache_read,
+         COALESCE(SUM(cost_usd), 0)              AS total_cost,
+         COUNT(*)                                AS call_count
+       FROM usage_events`
+  const row = (since
+    ? getDb().prepare(sql).get(since)
+    : getDb().prepare(sql).get()) as any
+  return {
+    total_input: row.total_input ?? 0,
+    total_output: row.total_output ?? 0,
+    total_cache_creation: row.total_cache_creation ?? 0,
+    total_cache_read: row.total_cache_read ?? 0,
+    total_cost: row.total_cost ?? 0,
+    call_count: row.call_count ?? 0
+  }
+}
+
+export function dbGetUsageByDay(range: string): UsageDailyPoint[] {
+  const since = usageSince(range)
+  const sql = since
+    ? `SELECT
+         date(created_at) AS day,
+         SUM(input_tokens)  AS input_tokens,
+         SUM(output_tokens) AS output_tokens,
+         SUM(cost_usd)      AS cost,
+         COUNT(*)           AS calls
+       FROM usage_events WHERE created_at >= ?
+       GROUP BY day ORDER BY day ASC`
+    : `SELECT
+         date(created_at) AS day,
+         SUM(input_tokens)  AS input_tokens,
+         SUM(output_tokens) AS output_tokens,
+         SUM(cost_usd)      AS cost,
+         COUNT(*)           AS calls
+       FROM usage_events
+       GROUP BY day ORDER BY day ASC`
+  const rows = (since
+    ? getDb().prepare(sql).all(since)
+    : getDb().prepare(sql).all()) as any[]
+  return rows.map((r) => ({
+    day: r.day,
+    input_tokens: r.input_tokens ?? 0,
+    output_tokens: r.output_tokens ?? 0,
+    cost: r.cost ?? 0,
+    calls: r.calls ?? 0
+  }))
+}
+
+export function dbGetUsageBySource(range: string): UsageBreakdownRow[] {
+  const since = usageSince(range)
+  const sql = since
+    ? `SELECT
+         source AS key,
+         SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) AS tokens,
+         SUM(cost_usd) AS cost,
+         COUNT(*) AS calls
+       FROM usage_events WHERE created_at >= ?
+       GROUP BY source ORDER BY cost DESC`
+    : `SELECT
+         source AS key,
+         SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) AS tokens,
+         SUM(cost_usd) AS cost,
+         COUNT(*) AS calls
+       FROM usage_events
+       GROUP BY source ORDER BY cost DESC`
+  const rows = (since
+    ? getDb().prepare(sql).all(since)
+    : getDb().prepare(sql).all()) as any[]
+  return rows.map((r) => ({ key: r.key, tokens: r.tokens ?? 0, cost: r.cost ?? 0, calls: r.calls ?? 0 }))
+}
+
+export function dbGetUsageByModel(range: string): UsageBreakdownRow[] {
+  const since = usageSince(range)
+  const sql = since
+    ? `SELECT
+         model AS key,
+         SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) AS tokens,
+         SUM(cost_usd) AS cost,
+         COUNT(*) AS calls
+       FROM usage_events WHERE created_at >= ?
+       GROUP BY model ORDER BY cost DESC`
+    : `SELECT
+         model AS key,
+         SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) AS tokens,
+         SUM(cost_usd) AS cost,
+         COUNT(*) AS calls
+       FROM usage_events
+       GROUP BY model ORDER BY cost DESC`
+  const rows = (since
+    ? getDb().prepare(sql).all(since)
+    : getDb().prepare(sql).all()) as any[]
+  return rows.map((r) => ({ key: r.key, tokens: r.tokens ?? 0, cost: r.cost ?? 0, calls: r.calls ?? 0 }))
+}
+
+export function dbGetRecentUsage(limit = 30, range = 'all'): UsageEvent[] {
+  const since = usageSince(range)
+  const rows = since
+    ? (getDb()
+        .prepare('SELECT * FROM usage_events WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?')
+        .all(since, limit) as any[])
+    : (getDb()
+        .prepare('SELECT * FROM usage_events ORDER BY created_at DESC LIMIT ?')
+        .all(limit) as any[])
+  return rows.map((r) => ({
+    id: r.id,
+    source: r.source as UsageSource,
+    model: r.model,
+    input_tokens: r.input_tokens,
+    output_tokens: r.output_tokens,
+    cache_creation_tokens: r.cache_creation_tokens,
+    cache_read_tokens: r.cache_read_tokens,
+    cost_usd: r.cost_usd,
+    created_at: r.created_at
+  }))
 }

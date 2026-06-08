@@ -70,11 +70,38 @@ Free-text input at the bottom of the widget. Calls `window.electron.plan.createD
 ### Top-level structure
 
 ```
-main-window/App.tsx
-  ├── Sidebar nav (4 items: Routines, Run Logs, Memory, Settings)
-  ├── OnboardingWizard    — shown if onboarding_complete = false
-  └── <page content>
+main-window/App.tsx (exports App → ToastProvider + AppShell)
+  ├── ToastProvider         — global toast context + portal-rendered ToastContainer
+  ├── AppShell
+  │     ├── Sidebar nav (5 items: Routines, Run Logs, Memory, Usage, Settings)
+  │     ├── OnboardingWizard    — shown if onboarding_complete = false
+  │     └── <page content>
+  └── ToastContainer        — fixed top-right portal; renders Toast items
 ```
+
+### Toast system
+
+`src/renderer/src/main-window/toast/ToastProvider.tsx` provides a global, portal-rendered toast stack for the main window.
+
+**API** (via `useToast()` hook):
+
+```ts
+const toast = useToast()
+const id = toast.show({ variant, title, message?, action?, duration? })
+toast.update(id, patch)          // e.g. loading → success/error
+toast.dismiss(id)
+toast.success(title, opts?)      // auto-dismiss 4 s
+toast.error(title, opts?)        // auto-dismiss 8 s
+toast.info(title, opts?)         // auto-dismiss 4 s
+toast.loading(title, opts?)      // sticky (duration: 0); update when done
+```
+
+Variants: `success` (green), `error` (red), `info` (accent purple), `loading` (yellow spinner).  
+Toasts support an optional `action: { label, onClick }` button (e.g. "View logs" that navigates to Run Logs).
+
+**Background-event bridge** (`useRunToasts` in `App.tsx`): subscribes to `routine:run-started` (→ loading toast), `routine:run-completed` (→ update to success/error; "View logs" action button), and `ambient:action-executed` (→ info toast). This is why clicking **Run now** in RoutinesManager now shows visible feedback — the run events are broadcast to both windows (see IPC docs).
+
+Styles in `src/renderer/src/main-window/index.css` (`.toast*` block), using existing design tokens. Timer cleanup on unmount prevents leaks.
 
 ### Pages
 
@@ -92,7 +119,17 @@ Navigating here with a `routineId` (via `navigate:edit-routine` push event) open
 
 | Component | Description |
 |---|---|
-| `RunLogs` | Paginated table of all routine runs across all routines; click a row to expand the digest and thread |
+| `RunLogs` | Paginated table of all routine runs; click a row to expand it; expanded view has "Raw output" / "Conversation" tab toggle |
+
+Navigating here via `navigate:run-chat` (sent by `routines.openRunInMainWindow`) auto-expands the target run in conversation view and scrolls it into view.
+
+#### Plan item detail
+
+| Component | Description |
+|---|---|
+| `PlanItemDetail` | Full-height chat view for a single plan item; no height cap on the conversation |
+
+Reached via `navigate:plan-item` push event (sent by `plan.openInMainWindow`). Renders a "Back to plan" button that returns to the Routines page. The sidebar shows a transient "Plan item" nav entry while this page is active.
 
 #### Memory (Knowledge Graph)
 
@@ -106,8 +143,25 @@ Interactions:
 - **Delete node** → calls `window.electron.memory.deleteNode(id)`; node and cascade edges removed.
 - **Delete edge** → calls `window.electron.memory.deleteEdge(id)`.
 - **Edit/delete memory** → calls `window.electron.memory.updateMemory` / `deleteMemory`.
+- **Export** → header Export button calls `window.electron.memory.exportMarkdown()`; shows a system save-file dialog; writes a Markdown export package to the chosen path.
 
 Data: `window.electron.memory.getGraph()` on mount; `getNode(id)` on selection.
+
+#### Usage
+
+| Component | Description |
+|---|---|
+| `UsageDashboard` | Token usage and estimated cost dashboard; all data recorded from mypa install forward |
+
+Layout:
+- **Range selector** — segmented control (7d / 30d / 90d / All); re-fetches all five IPC calls on change.
+- **Stat grid** — 4 `.stat-card`s: Est. cost, Total tokens, Total calls, Avg cost/call.
+- **Bar chart** — SVG bar chart of daily usage (toggle cost/tokens); custom-drawn with existing CSS tokens; no chart library dependency.
+- **By feature** — proportion-bar breakdown rows grouped by `UsageSource`.
+- **By model** — same pattern grouped by model id.
+- **Recent calls** — last 30 individual `UsageEvent`s with source, model, token counts, cost, and relative time.
+
+Data: `window.electron.usage.*` — all five calls made in parallel on mount and on range change.
 
 #### Settings
 
@@ -118,14 +172,17 @@ Data: `window.electron.memory.getGraph()` on mount; `getNode(id)` on selection.
 | — OAuth tab | Connect GitHub (device flow), Notion (PKCE), Linear (PKCE); show connection status |
 | — Claude tab | Model selector; displays current model |
 | — Preferences tab | Widget always-on-top, notification sound, launch on login; persona text field |
+| — About You card | Owner identity: name + per-surface handles; handle fields are filtered to enabled MCP surfaces only (no fields shown for surfaces the user hasn't configured); when a new surface MCP is added, `setup.resolveOwnerHandles()` fires automatically and pre-fills the handle if found, with ✓ / ⚠ markers |
 
 #### Onboarding wizard
 
-`OnboardingWizard` walks first-time users through:
-1. Installing / verifying the Claude CLI.
-2. Connecting at least one MCP server.
-3. (Optionally) connecting OAuth providers.
-4. Setting preferences and persona.
+`OnboardingWizard` walks first-time users through (6 steps):
+1. Welcome.
+2. Installing / verifying the Claude CLI.
+3. Choosing a model.
+4. Connecting MCP servers / OAuth providers.
+5. **About you** — name + per-surface handles with auto-fill button; saves to `AppConfig.owner`.
+6. All set — summary.
 
 Completes by setting `onboarding_complete: true` in config.
 
@@ -142,4 +199,12 @@ Located in `src/renderer/src/` (shared between widget and main window):
 
 ## Changelog
 
+- 2026-06-08 — added all chat CSS classes (`.chat-thread`, `.chat-message`, `.chat-message__bubble`, `.chat-input-row`, `.chat-input`, `.chat-send-btn`, `.chat-stop-btn`, `.typing-dot`, `.md-text` and variants) to `main-window/index.css`; `.chat-thread` max-height set to 480px (vs 240px in widget) and `.chat-message` font-size to 13px to match main-window type scale; fixes unstyled chat in `RunDetail` conversation tab and `PlanItemDetail`
+- 2026-06-08 — `RunLogs` extended: expanded runs now have "Raw output" / "Conversation" tab toggle; `navigate:run-chat` auto-expands target run in conversation view; added `PlanItemDetail` component and `plan` page in main window; challenge reason now persisted to `Intent.challenge_reason` and rendered in IntentCard Recent view; inline challenge confirmation added to IntentCard; "Open full chat" button added to `PlanItemCard` and `RoutineCard` in widget
+- 2026-06-07 — added `UsageDashboard` page (`components/UsageDashboard.tsx`); new `'usage'` nav item in `App.tsx`; added `.segmented`/`.segmented__btn`, `.stat-card`, `.breakdown-row`, `.usage-call-row`, `.usage-chart` CSS classes to `index.css`; no new dependencies
+- 2026-06-07 — added unified toast notification system (`toast/ToastProvider.tsx`; `useToast()` hook); `App.tsx` now wraps `AppShell` in `<ToastProvider>` and runs `useRunToasts` bridge for routine run and ambient auto-exec events; `RoutinesManager`, `Settings`, `MemoryGraph` now toast on mutating action success/error
+- 2026-06-07 — added "About You" card in Settings and step 5 in OnboardingWizard; both surface owner-identity fields (name + handles) with auto-fill from MCP
+- 2026-06-07 — About You handle fields now filter to enabled MCP surfaces only; handle auto-resolved silently when a surface MCP is added (fires `setup.resolveOwnerHandles()` and merges into state; auto-fill button hidden when no identity surfaces are configured)
+- 2026-06-07 — auto-fill result feedback moved from inline text to toast in both Settings and OnboardingWizard; handle fields now accept comma-separated values (e.g. "alice, alice-work") — `getOwnerHandles()` and `buildOwnerClause()` in `config.ts` split on commas at read time
+- 2026-06-07 — `MemoryGraph` header: added Export button (calls `memory.exportMarkdown`); shows saving/saved/cancelled state with a 2.5 s reset
 - 2026-06-06 — initial documentation

@@ -1,8 +1,9 @@
 import { execSync, spawn } from 'child_process'
 import { existsSync } from 'fs'
 import cron from 'node-cron'
-import { readConfig } from './config'
-import type { PlanDraft, PlanItemTiming, ChatMessage, McpServerStatus, RoutineAction, RoutineSetupDraft } from '@shared/types'
+import { readConfig, buildOwnerClause } from './config'
+import { recordUsage } from './usage'
+import type { PlanDraft, PlanItemTiming, ChatMessage, McpServerStatus, RoutineAction, RoutineSetupDraft, UsageSource } from '@shared/types'
 
 
 function findClaude(): string {
@@ -29,12 +30,17 @@ function modelArgs(): string[] {
   return model ? ['--model', model] : []
 }
 
-export async function runClaude(systemPrompt: string, userPrompt: string): Promise<string> {
+export async function runClaude(
+  systemPrompt: string,
+  userPrompt: string,
+  source: UsageSource = 'other'
+): Promise<string> {
   const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
+  const model = readConfig().claude.model ?? ''
   return new Promise((resolve, reject) => {
     const proc = spawn(
       getClaude(),
-      ['-p', fullPrompt, '--output-format', 'text', ...modelArgs()],
+      ['-p', fullPrompt, '--output-format', 'json', ...modelArgs()],
       { stdio: ['ignore', 'pipe', 'pipe'] }
     )
     let stdout = ''
@@ -44,20 +50,46 @@ export async function runClaude(systemPrompt: string, userPrompt: string): Promi
     proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
     proc.on('close', (code) => {
       clearTimeout(timer)
-      if (code !== 0) reject(new Error(`Command failed: ${stderr || stdout}`))
-      else resolve(stdout.trim())
+      if (code !== 0) {
+        reject(new Error(`Command failed: ${stderr || stdout}`))
+        return
+      }
+      try {
+        const parsed = JSON.parse(stdout.trim())
+        // Record usage regardless of error — tokens are consumed either way
+        recordUsage(source, model, parsed)
+        if (parsed.is_error) {
+          reject(new Error(String(parsed.result ?? parsed.error ?? 'Claude returned an error')))
+          return
+        }
+        // parsed.result should always be a string in text-output mode; guard defensively
+        if (typeof parsed.result !== 'string') {
+          reject(new Error('Claude returned unexpected result format'))
+          return
+        }
+        resolve(parsed.result)
+      } catch {
+        // If the output isn't JSON (unexpected CLI version/mode), fall back to raw stdout
+        resolve(stdout.trim())
+      }
     })
     proc.on('error', (err) => { clearTimeout(timer); reject(err) })
   })
 }
 
-function parseStreamEvent(line: string, full: string, onChunk: (chunk: string) => void): string {
+function parseStreamEvent(
+  line: string,
+  full: string,
+  onChunk: (chunk: string) => void,
+  onResult?: (event: any) => void
+): string {
   if (!line.trim()) return full
   try {
     const event = JSON.parse(line)
     if (event.type === 'assistant') {
+      // Only extract plain text blocks — skip tool_use and any other structured blocks
       const textBlocks = (event.message?.content ?? []).filter(
-        (b: any) => b.type === 'text' && b.text
+        (b: any) => b.type === 'text' && typeof b.text === 'string' && b.text
       )
       if (textBlocks.length > 0 && full) {
         onChunk('\x00SPLIT\x00')
@@ -66,11 +98,20 @@ function parseStreamEvent(line: string, full: string, onChunk: (chunk: string) =
         full += block.text
         onChunk(block.text)
       }
-    } else if (event.type === 'result' && !event.is_error && typeof event.result === 'string' && !full) {
-      // Fallback: use the result event's text if no chunks were captured from assistant events
-      full = event.result
-      onChunk(event.result)
+    } else if (event.type === 'result') {
+      // Always forward the full result event to the onResult callback for usage capture
+      onResult?.(event)
+      if (!event.is_error && !full) {
+        // Fallback: only use the result event when no assistant text was captured and
+        // the result looks like a plain prose string (not a JSON blob or structured data).
+        const resultText = typeof event.result === 'string' ? event.result.trim() : ''
+        if (resultText && !resultText.startsWith('{') && !resultText.startsWith('[')) {
+          full = resultText
+          onChunk(resultText)
+        }
+      }
     }
+    // Explicitly ignore: 'system', 'user' (tool_result), 'tool_use', and all other event types
   } catch {
     // ignore parse errors on partial lines
   }
@@ -81,10 +122,12 @@ async function runClaudeStream(
   systemPrompt: string,
   messages: { role: string; content: string }[],
   onChunk: (chunk: string) => void,
-  streamId?: string
+  streamId?: string,
+  source: UsageSource = 'chat'
 ): Promise<string> {
   const history = messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')
   const fullPrompt = `${systemPrompt}\n\n${history}`
+  const model = readConfig().claude.model ?? ''
 
   return new Promise((resolve, reject) => {
     const proc = spawn(getClaude(), [
@@ -97,6 +140,7 @@ async function runClaudeStream(
     let full = ''
     let buf = ''
     let stderr = ''
+    let cliResult: any = null
 
     const entry = { proc, killed: false }
     if (streamId) activeStreams.set(streamId, entry)
@@ -108,19 +152,21 @@ async function runClaudeStream(
       const lines = buf.split('\n')
       buf = lines.pop() ?? ''
       for (const line of lines) {
-        full = parseStreamEvent(line, full, onChunk)
+        full = parseStreamEvent(line, full, onChunk, (ev) => { cliResult = ev })
       }
     })
 
     proc.on('close', (code) => {
       if (buf.trim()) {
-        full = parseStreamEvent(buf, full, onChunk)
+        full = parseStreamEvent(buf, full, onChunk, (ev) => { cliResult = ev })
       }
       if (streamId) activeStreams.delete(streamId)
       if (entry.killed || (code !== 0 && !full)) {
         reject(new Error(entry.killed ? 'Cancelled' : (stderr.trim() || `Claude process exited with code ${code}`)))
         return
       }
+      // Record usage from the result event (contains usage + total_cost_usd)
+      if (cliResult) recordUsage(source, model, cliResult)
       resolve(full)
     })
     proc.on('error', (err) => {
@@ -147,7 +193,7 @@ export async function generatePlanDraft(intent: string): Promise<PlanDraft> {
 
   const persona = readConfig().persona?.trim() || 'a personal assistant'
   const text = await runClaude(
-    `You are ${persona} helping organize work.
+    `You are ${persona} helping organize work.${buildOwnerClause()}
 The current time is ${now.toLocaleTimeString()} (hour: ${hour}).
 Respond ONLY with valid JSON matching the schema provided. No markdown, no explanation.`,
     `Parse this intent into a structured plan item. Return JSON only.
@@ -164,7 +210,8 @@ Schema:
 
 Timing guide: morning=before noon, afternoon=noon-5pm, evening=after 5pm.
 If the intent says "before standup", "this morning", "now", "ASAP" → "now" or "morning".
-If no time hint → "anytime".`
+If no time hint → "anytime".`,
+    'plan_draft'
   )
 
   const jsonMatch = text.match(/\{[\s\S]*\}/)
@@ -193,11 +240,19 @@ export async function generateRoutineDigest(
   promptTemplate: string,
   rawOutput: string
 ): Promise<RoutineDigest> {
-  const persona = readConfig().persona?.trim() || 'a personal assistant'
-  const text = await runClaude(
-    `You are ${persona} digesting data feeds.
+  const defaultDigest: RoutineDigest = {
+    summary: `${routineName} completed`,
+    items: [],
+    proposed_actions: []
+  }
+
+  let text: string
+  try {
+    const persona = readConfig().persona?.trim() || 'a personal assistant'
+    text = await runClaude(
+      `You are ${persona} digesting data feeds.${buildOwnerClause()}
 Respond ONLY with valid JSON matching the schema provided.`,
-    `Routine: ${routineName}
+      `Routine: ${routineName}
 
 Instructions: ${promptTemplate}
 
@@ -209,19 +264,27 @@ Return JSON:
   "summary": "one sentence headline (max 100 chars)",
   "items": ["item needing attention", ...],
   "proposed_actions": ["I can do X", "Want me to Y?", ...]
-}`
-  )
-
-  const jsonMatch = text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) {
-    return { summary: 'Routine completed', items: [], proposed_actions: [] }
+}`,
+      'routine_digest'
+    )
+  } catch {
+    return defaultDigest
   }
 
-  const parsed = JSON.parse(jsonMatch[0])
-  return {
-    summary: parsed.summary ?? 'Routine completed',
-    items: parsed.items ?? [],
-    proposed_actions: parsed.proposed_actions ?? []
+  // Strip markdown fences if Claude wrapped the JSON
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '')
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) return defaultDigest
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0])
+    return {
+      summary: typeof parsed.summary === 'string' ? parsed.summary : defaultDigest.summary,
+      items: Array.isArray(parsed.items) ? parsed.items : [],
+      proposed_actions: Array.isArray(parsed.proposed_actions) ? parsed.proposed_actions : []
+    }
+  } catch {
+    return defaultDigest
   }
 }
 
@@ -271,7 +334,8 @@ Cron rules:
 - Multiple times: "0 9,17 * * 1-5" = 9 AM and 5 PM weekdays
 - All days: use "*" for dow; weekdays only: use "1-5"
 - Hours are 0-23 (9=9AM, 17=5PM). "twice daily" or "9 and 5" → "0 9,17 * * *"
-- Only server/tool names verbatim from above. params must be a JSON object, never null or an array.`
+- Only server/tool names verbatim from above. params must be a JSON object, never null or an array.`,
+    'routine_setup'
   )
 
   const jsonMatch = text.match(/\{[\s\S]*\}/)
@@ -322,7 +386,8 @@ export async function streamChat(
   onChunk: (chunk: string) => void,
   onDone: (fullText: string) => void,
   rawContext?: string,
-  streamId?: string
+  streamId?: string,
+  source: UsageSource = 'chat'
 ): Promise<void> {
   const messages = [
     ...history.map((m) => ({ role: m.role, content: m.content })),
@@ -330,11 +395,12 @@ export async function streamChat(
   ]
 
   const persona = readConfig().persona?.trim() || 'a personal assistant'
+  const ownerClause = buildOwnerClause()
   const systemPrompt = rawContext
-    ? `You are mypa, ${persona}. Be concise and action-oriented.\n\nOriginal data collected by this routine:\n${rawContext}`
-    : `You are mypa, ${persona}. Be concise and action-oriented.`
+    ? `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.\n\nOriginal data collected by this routine:\n${rawContext}`
+    : `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.`
 
-  const full = await runClaudeStream(systemPrompt, messages, onChunk, streamId)
+  const full = await runClaudeStream(systemPrompt, messages, onChunk, streamId, source)
 
   onDone(full)
 }
