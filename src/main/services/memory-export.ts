@@ -148,9 +148,9 @@ The human-readable sections above it are for your understanding.
   sections.push(
     '## JSON Data Appendix\n\n' +
     '*Lossless raw export for programmatic re-import.*\n\n' +
-    '```json\n' +
+    '~~~json\n' +
     JSON.stringify(appendix, null, 2) +
-    '\n```\n'
+    '\n~~~\n'
   )
 
   return sections.join('\n---\n\n')

@@ -611,6 +611,8 @@ export default function MemoryGraph(): React.ReactElement {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fgRef = useRef<ForceGraphMethods<any, any>>(undefined)
   const hasZoomed = useRef(false)
+  const exportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (exportTimerRef.current) clearTimeout(exportTimerRef.current) }, [])
 
   const api = window.electron
 
@@ -833,6 +835,7 @@ export default function MemoryGraph(): React.ReactElement {
           disabled={exporting === 'saving'}
           title="Export memory as Markdown"
           onClick={async () => {
+            if (exportTimerRef.current) clearTimeout(exportTimerRef.current)
             setExporting('saving')
             try {
               const result = await api.memory.exportMarkdown()
@@ -840,7 +843,7 @@ export default function MemoryGraph(): React.ReactElement {
             } catch {
               setExporting('cancelled')
             }
-            setTimeout(() => setExporting('idle'), 2500)
+            exportTimerRef.current = setTimeout(() => setExporting('idle'), 2500)
           }}
         >
           <Download size={11} />
