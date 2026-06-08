@@ -52,6 +52,32 @@ function hasString(x: unknown, key: string): x is Record<string, unknown> & { [k
   return isRecord(x) && typeof (x as Record<string, unknown>)[key] === 'string'
 }
 
+function renderPayloadVal(v: unknown): React.ReactNode {
+  if (Array.isArray(v)) {
+    if (v.length === 0) return <span className="intent-detail__kv-val">—</span>
+    const allPrimitive = v.every((item) => typeof item !== 'object' || item === null)
+    if (allPrimitive) {
+      return <span className="intent-detail__kv-val">{v.map(String).join(', ')}</span>
+    }
+    return (
+      <ul className="intent-detail__kv-list">
+        {v.map((item, i) => {
+          const label =
+            hasString(item, 'title') ? item.title
+            : hasString(item, 'name') ? item.name
+            : isRecord(item) && typeof item.number !== 'undefined' ? `#${item.number}`
+            : `#${i + 1}`
+          return <li key={i}>{label}</li>
+        })}
+      </ul>
+    )
+  }
+  if (isRecord(v)) {
+    return <pre className="intent-detail__kv-val intent-detail__kv-pre">{JSON.stringify(v, null, 2)}</pre>
+  }
+  return <span className="intent-detail__kv-val">{String(v)}</span>
+}
+
 export default function IntentCard({ intent, onIntentChange }: Props): React.ReactElement {
   const [expanded, setExpanded] = useState(false)
   const [challenging, setChallenging] = useState(false)
@@ -207,7 +233,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
                   {payloadExtra.map(([k, v]) => (
                     <div key={k} className="intent-detail__kv-row">
                       <span className="intent-detail__kv-key">{k}</span>
-                      <span className="intent-detail__kv-val">{String(v)}</span>
+                      {renderPayloadVal(v)}
                     </div>
                   ))}
                 </div>
