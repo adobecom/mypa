@@ -130,18 +130,21 @@ Knowledge graph — nodes, edges, memories.
 
 Subscribed with `window.electron.on(channel, listener)`. Returns an unsubscribe function.
 
-| Channel | Payload | When fired |
-|---|---|---|
-| `routine:run-started` | `{ runId, routineName }` | A routine begins executing |
-| `routine:run-completed` | `RoutineRun` | A routine run finishes (success or error) |
-| `routine:run-message` | `{ runId, chunk: string }` | Streaming chat chunk on a run thread |
-| `plan:item-message` | `{ itemId, chunk: string }` | Streaming chat chunk on a plan-item thread |
-| `badge:updated` | `number` | Badge count changed |
-| `navigate:edit-routine` | `{ routineId: string }` | Main window should navigate to the routine editor |
-| `ambient:intent-created` | `Intent` | A new intent was generated |
-| `ambient:intent-updated` | `Intent` | An existing intent changed status |
-| `ambient:tray-state` | `TrayState` | Tray icon state changed |
-| `ambient:digest-ready` | `AmbientDigest` | A new digest was generated |
+| Channel | Payload | When fired | Windows |
+|---|---|---|---|
+| `routine:run-started` | `RoutineRun` | A routine begins executing | **widget + main** |
+| `routine:run-completed` | `RoutineRun` | A routine run finishes (success or error — inspect `run.status`) | **widget + main** |
+| `routine:run-message` | `{ runId, chunk: string, done: boolean, error?: string }` | Streaming chat chunk on a run thread | widget only |
+| `plan:item-message` | `{ itemId, chunk: string, done: boolean, error?: string }` | Streaming chat chunk on a plan-item thread | widget only |
+| `badge:updated` | `number` | Badge count changed | widget only |
+| `navigate:edit-routine` | `{ routineId: string }` | Main window should navigate to the routine editor | main only |
+| `ambient:intent-created` | `Intent` | A new intent was generated | widget only |
+| `ambient:intent-updated` | `Intent` | An existing intent changed status | widget only |
+| `ambient:tray-state` | `TrayState` | Tray icon state changed | widget only |
+| `ambient:digest-ready` | `AmbientDigest` | A new digest was generated | widget only |
+| `ambient:action-executed` | `Intent` | A tier-0 intent was auto-executed (success only) | **widget + main** |
+
+**`routine:run-started` and `routine:run-completed` are broadcast to both windows** via `broadcast()` in `src/main/windows.ts`. The main window uses them to drive in-app toast notifications. The widget uses them to update its inline run card. All other events remain window-specific.
 
 ---
 
@@ -165,6 +168,7 @@ type MemoryType      = 'fact' | 'pattern' | 'preference' | 'status'
 
 ## Changelog
 
+- 2026-06-07 — added `ambient:action-executed` push channel (broadcast to both windows on tier-0 auto-execution); `routine:run-started` and `routine:run-completed` are now broadcast to both windows via `broadcast()` in `src/main/windows.ts` (previously widget-only)
 - 2026-06-07 — added `setup.resolveOwnerHandles` channel; added `AppConfig.owner` (`OwnerIdentity`) type; added `ResolvedOwnerHandles` / `ResolvedHandle` types to `@shared/types`
 - 2026-06-07 — added `memory.exportMarkdown` channel; IPC handler drives `dialog.showSaveDialog` + `fs.writeFileSync`
 - 2026-06-06 — initial documentation; reflects `IpcApi` as of commit d8a8774

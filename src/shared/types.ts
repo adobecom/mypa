@@ -498,7 +498,8 @@ export interface IpcApi {
       | 'ambient:intent-created'
       | 'ambient:intent-updated'
       | 'ambient:tray-state'
-      | 'ambient:digest-ready',
+      | 'ambient:digest-ready'
+      | 'ambient:action-executed',
     listener: (...args: unknown[]) => void
   ): () => void
 }

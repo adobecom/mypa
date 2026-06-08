@@ -70,11 +70,38 @@ Free-text input at the bottom of the widget. Calls `window.electron.plan.createD
 ### Top-level structure
 
 ```
-main-window/App.tsx
-  ├── Sidebar nav (4 items: Routines, Run Logs, Memory, Settings)
-  ├── OnboardingWizard    — shown if onboarding_complete = false
-  └── <page content>
+main-window/App.tsx (exports App → ToastProvider + AppShell)
+  ├── ToastProvider         — global toast context + portal-rendered ToastContainer
+  ├── AppShell
+  │     ├── Sidebar nav (4 items: Routines, Run Logs, Memory, Settings)
+  │     ├── OnboardingWizard    — shown if onboarding_complete = false
+  │     └── <page content>
+  └── ToastContainer        — fixed top-right portal; renders Toast items
 ```
+
+### Toast system
+
+`src/renderer/src/main-window/toast/ToastProvider.tsx` provides a global, portal-rendered toast stack for the main window.
+
+**API** (via `useToast()` hook):
+
+```ts
+const toast = useToast()
+const id = toast.show({ variant, title, message?, action?, duration? })
+toast.update(id, patch)          // e.g. loading → success/error
+toast.dismiss(id)
+toast.success(title, opts?)      // auto-dismiss 4 s
+toast.error(title, opts?)        // auto-dismiss 8 s
+toast.info(title, opts?)         // auto-dismiss 4 s
+toast.loading(title, opts?)      // sticky (duration: 0); update when done
+```
+
+Variants: `success` (green), `error` (red), `info` (accent purple), `loading` (yellow spinner).  
+Toasts support an optional `action: { label, onClick }` button (e.g. "View logs" that navigates to Run Logs).
+
+**Background-event bridge** (`useRunToasts` in `App.tsx`): subscribes to `routine:run-started` (→ loading toast), `routine:run-completed` (→ update to success/error; "View logs" action button), and `ambient:action-executed` (→ info toast). This is why clicking **Run now** in RoutinesManager now shows visible feedback — the run events are broadcast to both windows (see IPC docs).
+
+Styles in `src/renderer/src/main-window/index.css` (`.toast*` block), using existing design tokens. Timer cleanup on unmount prevents leaks.
 
 ### Pages
 
@@ -146,6 +173,7 @@ Located in `src/renderer/src/` (shared between widget and main window):
 
 ## Changelog
 
+- 2026-06-07 — added unified toast notification system (`toast/ToastProvider.tsx`; `useToast()` hook); `App.tsx` now wraps `AppShell` in `<ToastProvider>` and runs `useRunToasts` bridge for routine run and ambient auto-exec events; `RoutinesManager`, `Settings`, `MemoryGraph` now toast on mutating action success/error
 - 2026-06-07 — added "About You" card in Settings and step 5 in OnboardingWizard; both surface owner-identity fields (name + handles) with auto-fill from MCP
 - 2026-06-07 — `MemoryGraph` header: added Export button (calls `memory.exportMarkdown`); shows saving/saved/cancelled state with a 2.5 s reset
 - 2026-06-06 — initial documentation

@@ -3,6 +3,7 @@ import ForceGraph2D from 'react-force-graph-2d'
 import type { ForceGraphMethods } from 'react-force-graph-2d'
 import { X, Trash2, Archive, RefreshCw, ChevronRight, Maximize2, Download } from 'lucide-react'
 import type { GraphNode, GraphEdge, Memory, NodeSignalLink, NodeType, EdgeRel } from '@shared/types'
+import { useToast } from '../toast/ToastProvider'
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
 
@@ -615,6 +616,7 @@ export default function MemoryGraph(): React.ReactElement {
   useEffect(() => () => { if (exportTimerRef.current) clearTimeout(exportTimerRef.current) }, [])
 
   const api = window.electron
+  const toast = useToast()
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -758,33 +760,48 @@ export default function MemoryGraph(): React.ReactElement {
 
   // Delete / archive handlers
   async function handleDeleteNode(id: string) {
-    await api.memory.deleteNode(id)
-    let removedEdges = 0
-    setGraph((prev) => {
-      const links = prev.links.filter(
-        (l) => linkNodeId(l.source) !== id && linkNodeId(l.target) !== id
-      )
-      removedEdges = prev.links.length - links.length
-      return { nodes: prev.nodes.filter((n) => n.id !== id), links }
-    })
-    setRawNodes((prev) => prev.filter((n) => n.id !== id))
-    setStats((prev) => ({ nodes: prev.nodes - 1, edges: prev.edges - removedEdges }))
-    setSelectedId(null)
-    setDetail(null)
+    try {
+      await api.memory.deleteNode(id)
+      let removedEdges = 0
+      setGraph((prev) => {
+        const links = prev.links.filter(
+          (l) => linkNodeId(l.source) !== id && linkNodeId(l.target) !== id
+        )
+        removedEdges = prev.links.length - links.length
+        return { nodes: prev.nodes.filter((n) => n.id !== id), links }
+      })
+      setRawNodes((prev) => prev.filter((n) => n.id !== id))
+      setStats((prev) => ({ nodes: prev.nodes - 1, edges: prev.edges - removedEdges }))
+      setSelectedId(null)
+      setDetail(null)
+      toast.success('Node deleted')
+    } catch (err: any) {
+      toast.error('Failed to delete node', { message: err?.message })
+    }
   }
 
   async function handleDeleteMemory(id: string) {
-    await api.memory.deleteMemory(id)
-    setDetail((prev) =>
-      prev ? { ...prev, memories: prev.memories.filter((m) => m.id !== id) } : prev
-    )
+    try {
+      await api.memory.deleteMemory(id)
+      setDetail((prev) =>
+        prev ? { ...prev, memories: prev.memories.filter((m) => m.id !== id) } : prev
+      )
+      toast.success('Memory deleted')
+    } catch (err: any) {
+      toast.error('Failed to delete memory', { message: err?.message })
+    }
   }
 
   async function handleArchiveMemory(id: string) {
-    await api.memory.updateMemory(id, { status: 'superseded' })
-    setDetail((prev) =>
-      prev ? { ...prev, memories: prev.memories.filter((m) => m.id !== id) } : prev
-    )
+    try {
+      await api.memory.updateMemory(id, { status: 'superseded' })
+      setDetail((prev) =>
+        prev ? { ...prev, memories: prev.memories.filter((m) => m.id !== id) } : prev
+      )
+      toast.success('Memory archived')
+    } catch (err: any) {
+      toast.error('Failed to archive memory', { message: err?.message })
+    }
   }
 
   return (
@@ -839,9 +856,15 @@ export default function MemoryGraph(): React.ReactElement {
             setExporting('saving')
             try {
               const result = await api.memory.exportMarkdown()
-              setExporting(result.saved ? 'saved' : 'cancelled')
-            } catch {
+              if (result.saved) {
+                setExporting('saved')
+                toast.success('Memory exported', { message: result.path })
+              } else {
+                setExporting('cancelled')
+              }
+            } catch (err: any) {
               setExporting('cancelled')
+              toast.error('Export failed', { message: err?.message })
             }
             exportTimerRef.current = setTimeout(() => setExporting('idle'), 2500)
           }}

@@ -11,6 +11,7 @@ import {
 } from '../db/index'
 import { callTool } from './mcp'
 import { generateRoutineDigest, streamChat } from './claude'
+import { broadcast } from '../windows'
 import type { Routine, RunStatus } from '@shared/types'
 
 export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow | null): Promise<void> {
@@ -27,8 +28,8 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
 
   const run = dbCreateRun(routine.id, routine.name)
 
-  // Notify renderer: run started
-  widgetWin?.webContents.send('routine:run-started', run)
+  // Notify both windows: run started (widget shows inline run card; main window shows toast)
+  broadcast('routine:run-started', run)
 
   try {
     // Step 1: execute MCP actions
@@ -68,9 +69,9 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
     notification.show()
     notification.on('click', () => widgetWin?.show())
 
-    // Step 4: push to renderer
+    // Step 4: push to both windows (widget: inline card update; main: toast)
     const updatedRun = dbGetRun(run.id)
-    widgetWin?.webContents.send('routine:run-completed', updatedRun)
+    broadcast('routine:run-completed', updatedRun)
     widgetWin?.webContents.send('badge:updated', dbGetBadgeCount())
   } catch (err: any) {
     dbUpdateRun(run.id, {
@@ -78,7 +79,7 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
       status: 'error',
       error: err?.message ?? String(err)
     })
-    widgetWin?.webContents.send('routine:run-completed', dbGetRun(run.id))
+    broadcast('routine:run-completed', dbGetRun(run.id))
   }
 }
 

@@ -3,6 +3,7 @@ import { Check, AlertTriangle, XCircle, RefreshCw, Wand2 } from 'lucide-react'
 import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import ServerCatalogPicker from './ServerCatalogPicker'
+import { useToast } from '../toast/ToastProvider'
 
 export default function Settings(): React.ReactElement {
   const [config, setConfig] = useState<AppConfig | null>(null)
@@ -25,6 +26,7 @@ export default function Settings(): React.ReactElement {
   const [autoFillMessage, setAutoFillMessage] = useState<string | null>(null)
 
   const api = window.electron
+  const toast = useToast()
 
   const refreshHealth = useCallback(async () => {
     setHealthLoading(true)
@@ -60,6 +62,9 @@ export default function Settings(): React.ReactElement {
       setTimeout(() => setSaved(false), 2500)
       const [newStatus] = await Promise.all([api.config.getMcpStatus(), refreshHealth()])
       setStatus(newStatus)
+      toast.success('Settings saved')
+    } catch (err: any) {
+      toast.error('Failed to save settings', { message: err?.message })
     } finally {
       setSaving(false)
     }
@@ -74,16 +79,24 @@ export default function Settings(): React.ReactElement {
       setShowNewServer(false)
       await api.config.update(updated)
       await refreshHealth()
+      toast.success(`Server "${srv.name}" added`)
+    } catch (err: any) {
+      toast.error('Failed to add server', { message: err?.message })
     } finally {
       setSaving(false)
     }
   }
 
   const handleRemoveServer = async (name: string) => {
-    const updated = { ...config, mcp_servers: config.mcp_servers.filter((s) => s.name !== name) }
-    setConfig(updated)
-    await api.config.update(updated)
-    await refreshHealth()
+    try {
+      const updated = { ...config, mcp_servers: config.mcp_servers.filter((s) => s.name !== name) }
+      setConfig(updated)
+      await api.config.update(updated)
+      await refreshHealth()
+      toast.success(`Server "${name}" removed`)
+    } catch (err: any) {
+      toast.error('Failed to remove server', { message: err?.message })
+    }
   }
 
   const handleTestServer = async (srv: McpServerConfig) => {
@@ -114,6 +127,7 @@ export default function Settings(): React.ReactElement {
           await api.config.update(updated)
           setOauthState(null)
           await refreshHealth()
+          toast.success(`${srv.name} connected`)
         })
         .catch((err: Error) =>
           setOauthState((prev) => prev ? { ...prev, deviceFlow: null, polling: false, error: err.message } : null)
@@ -174,12 +188,17 @@ export default function Settings(): React.ReactElement {
   }
 
   const handleCredentialSave = async (provider: OAuthProvider, creds: OAuthAppCredential) => {
-    await api.config.update({
-      oauth_apps: { [provider]: creds } as Partial<AppConfig>['oauth_apps'],
-      oauth_connected_at: { [provider]: new Date().toISOString() } as Partial<AppConfig>['oauth_connected_at']
-    } as Partial<AppConfig>)
-    setConfig({ ...config, oauth_apps: { ...config.oauth_apps, [provider]: creds } })
-    await refreshHealth()
+    try {
+      await api.config.update({
+        oauth_apps: { [provider]: creds } as Partial<AppConfig>['oauth_apps'],
+        oauth_connected_at: { [provider]: new Date().toISOString() } as Partial<AppConfig>['oauth_connected_at']
+      } as Partial<AppConfig>)
+      setConfig({ ...config, oauth_apps: { ...config.oauth_apps, [provider]: creds } })
+      await refreshHealth()
+      toast.success(`${provider} credentials saved`)
+    } catch (err: any) {
+      toast.error('Failed to save credentials', { message: err?.message })
+    }
   }
 
   return (
@@ -547,6 +566,7 @@ const TIER_HINTS: Record<number, string> = {
 
 function AmbientAutonomyCard(): React.ReactElement {
   const api = window.electron
+  const toast = useToast()
   const [policies, setPolicies] = useState<AutonomyPolicy[]>([])
   const [resetting, setResetting] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
@@ -559,7 +579,13 @@ function AmbientAutonomyCard(): React.ReactElement {
 
   async function handleToggleEnabled(next: boolean): Promise<void> {
     setEnabled(next)
-    await api.config.update({ ambient: { enabled: next } } as any)
+    try {
+      await api.config.update({ ambient: { enabled: next } } as any)
+      toast.success(next ? 'Ambient intelligence enabled' : 'Ambient intelligence disabled')
+    } catch (err: any) {
+      setEnabled(!next) // revert
+      toast.error('Failed to update ambient setting', { message: err?.message })
+    }
   }
 
   function getTierForType(type: IntentType): Tier {
@@ -570,9 +596,14 @@ function AmbientAutonomyCard(): React.ReactElement {
   }
 
   async function handleSetTier(type: IntentType, tier: Tier): Promise<void> {
-    await api.ambient.setTier(type, tier)
-    const updated = await api.ambient.getPolicy()
-    setPolicies(updated as AutonomyPolicy[])
+    try {
+      await api.ambient.setTier(type, tier)
+      const updated = await api.ambient.getPolicy()
+      setPolicies(updated as AutonomyPolicy[])
+      toast.success(`Trust tier updated to "${TIER_LABELS[tier]}"`)
+    } catch (err: any) {
+      toast.error('Failed to update trust tier', { message: err?.message })
+    }
   }
 
   async function handleReset(): Promise<void> {
@@ -582,6 +613,9 @@ function AmbientAutonomyCard(): React.ReactElement {
       const updated = await api.ambient.getPolicy()
       setPolicies(updated as AutonomyPolicy[])
       setConfirmReset(false)
+      toast.success('Trust history reset')
+    } catch (err: any) {
+      toast.error('Failed to reset trust', { message: err?.message })
     } finally {
       setResetting(false)
     }

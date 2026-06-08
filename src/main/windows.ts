@@ -148,6 +148,18 @@ export function getMainWindow(): BrowserWindow | null {
   return mainWin
 }
 
+/**
+ * Send an IPC event to every open, non-destroyed window (widget + main).
+ * Callers targeting a specific window should continue using the direct getter.
+ */
+export function broadcast(channel: string, ...args: unknown[]): void {
+  for (const win of [widgetWin, mainWin]) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(channel, ...args)
+    }
+  }
+}
+
 export function openOrFocusMainWindow(): BrowserWindow {
   if (mainWin) {
     mainWin.show()
