@@ -162,7 +162,7 @@ Data: `window.electron.usage.*` — all five calls made in parallel on mount and
 | — OAuth tab | Connect GitHub (device flow), Notion (PKCE), Linear (PKCE); show connection status |
 | — Claude tab | Model selector; displays current model |
 | — Preferences tab | Widget always-on-top, notification sound, launch on login; persona text field |
-| — About You card | Owner identity: name + per-surface handles (github/slack/jira/linear/notion); "Auto-fill" button calls `setup.resolveOwnerHandles()` and pre-populates fields, with ✓ / ⚠ markers |
+| — About You card | Owner identity: name + per-surface handles; handle fields are filtered to enabled MCP surfaces only (no fields shown for surfaces the user hasn't configured); when a new surface MCP is added, `setup.resolveOwnerHandles()` fires automatically and pre-fills the handle if found, with ✓ / ⚠ markers |
 
 #### Onboarding wizard
 
@@ -192,5 +192,7 @@ Located in `src/renderer/src/` (shared between widget and main window):
 - 2026-06-07 — added `UsageDashboard` page (`components/UsageDashboard.tsx`); new `'usage'` nav item in `App.tsx`; added `.segmented`/`.segmented__btn`, `.stat-card`, `.breakdown-row`, `.usage-call-row`, `.usage-chart` CSS classes to `index.css`; no new dependencies
 - 2026-06-07 — added unified toast notification system (`toast/ToastProvider.tsx`; `useToast()` hook); `App.tsx` now wraps `AppShell` in `<ToastProvider>` and runs `useRunToasts` bridge for routine run and ambient auto-exec events; `RoutinesManager`, `Settings`, `MemoryGraph` now toast on mutating action success/error
 - 2026-06-07 — added "About You" card in Settings and step 5 in OnboardingWizard; both surface owner-identity fields (name + handles) with auto-fill from MCP
+- 2026-06-07 — About You handle fields now filter to enabled MCP surfaces only; handle auto-resolved silently when a surface MCP is added (fires `setup.resolveOwnerHandles()` and merges into state; auto-fill button hidden when no identity surfaces are configured)
+- 2026-06-07 — auto-fill result feedback moved from inline text to toast in both Settings and OnboardingWizard; handle fields now accept comma-separated values (e.g. "alice, alice-work") — `getOwnerHandles()` and `buildOwnerClause()` in `config.ts` split on commas at read time
 - 2026-06-07 — `MemoryGraph` header: added Export button (calls `memory.exportMarkdown`); shows saving/saved/cancelled state with a 2.5 s reset
 - 2026-06-06 — initial documentation

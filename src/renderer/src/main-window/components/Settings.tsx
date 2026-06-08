@@ -5,6 +5,9 @@ import { MCP_CATALOG } from '@shared/mcp-catalog'
 import ServerCatalogPicker from './ServerCatalogPicker'
 import { useToast } from '../toast/ToastProvider'
 
+const OWNER_SURFACES = ['github', 'slack', 'jira', 'linear', 'notion'] as const
+type OwnerSurface = typeof OWNER_SURFACES[number]
+
 export default function Settings(): React.ReactElement {
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [status, setStatus] = useState<McpServerStatus[]>([])
@@ -23,7 +26,6 @@ export default function Settings(): React.ReactElement {
   } | null>(null)
   const [autoFilling, setAutoFilling] = useState(false)
   const [handleStatus, setHandleStatus] = useState<ResolvedOwnerHandles>({})
-  const [autoFillMessage, setAutoFillMessage] = useState<string | null>(null)
 
   const api = window.electron
   const toast = useToast()
@@ -51,6 +53,11 @@ export default function Settings(): React.ReactElement {
     }
     return providers
   }, [config?.mcp_servers])
+
+  const visibleSurfaces = useMemo(
+    () => OWNER_SURFACES.filter((s) => (config?.mcp_servers ?? []).some((m) => m.name === s)),
+    [config?.mcp_servers]
+  )
 
   if (!config) return <div style={{ padding: 24, color: 'var(--text-muted)' }}>Loading…</div>
 
@@ -80,6 +87,32 @@ export default function Settings(): React.ReactElement {
       await api.config.update(updated)
       await refreshHealth()
       toast.success(`Server "${srv.name}" added`)
+      // Silently try to detect identity for this surface. config:update already
+      // connected the server so resolveOwnerHandles can reach it immediately.
+      if ((OWNER_SURFACES as readonly string[]).includes(srv.name)) {
+        const surface = srv.name as OwnerSurface
+        api.setup.resolveOwnerHandles().then((resolved) => {
+          const entry = resolved[surface]
+          if (!entry) return
+          if (updated.owner?.handles?.[surface]) return  // user already set one
+          setConfig((prev) => {
+            if (!prev) return prev
+            return {
+              ...prev,
+              owner: {
+                ...(prev.owner ?? {}),
+                handles: { ...(prev.owner?.handles ?? {}), [surface]: entry.value }
+              }
+            }
+          })
+          setHandleStatus((prev) => ({ ...prev, [surface]: entry }))
+          if (entry.needsReview) {
+            toast.info(`Detected your ${srv.name} identity — review it in About You`)
+          } else {
+            toast.success(`Detected your ${srv.name} identity: ${entry.value}`)
+          }
+        }).catch(() => {})
+      }
     } catch (err: any) {
       toast.error('Failed to add server', { message: err?.message })
     } finally {
@@ -140,21 +173,21 @@ export default function Settings(): React.ReactElement {
 
   const handleAutoFillOwner = async () => {
     setAutoFilling(true)
-    setAutoFillMessage(null)
     try {
       const resolved = await api.setup.resolveOwnerHandles()
       setHandleStatus(resolved)
       const found = Object.keys(resolved).length
       if (found === 0) {
-        setAutoFillMessage('No identity tools found on connected servers — fill in your handles manually.')
+        toast.info('No identity tools found', { message: 'No identity tools found on connected servers — fill in your handles manually.' })
       } else {
         const reviewCount = Object.values(resolved).filter((e) => e?.needsReview).length
-        setAutoFillMessage(
-          reviewCount > 0
-            ? `Found ${found} handle${found === 1 ? '' : 's'} — ${reviewCount} marked ⚠ for review (may not match your graph).`
-            : `Found ${found} handle${found === 1 ? '' : 's'}.`
-        )
-        // Merge resolved values into config, keeping any existing values the user typed
+        if (reviewCount > 0) {
+          toast.success(`Found ${found} handle${found === 1 ? '' : 's'}`, {
+            message: `${reviewCount} ${reviewCount === 1 ? 'handle' : 'handles'} marked for review — may not match your graph.`
+          })
+        } else {
+          toast.success(`Found ${found} handle${found === 1 ? '' : 's'}`)
+        }
         const currentHandles = config.owner?.handles ?? {}
         const mergedHandles = { ...currentHandles }
         for (const [surface, entry] of Object.entries(resolved) as [keyof typeof resolved, typeof resolved[keyof typeof resolved]][]) {
@@ -225,23 +258,19 @@ export default function Settings(): React.ReactElement {
             <div className="card__title">About You</div>
             <div className="card__subtitle">Tell mypa who you are so it addresses you directly.</div>
           </div>
-          <button
-            className="btn btn--ghost btn--sm"
-            onClick={handleAutoFillOwner}
-            disabled={autoFilling}
-            style={{ display: 'flex', alignItems: 'center', gap: 5 }}
-            title="Pre-fill handles from connected MCP tools"
-          >
-            {autoFilling ? <span className="spinner" /> : <Wand2 size={12} />}
-            {autoFilling ? 'Resolving…' : 'Auto-fill'}
-          </button>
+          {visibleSurfaces.length > 0 && (
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={handleAutoFillOwner}
+              disabled={autoFilling}
+              style={{ display: 'flex', alignItems: 'center', gap: 5 }}
+              title="Pre-fill handles from connected MCP tools"
+            >
+              {autoFilling ? <span className="spinner" /> : <Wand2 size={12} />}
+              {autoFilling ? 'Resolving…' : 'Auto-fill'}
+            </button>
+          )}
         </div>
-
-        {autoFillMessage && (
-          <div className="form-hint" style={{ marginBottom: 12, color: autoFillMessage.startsWith('No') ? 'var(--text-muted)' : 'var(--text-secondary)' }}>
-            {autoFillMessage}
-          </div>
-        )}
 
         <div className="form-group">
           <label className="form-label">Your name</label>
@@ -255,40 +284,48 @@ export default function Settings(): React.ReactElement {
           <div className="form-hint">How the assistant refers to you in summaries.</div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px' }}>
-          {(['github', 'slack', 'jira', 'linear', 'notion'] as const).map((surface) => {
-            const status = handleStatus[surface]
-            return (
-              <div key={surface} className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <span style={{ textTransform: 'capitalize' }}>{surface}</span>
-                  {status && (
-                    status.needsReview
-                      ? <AlertTriangle size={11} color="var(--color-warning, #f59e0b)" title="Confirm — may not match your graph" />
-                      : <Check size={11} color="var(--color-success, #22c55e)" title="Auto-filled" />
-                  )}
-                </label>
-                <input
-                  className="form-input"
-                  type="text"
-                  placeholder={surface === 'jira' ? 'Display Name' : `your-${surface}-handle`}
-                  value={config.owner?.handles?.[surface] ?? ''}
-                  onChange={(e) => setConfig({
-                    ...config,
-                    owner: {
-                      ...(config.owner ?? {}),
-                      handles: { ...(config.owner?.handles ?? {}), [surface]: e.target.value }
-                    }
-                  })}
-                  style={status?.needsReview ? { borderColor: 'var(--color-warning, #f59e0b)' } : undefined}
-                />
-              </div>
-            )
-          })}
-        </div>
-        <div className="form-hint" style={{ marginTop: 10 }}>
-          Used to recognize you in GitHub, Slack, Jira, Linear, and Notion data. Leave blank for surfaces you don't use.
-        </div>
+        {visibleSurfaces.length > 0 ? (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px' }}>
+              {visibleSurfaces.map((surface) => {
+                const surfaceStatus = handleStatus[surface]
+                return (
+                  <div key={surface} className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <span style={{ textTransform: 'capitalize' }}>{surface}</span>
+                      {surfaceStatus && (
+                        surfaceStatus.needsReview
+                          ? <AlertTriangle size={11} color="var(--color-warning, #f59e0b)" title="Confirm — may not match your graph" />
+                          : <Check size={11} color="var(--color-success, #22c55e)" title="Auto-filled" />
+                      )}
+                    </label>
+                    <input
+                      className="form-input"
+                      type="text"
+                      placeholder={surface === 'jira' ? 'Display Name' : `handle, handle2`}
+                      value={config.owner?.handles?.[surface] ?? ''}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        owner: {
+                          ...(config.owner ?? {}),
+                          handles: { ...(config.owner?.handles ?? {}), [surface]: e.target.value }
+                        }
+                      })}
+                      style={surfaceStatus?.needsReview ? { borderColor: 'var(--color-warning, #f59e0b)' } : undefined}
+                    />
+                  </div>
+                )
+              })}
+            </div>
+            <div className="form-hint" style={{ marginTop: 10 }}>
+              Used to recognise you in your connected surface data. Separate multiple handles with a comma.
+            </div>
+          </>
+        ) : (
+          <div className="form-hint">
+            Add a GitHub, Slack, Jira, Linear, or Notion MCP server to configure your identity handles.
+          </div>
+        )}
       </div>
 
       {/* Assistant Identity */}

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { Check, Copy, ExternalLink, RefreshCw, Wand2, AlertTriangle } from 'lucide-react'
 import LogoMark from '../../LogoMark'
 import ServerCatalogPicker from './ServerCatalogPicker'
+import { useToast } from '../toast/ToastProvider'
 import type { AppConfig, McpServerConfig, OAuthAppCredential, OAuthProvider, ResolvedOwnerHandles } from '@shared/types'
 
 interface Props {
@@ -42,9 +43,9 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
   const [ownerHandles, setOwnerHandles] = useState<NonNullable<AppConfig['owner']>['handles']>({})
   const [autoFilling, setAutoFilling] = useState(false)
   const [handleStatus, setHandleStatus] = useState<ResolvedOwnerHandles>({})
-  const [autoFillMessage, setAutoFillMessage] = useState<string | null>(null)
 
   const api = window.electron
+  const toast = useToast()
 
   useEffect(() => {
     api.config.get().then((cfg) => {
@@ -93,20 +94,21 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
 
   const handleAutoFillOwner = async () => {
     setAutoFilling(true)
-    setAutoFillMessage(null)
     try {
       const resolved = await api.setup.resolveOwnerHandles()
       setHandleStatus(resolved)
       const found = Object.keys(resolved).length
       if (found === 0) {
-        setAutoFillMessage('No identity tools found on connected servers — fill in your handles manually.')
+        toast.info('No identity tools found', { message: 'No identity tools found on connected servers — fill in your handles manually.' })
       } else {
         const reviewCount = Object.values(resolved).filter((e) => e?.needsReview).length
-        setAutoFillMessage(
-          reviewCount > 0
-            ? `Found ${found} handle${found === 1 ? '' : 's'} — ${reviewCount} marked ⚠ for review.`
-            : `Found ${found} handle${found === 1 ? '' : 's'}.`
-        )
+        if (reviewCount > 0) {
+          toast.success(`Found ${found} handle${found === 1 ? '' : 's'}`, {
+            message: `${reviewCount} ${reviewCount === 1 ? 'handle' : 'handles'} marked for review — may not match your graph.`
+          })
+        } else {
+          toast.success(`Found ${found} handle${found === 1 ? '' : 's'}`)
+        }
         setOwnerHandles((prev) => {
           const merged = { ...prev }
           for (const [surface, entry] of Object.entries(resolved) as [keyof typeof resolved, typeof resolved[keyof typeof resolved]][]) {
@@ -445,12 +447,6 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
                 </button>
               </div>
 
-              {autoFillMessage && (
-                <div style={{ fontSize: 12, marginBottom: 12, color: autoFillMessage.startsWith('No') ? 'var(--text-muted)' : 'var(--text-secondary)' }}>
-                  {autoFillMessage}
-                </div>
-              )}
-
               <div className="form-group">
                 <label className="form-label">Your name</label>
                 <input
@@ -478,7 +474,7 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
                       <input
                         className="form-input"
                         type="text"
-                        placeholder={surface === 'jira' ? 'Display Name' : `your-${surface}-handle`}
+                        placeholder={surface === 'jira' ? 'Display Name' : `handle, handle2`}
                         value={ownerHandles?.[surface] ?? ''}
                         onChange={(e) => setOwnerHandles((prev) => ({ ...(prev ?? {}), [surface]: e.target.value }))}
                         style={status?.needsReview ? { borderColor: 'var(--color-warning, #f59e0b)' } : undefined}

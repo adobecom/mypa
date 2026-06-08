@@ -120,7 +120,7 @@ export function getOwnerHandles(): string[] {
   const handles = readConfig().owner?.handles ?? {}
   return Object.values(handles)
     .filter((h): h is string => typeof h === 'string' && h.trim() !== '')
-    .map((h) => h.trim())
+    .flatMap((h) => h.split(',').map((s) => s.trim()).filter(Boolean))
 }
 
 /**
@@ -135,8 +135,11 @@ export function buildOwnerClause(): string {
   const name = owner.name?.trim() || 'the user you assist'
   const handles = owner.handles ?? {}
   const handleEntries = Object.entries(handles)
-    .filter(([, v]) => typeof v === 'string' && (v as string).trim() !== '')
-    .map(([surface, handle]) => `${surface}: ${(handle as string).trim()}`)
+    .flatMap(([surface, v]) => {
+      if (typeof v !== 'string' || !v.trim()) return []
+      const vals = v.split(',').map((h) => h.trim()).filter(Boolean)
+      return vals.length > 0 ? [`${surface}: ${vals.join(', ')}`] : []
+    })
 
   const handlePart = handleEntries.length > 0
     ? ` They appear across connected surfaces under these handles — ${handleEntries.join(', ')}.`
