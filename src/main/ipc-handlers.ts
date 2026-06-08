@@ -27,7 +27,7 @@ import {
   dbUpdateMemory
 } from './db/index'
 import { readConfig, updateConfig } from './services/config'
-import { testServer, getServerStatus, connectAllServers } from './services/mcp'
+import { testServer, getServerStatus, connectAllServers, resolveOwnerHandles } from './services/mcp'
 import { startDeviceFlow, pollDeviceFlow, startPkceFlow } from './services/oauth'
 import { detectClaudeMcpServers } from './services/claude-import'
 import { executeRoutine, handleRunMessage } from './services/routines'
@@ -260,6 +260,8 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('setup:detect-claude-mcp', () => detectClaudeMcpServers())
+
+  ipcMain.handle('setup:resolve-owner-handles', () => resolveOwnerHandles())
 
   // ─── System ────────────────────────────────────────────────────────────────
 

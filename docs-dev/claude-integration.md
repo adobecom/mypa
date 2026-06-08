@@ -143,7 +143,21 @@ Default (if unset or empty): `"a personal assistant"`.
 
 Users set their persona in the Settings panel.
 
+## Owner identity clause
+
+When the user has configured `AppConfig.owner` (name + per-surface handles), every system prompt also receives an owner-identity instruction via `buildOwnerClause()` (`config.ts`):
+
+```
+The person you assist is {name}. They appear across connected surfaces under these handles —
+github: {handle}, slack: {handle}, …
+When activity references any of those handles, that is {name} themselves — address them in the
+second person ("you"), never in the third person or by their handle.
+```
+
+This clause is appended in: `generateRoutineDigest`, `streamChat`, `generatePlanDraft` (all in `claude.ts`), `inferIntent` (`inference.ts`), and `runMemorySummarization` (`memories.ts`). Returns `''` when owner is not configured, so prompts degrade gracefully.
+
 ## Changelog
 
+- 2026-06-07 — added owner-identity clause (`buildOwnerClause`) injected into all system prompts so the model addresses the owner as "you" when `AppConfig.owner` is configured
 - 2026-06-07 — `generateRoutineDigest` hardened to never throw (strips markdown fences, wraps JSON.parse in try/catch, returns graceful default on any failure); `parseStreamEvent` in `runClaudeStream` hardened to only pass the `result` fallback when it is plain prose (not a JSON blob), preventing raw MCP tool output from appearing in chat
 - 2026-06-06 — initial documentation

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { Check, AlertTriangle, XCircle, RefreshCw } from 'lucide-react'
-import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType } from '@shared/types'
+import { Check, AlertTriangle, XCircle, RefreshCw, Wand2 } from 'lucide-react'
+import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import ServerCatalogPicker from './ServerCatalogPicker'
 
@@ -20,6 +20,8 @@ export default function Settings(): React.ReactElement {
     polling: boolean
     error: string
   } | null>(null)
+  const [autoFilling, setAutoFilling] = useState(false)
+  const [handleStatus, setHandleStatus] = useState<ResolvedOwnerHandles>({})
 
   const api = window.electron
 
@@ -121,6 +123,25 @@ export default function Settings(): React.ReactElement {
     }
   }
 
+  const handleAutoFillOwner = async () => {
+    setAutoFilling(true)
+    try {
+      const resolved = await api.setup.resolveOwnerHandles()
+      setHandleStatus(resolved)
+      // Merge resolved values into config, keeping any existing values the user typed
+      const currentHandles = config.owner?.handles ?? {}
+      const mergedHandles = { ...currentHandles }
+      for (const [surface, entry] of Object.entries(resolved) as [keyof typeof resolved, typeof resolved[keyof typeof resolved]][]) {
+        if (entry && !currentHandles[surface]) {
+          mergedHandles[surface] = entry.value
+        }
+      }
+      setConfig({ ...config, owner: { ...(config.owner ?? {}), handles: mergedHandles } })
+    } finally {
+      setAutoFilling(false)
+    }
+  }
+
   const setOAuthField = (
     provider: 'github' | 'notion' | 'linear',
     field: keyof OAuthAppCredential,
@@ -164,6 +185,73 @@ export default function Settings(): React.ReactElement {
 
       {/* Setup Health */}
       <HealthCard health={health} loading={healthLoading} onRefresh={refreshHealth} />
+
+      {/* About You */}
+      <div className="card">
+        <div className="card__header">
+          <div>
+            <div className="card__title">About You</div>
+            <div className="card__subtitle">Tell mypa who you are so it addresses you directly.</div>
+          </div>
+          <button
+            className="btn btn--ghost btn--sm"
+            onClick={handleAutoFillOwner}
+            disabled={autoFilling}
+            style={{ display: 'flex', alignItems: 'center', gap: 5 }}
+            title="Pre-fill handles from connected MCP tools"
+          >
+            {autoFilling ? <span className="spinner" /> : <Wand2 size={12} />}
+            {autoFilling ? 'Resolving…' : 'Auto-fill'}
+          </button>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Your name</label>
+          <input
+            className="form-input"
+            type="text"
+            placeholder="Your name"
+            value={config.owner?.name ?? ''}
+            onChange={(e) => setConfig({ ...config, owner: { ...(config.owner ?? {}), name: e.target.value } })}
+          />
+          <div className="form-hint">How the assistant refers to you in summaries.</div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px' }}>
+          {(['github', 'slack', 'jira', 'linear', 'notion'] as const).map((surface) => {
+            const status = handleStatus[surface]
+            return (
+              <div key={surface} className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <span style={{ textTransform: 'capitalize' }}>{surface}</span>
+                  {status && (
+                    status.needsReview
+                      ? <AlertTriangle size={11} color="var(--color-warning, #f59e0b)" title="Confirm — may not match your graph" />
+                      : <Check size={11} color="var(--color-success, #22c55e)" title="Auto-filled" />
+                  )}
+                </label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder={surface === 'jira' ? 'Display Name' : `your-${surface}-handle`}
+                  value={config.owner?.handles?.[surface] ?? ''}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    owner: {
+                      ...(config.owner ?? {}),
+                      handles: { ...(config.owner?.handles ?? {}), [surface]: e.target.value }
+                    }
+                  })}
+                  style={status?.needsReview ? { borderColor: 'var(--color-warning, #f59e0b)' } : undefined}
+                />
+              </div>
+            )
+          })}
+        </div>
+        <div className="form-hint" style={{ marginTop: 10 }}>
+          Used to recognize you in GitHub, Slack, Jira, Linear, and Notion data. Leave blank for surfaces you don't use.
+        </div>
+      </div>
 
       {/* Assistant Identity */}
       <div className="card">

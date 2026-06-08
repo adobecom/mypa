@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { Check, Copy, ExternalLink, RefreshCw } from 'lucide-react'
+import { Check, Copy, ExternalLink, RefreshCw, Wand2, AlertTriangle } from 'lucide-react'
 import LogoMark from '../../LogoMark'
 import ServerCatalogPicker from './ServerCatalogPicker'
-import type { AppConfig, McpServerConfig, OAuthAppCredential, OAuthProvider } from '@shared/types'
+import type { AppConfig, McpServerConfig, OAuthAppCredential, OAuthProvider, ResolvedOwnerHandles } from '@shared/types'
 
 interface Props {
   onComplete: () => void
 }
 
-type Step = 1 | 2 | 3 | 4 | 5
+type Step = 1 | 2 | 3 | 4 | 5 | 6
 
 const MODELS = [
   {
@@ -38,6 +38,10 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
   const [oauthCreds, setOauthCreds] = useState<AppConfig['oauth_apps']>({})
   const [copied, setCopied] = useState(false)
   const [transitioning, setTransitioning] = useState(false)
+  const [ownerName, setOwnerName] = useState('')
+  const [ownerHandles, setOwnerHandles] = useState<NonNullable<AppConfig['owner']>['handles']>({})
+  const [autoFilling, setAutoFilling] = useState(false)
+  const [handleStatus, setHandleStatus] = useState<ResolvedOwnerHandles>({})
 
   const api = window.electron
 
@@ -46,6 +50,8 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
       setModel(cfg.claude.model ?? 'claude-opus-4-8')
       setExistingServers(cfg.mcp_servers)
       setOauthCreds(cfg.oauth_apps ?? {})
+      setOwnerName(cfg.owner?.name ?? '')
+      setOwnerHandles(cfg.owner?.handles ?? {})
     })
   }, [api])
 
@@ -70,9 +76,34 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
       if (step === 3) {
         await api.config.update({ claude: { model } })
       }
+      if (step === 5) {
+        await api.config.update({
+          owner: {
+            name: ownerName.trim() || undefined,
+            handles: ownerHandles
+          }
+        })
+      }
       setStep((s) => (s + 1) as Step)
     } finally {
       setTransitioning(false)
+    }
+  }
+
+  const handleAutoFillOwner = async () => {
+    setAutoFilling(true)
+    try {
+      const resolved = await api.setup.resolveOwnerHandles()
+      setHandleStatus(resolved)
+      setOwnerHandles((prev) => {
+        const merged = { ...prev }
+        for (const [surface, entry] of Object.entries(resolved) as [keyof typeof resolved, typeof resolved[keyof typeof resolved]][]) {
+          if (entry && !prev?.[surface]) merged[surface] = entry.value
+        }
+        return merged
+      })
+    } finally {
+      setAutoFilling(false)
     }
   }
 
@@ -121,7 +152,7 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
     }}>
       {/* Progress dots */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 40 }}>
-        {([1, 2, 3, 4, 5] as Step[]).map((s) => (
+        {([1, 2, 3, 4, 5, 6] as Step[]).map((s) => (
           <div
             key={s}
             style={{
@@ -374,8 +405,84 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
           </div>
         )}
 
-        {/* ── Step 5: All Set ──────────────────────────────────────────────── */}
+        {/* ── Step 5: About You ────────────────────────────────────────────── */}
         {step === 5 && (
+          <div>
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>About you</div>
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                Tell mypa who you are so it addresses you directly instead of by your handle.
+              </div>
+            </div>
+
+            <div className="card" style={{ padding: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                  Optional — you can fill this in later via Settings.
+                </span>
+                <button
+                  className="btn btn--ghost btn--sm"
+                  onClick={handleAutoFillOwner}
+                  disabled={autoFilling}
+                  style={{ display: 'flex', alignItems: 'center', gap: 5 }}
+                  title="Pre-fill handles from connected MCP tools"
+                >
+                  {autoFilling ? <span className="spinner" /> : <Wand2 size={12} />}
+                  {autoFilling ? 'Resolving…' : 'Auto-fill'}
+                </button>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Your name</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  placeholder="Your name"
+                  value={ownerName}
+                  onChange={(e) => setOwnerName(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px' }}>
+                {(['github', 'slack', 'jira', 'linear', 'notion'] as const).map((surface) => {
+                  const status = handleStatus[surface]
+                  return (
+                    <div key={surface} className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <span style={{ textTransform: 'capitalize' }}>{surface}</span>
+                        {status && (
+                          status.needsReview
+                            ? <AlertTriangle size={11} color="var(--color-warning, #f59e0b)" title="Confirm — may not match your graph" />
+                            : <Check size={11} color="var(--color-success, #22c55e)" title="Auto-filled" />
+                        )}
+                      </label>
+                      <input
+                        className="form-input"
+                        type="text"
+                        placeholder={surface === 'jira' ? 'Display Name' : `your-${surface}-handle`}
+                        value={ownerHandles?.[surface] ?? ''}
+                        onChange={(e) => setOwnerHandles((prev) => ({ ...(prev ?? {}), [surface]: e.target.value }))}
+                        style={status?.needsReview ? { borderColor: 'var(--color-warning, #f59e0b)' } : undefined}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            <WizardNav
+              onBack={handleBack}
+              onNext={handleNext}
+              nextDisabled={transitioning}
+              backDisabled={transitioning}
+              nextLabel={transitioning ? 'Saving…' : 'Next →'}
+              nextSpinner={transitioning}
+            />
+          </div>
+        )}
+
+        {/* ── Step 6: All Set ──────────────────────────────────────────────── */}
+        {step === 6 && (
           <div>
             <div style={{ textAlign: 'center', marginBottom: 32 }}>
               <div style={{
@@ -399,6 +506,11 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
                 <SummaryRow ok label={`${serversAdded.length} tool${serversAdded.length === 1 ? '' : 's'} connected`} />
               ) : (
                 <SummaryRow ok={false} label="No tools yet — add them in Settings anytime" />
+              )}
+              {ownerName.trim() ? (
+                <SummaryRow ok label={`Personalized for ${ownerName.trim()}`} />
+              ) : (
+                <SummaryRow ok={false} label="Identity not set — add it in Settings anytime" />
               )}
             </div>
 

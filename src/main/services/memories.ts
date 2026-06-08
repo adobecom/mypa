@@ -1,5 +1,5 @@
 import { runClaude } from './claude'
-import { readConfig } from './config'
+import { readConfig, buildOwnerClause } from './config'
 import { embedText, cosineSim } from './embeddings'
 import { sanitizeLabel, kindToNodeType } from './memory-graph'
 import {
@@ -115,7 +115,7 @@ export async function runMemorySummarization(): Promise<void> {
 
   let text: string
   try {
-    text = await runClaude(SYSTEM_PROMPT, userPrompt)
+    text = await runClaude(SYSTEM_PROMPT + buildOwnerClause(), userPrompt)
   } catch (e) {
     console.error('[memories] runClaude failed:', e)
     return

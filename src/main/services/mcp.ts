@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { readConfig, updateConfig } from './config'
-import type { McpServerConfig, McpTool, McpServerStatus } from '@shared/types'
+import type { McpServerConfig, McpTool, McpServerStatus, ResolvedOwnerHandles } from '@shared/types'
 
 interface ActiveServer {
   client: Client
@@ -113,6 +113,79 @@ export function getServerStatus(): McpServerStatus[] {
       tools: active?.tools ?? []
     }
   })
+}
+
+// ─── Owner identity resolution ────────────────────────────────────────────────
+
+const SURFACE_NAMES = ['github', 'slack', 'jira', 'linear', 'notion'] as const
+type SurfaceName = typeof SURFACE_NAMES[number]
+
+/** Tool names that are likely to return the authenticated user's identity */
+const IDENTITY_TOOL_PATTERN = /whoami|get_me|^me$|current_user|viewer|self|auth.?test|read_user_profile/i
+
+/**
+ * Returns true for opaque / non-human-readable IDs (Slack UIDs like U07ABC,
+ * UUIDs, bare numbers) that won't match what is stored in the graph as a node label.
+ */
+function isOpaqueId(value: string): boolean {
+  return /^[UW][A-Z0-9]{6,}$/.test(value) ||   // Slack UID
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) || // UUID
+    /^\d+$/.test(value)                           // bare numeric id
+}
+
+/** Try to extract a human-readable identity handle from the raw string returned by callTool */
+function extractHandle(raw: string): string | null {
+  let obj: Record<string, unknown> | null = null
+  try {
+    obj = JSON.parse(raw)
+  } catch {
+    // Not JSON — try to pull a quoted value for common identity keys
+    const match = raw.match(/"(?:login|username|name|display_name|displayName|accountId|id)"\s*:\s*"([^"]+)"/)
+    return match ? match[1] : null
+  }
+  if (!obj || typeof obj !== 'object') return null
+
+  const KEYS = ['login', 'username', 'name', 'display_name', 'displayName', 'accountId', 'id']
+  // Walk one level of nesting: top-level, obj.user, obj.viewer, obj.data.viewer
+  const candidates: unknown[] = [obj, (obj as any).user, (obj as any).viewer, (obj as any)?.data?.viewer]
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue
+    for (const key of KEYS) {
+      const val = (candidate as Record<string, unknown>)[key]
+      if (typeof val === 'string' && val.trim()) return val.trim()
+    }
+  }
+  return null
+}
+
+/**
+ * Best-effort: calls each connected MCP server's identity tool (if one exists)
+ * and returns a pre-filled handle with a `needsReview` flag where the resolved
+ * value is opaque (e.g. a Slack UID that won't match a graph node label).
+ */
+export async function resolveOwnerHandles(): Promise<ResolvedOwnerHandles> {
+  const result: ResolvedOwnerHandles = {}
+  const connected = getServerStatus().filter((s) => s.connected)
+
+  for (const server of connected) {
+    const surfaceName = SURFACE_NAMES.find((n) => server.name === n)
+    if (!surfaceName) continue
+
+    const identityTool = server.tools.find((t) => IDENTITY_TOOL_PATTERN.test(t.name))
+    if (!identityTool) continue
+
+    try {
+      const raw = await callTool(server.name, identityTool.name, {})
+      const handle = extractHandle(raw)
+      if (handle) {
+        result[surfaceName] = { value: handle, needsReview: isOpaqueId(handle) }
+      }
+    } catch (err) {
+      console.warn(`[mcp] resolveOwnerHandles: ${server.name} failed:`, err)
+    }
+  }
+
+  return result
 }
 
 export async function testServer(

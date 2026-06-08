@@ -97,6 +97,8 @@ Reads and writes `~/.mypa/config.json`. See [configuration.md](configuration.md)
 | `readConfig()` | Read config, deep-merge with `DEFAULT_CONFIG`, decrypt secrets |
 | `writeConfig(config)` | Encrypt secrets, write config |
 | `updateConfig(partial)` | Deep-merge partial update, write, return updated config |
+| `getOwnerHandles()` | Flat list of configured owner handles (non-empty, trimmed) — used for graph-render tagging |
+| `buildOwnerClause()` | Returns a one-sentence system-prompt instruction addressing the owner as "you"; returns `''` when `AppConfig.owner` is not set |
 
 Secrets encrypted at rest:
 - `mcp_servers[].env.*` values — MCP server API keys / tokens
@@ -208,5 +210,6 @@ Reads an existing Claude Code config file (typically `~/.claude.json` or `~/Libr
 
 ## Changelog
 
+- 2026-06-07 — added `getOwnerHandles()` and `buildOwnerClause()` to `config.ts`; added `resolveOwnerHandles()` to `mcp.ts`; owner clause injected into all AI system prompts; owner nodes tagged `you (handle)` in `renderPacketForPrompt`
 - 2026-06-07 — added `memory-export.ts` service; fixed `autonomy.ts` two-level tier resolution + streak reset; hardened `generateRoutineDigest` to never throw (returns graceful default)
 - 2026-06-06 — initial documentation; reflects services as of commit d8a8774

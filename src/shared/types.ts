@@ -142,11 +142,27 @@ export interface OAuthAppCredential {
   clientSecret?: string
 }
 
+export interface OwnerIdentity {
+  name?: string
+  handles?: {
+    github?: string
+    slack?: string
+    jira?: string
+    linear?: string
+    notion?: string
+  }
+}
+
+/** Return type for setup.resolveOwnerHandles — one entry per surface where a handle was found */
+export type ResolvedHandle = { value: string; needsReview: boolean }
+export type ResolvedOwnerHandles = Partial<Record<'github' | 'slack' | 'jira' | 'linear' | 'notion', ResolvedHandle>>
+
 export interface AppConfig {
   claude: ClaudeConfig
   mcp_servers: McpServerConfig[]
   preferences: AppPreferences
   persona?: string
+  owner?: OwnerIdentity
   oauth_apps?: {
     github?: OAuthAppCredential
     notion?: OAuthAppCredential
@@ -442,6 +458,7 @@ export interface IpcApi {
     checkPrerequisites(): Promise<{ claudeCli: boolean }>
     getHealth(): Promise<SetupHealth>
     detectClaudeMcp(): Promise<DetectedMcpServer[]>
+    resolveOwnerHandles(): Promise<ResolvedOwnerHandles>
   }
   system: {
     openMainWindow(routineId?: string): Promise<void>

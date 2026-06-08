@@ -80,6 +80,7 @@ Pre-flight checks and server auto-detection.
 | `checkPrerequisites` | `() → { claudeCli: boolean }` | Check whether the `claude` CLI binary is on `$PATH` |
 | `getHealth` | `() → SetupHealth` | Full health check: Claude CLI + each MCP server (missing env keys, OAuth staleness) |
 | `detectClaudeMcp` | `() → DetectedMcpServer[]` | Auto-detect MCP servers from an existing Claude Code config file |
+| `resolveOwnerHandles` | `() → ResolvedOwnerHandles` | Best-effort: call each connected MCP server's identity tool and return per-surface handles with a `needsReview` flag for opaque IDs (e.g. Slack UIDs). Returns only surfaces where a handle was found. |
 
 ### `system`
 
@@ -164,5 +165,6 @@ type MemoryType      = 'fact' | 'pattern' | 'preference' | 'status'
 
 ## Changelog
 
+- 2026-06-07 — added `setup.resolveOwnerHandles` channel; added `AppConfig.owner` (`OwnerIdentity`) type; added `ResolvedOwnerHandles` / `ResolvedHandle` types to `@shared/types`
 - 2026-06-07 — added `memory.exportMarkdown` channel; IPC handler drives `dialog.showSaveDialog` + `fs.writeFileSync`
 - 2026-06-06 — initial documentation; reflects `IpcApi` as of commit d8a8774

@@ -1,7 +1,7 @@
 import { execSync, spawn } from 'child_process'
 import { existsSync } from 'fs'
 import cron from 'node-cron'
-import { readConfig } from './config'
+import { readConfig, buildOwnerClause } from './config'
 import type { PlanDraft, PlanItemTiming, ChatMessage, McpServerStatus, RoutineAction, RoutineSetupDraft } from '@shared/types'
 
 
@@ -153,7 +153,7 @@ export async function generatePlanDraft(intent: string): Promise<PlanDraft> {
 
   const persona = readConfig().persona?.trim() || 'a personal assistant'
   const text = await runClaude(
-    `You are ${persona} helping organize work.
+    `You are ${persona} helping organize work.${buildOwnerClause()}
 The current time is ${now.toLocaleTimeString()} (hour: ${hour}).
 Respond ONLY with valid JSON matching the schema provided. No markdown, no explanation.`,
     `Parse this intent into a structured plan item. Return JSON only.
@@ -209,7 +209,7 @@ export async function generateRoutineDigest(
   try {
     const persona = readConfig().persona?.trim() || 'a personal assistant'
     text = await runClaude(
-      `You are ${persona} digesting data feeds.
+      `You are ${persona} digesting data feeds.${buildOwnerClause()}
 Respond ONLY with valid JSON matching the schema provided.`,
       `Routine: ${routineName}
 
@@ -351,9 +351,10 @@ export async function streamChat(
   ]
 
   const persona = readConfig().persona?.trim() || 'a personal assistant'
+  const ownerClause = buildOwnerClause()
   const systemPrompt = rawContext
-    ? `You are mypa, ${persona}. Be concise and action-oriented.\n\nOriginal data collected by this routine:\n${rawContext}`
-    : `You are mypa, ${persona}. Be concise and action-oriented.`
+    ? `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.\n\nOriginal data collected by this routine:\n${rawContext}`
+    : `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.`
 
   const full = await runClaudeStream(systemPrompt, messages, onChunk, streamId)
 

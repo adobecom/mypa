@@ -119,14 +119,17 @@ Data: `window.electron.memory.getGraph()` on mount; `getNode(id)` on selection.
 | — OAuth tab | Connect GitHub (device flow), Notion (PKCE), Linear (PKCE); show connection status |
 | — Claude tab | Model selector; displays current model |
 | — Preferences tab | Widget always-on-top, notification sound, launch on login; persona text field |
+| — About You card | Owner identity: name + per-surface handles (github/slack/jira/linear/notion); "Auto-fill" button calls `setup.resolveOwnerHandles()` and pre-populates fields, with ✓ / ⚠ markers |
 
 #### Onboarding wizard
 
-`OnboardingWizard` walks first-time users through:
-1. Installing / verifying the Claude CLI.
-2. Connecting at least one MCP server.
-3. (Optionally) connecting OAuth providers.
-4. Setting preferences and persona.
+`OnboardingWizard` walks first-time users through (6 steps):
+1. Welcome.
+2. Installing / verifying the Claude CLI.
+3. Choosing a model.
+4. Connecting MCP servers / OAuth providers.
+5. **About you** — name + per-surface handles with auto-fill button; saves to `AppConfig.owner`.
+6. All set — summary.
 
 Completes by setting `onboarding_complete: true` in config.
 
@@ -143,5 +146,6 @@ Located in `src/renderer/src/` (shared between widget and main window):
 
 ## Changelog
 
+- 2026-06-07 — added "About You" card in Settings and step 5 in OnboardingWizard; both surface owner-identity fields (name + handles) with auto-fill from MCP
 - 2026-06-07 — `MemoryGraph` header: added Export button (calls `memory.exportMarkdown`); shows saving/saved/cancelled state with a 2.5 s reset
 - 2026-06-06 — initial documentation
