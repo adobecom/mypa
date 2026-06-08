@@ -45,20 +45,11 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
     const rawOutput = results.join('\n\n---\n\n')
 
     // Step 2: Claude digest
-    let digest = ''
-    let summary = ''
-    try {
-      const digestResult = await generateRoutineDigest(routine.name, routine.prompt, rawOutput)
-      digest = JSON.stringify(digestResult)
-      summary = digestResult.summary
-
-      // Add assistant message with digest
-      dbAddRunMessage(run.id, 'assistant', buildDigestMessage(digestResult))
-    } catch (err: any) {
-      digest = ''
-      summary = `${routine.name} completed`
-      dbAddRunMessage(run.id, 'assistant', `Routine completed.\n\nRaw output:\n${rawOutput}`)
-    }
+    // generateRoutineDigest never throws — returns a default digest on parse failure
+    const digestResult = await generateRoutineDigest(routine.name, routine.prompt, rawOutput)
+    const digest = JSON.stringify(digestResult)
+    const summary = digestResult.summary
+    dbAddRunMessage(run.id, 'assistant', buildDigestMessage(digestResult))
 
     // Update run record
     dbUpdateRun(run.id, {

@@ -870,6 +870,13 @@ export function dbGetActiveMemories(limit = 10): Memory[] {
   return rows.map(deserializeMemory)
 }
 
+export function dbGetAllMemories(): Memory[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM memories ORDER BY created_at ASC')
+    .all() as any[]
+  return rows.map(deserializeMemory)
+}
+
 export function dbGetMemoriesForNode(nodeId: string): Memory[] {
   const rows = getDb()
     .prepare("SELECT * FROM memories WHERE node_id = ? AND status = 'active'")

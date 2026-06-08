@@ -285,4 +285,5 @@ There is no migration framework. `initSchema()` uses `CREATE TABLE IF NOT EXISTS
 
 ## Changelog
 
+- 2026-06-07 — added `dbGetAllMemories()` (all rows incl. superseded, ordered by `created_at`); used by the memory export feature; `dbUpsertPolicy` now accepts `consecutive_approvals` reset to fix the trust-accumulation streak bug
 - 2026-06-06 — initial documentation; reflects schema as of commit d8a8774

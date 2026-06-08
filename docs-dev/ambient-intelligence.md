@@ -110,12 +110,21 @@ The trust tier system adapts over time based on the user's feedback. Each `actio
 | `2` (default) | Require approval — surface in feed, wait for explicit approve/dismiss |
 | `3` | Always approve — extra confirmation required (used for irreversible or high-impact actions) |
 
+### Two-level tier resolution
+
+`resolveTier(obj)` uses a two-level lookup:
+1. **Per-`surface:verb` policy** — earned organically via approve/challenge interactions (e.g. `github:comment` at tier 1 after 5 consecutive approvals).
+2. **Per-intent-type policy** — set by the user in Settings for a broad category (e.g. all `action` intents default to tier 2). This is the key written by `ambient.setTier` from the Settings autonomy controls.
+3. **Hardcoded default** — tier 2.
+
+The safety floor still applies: irreversible or `required_approval` intents can never be below tier 2. Tier 3 at either level is absolute.
+
 ### Tier drift
 
-- **Promotion** (tier decreases): when `consecutive_approvals` reaches a threshold, the tier drops by one (more autonomy).
-- **Demotion** (tier increases): a challenge resets the consecutive streak and may bump the tier up.
+- **Promotion** (tier decreases): when `consecutive_approvals` reaches the threshold (5), the tier drops by one AND the streak is **reset to zero** so subsequent promotions also each require 5 approvals.
+- **Demotion** (tier increases): a challenge resets the consecutive streak and bumps the tier up.
 - **Locking**: `tier_locked = 1` prevents automatic drift; only a manual `setTier` call changes it.
-- **Reset**: `resetTrust()` sets all policies back to tier 2, not locked, zero counters.
+- **Reset**: `resetTrust()` deletes all policy rows; each `action_type` reverts to tier 2 on next use.
 
 ### User actions
 
@@ -180,4 +189,5 @@ See [ipc.md](ipc.md) for full signatures. Quick reference:
 
 ## Changelog
 
+- 2026-06-07 — trust two-level tier resolution: `resolveTier` falls back to intent-type policy (Settings controls) when no per-surface:verb policy exists; streak is reset on tier promotion to ensure each step costs the full threshold; Settings UI now does exact `action_type` match instead of fragile `startsWith`
 - 2026-06-06 — initial documentation

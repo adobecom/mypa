@@ -106,6 +106,7 @@ Interactions:
 - **Delete node** → calls `window.electron.memory.deleteNode(id)`; node and cascade edges removed.
 - **Delete edge** → calls `window.electron.memory.deleteEdge(id)`.
 - **Edit/delete memory** → calls `window.electron.memory.updateMemory` / `deleteMemory`.
+- **Export** → header Export button calls `window.electron.memory.exportMarkdown()`; shows a system save-file dialog; writes a Markdown export package to the chosen path.
 
 Data: `window.electron.memory.getGraph()` on mount; `getNode(id)` on selection.
 
@@ -142,4 +143,5 @@ Located in `src/renderer/src/` (shared between widget and main window):
 
 ## Changelog
 
+- 2026-06-07 — `MemoryGraph` header: added Export button (calls `memory.exportMarkdown`); shows saving/saved/cancelled state with a 2.5 s reset
 - 2026-06-06 — initial documentation

@@ -121,6 +121,7 @@ Knowledge graph — nodes, edges, memories.
 | `deleteEdge` | `(id) → void` | Delete a single edge |
 | `deleteMemory` | `(id) → void` | Delete a memory entry |
 | `updateMemory` | `(id, { content?, importance?, status? }) → void` | Edit or supersede a memory |
+| `exportMarkdown` | `() → { saved: boolean; path?: string }` | Show a system save-file dialog and write a self-contained Markdown export of all memories + knowledge graph to the chosen path; `saved: false` when the dialog is cancelled |
 
 ---
 
@@ -163,4 +164,5 @@ type MemoryType      = 'fact' | 'pattern' | 'preference' | 'status'
 
 ## Changelog
 
+- 2026-06-07 — added `memory.exportMarkdown` channel; IPC handler drives `dialog.showSaveDialog` + `fs.writeFileSync`
 - 2026-06-06 — initial documentation; reflects `IpcApi` as of commit d8a8774

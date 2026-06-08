@@ -131,6 +131,8 @@ Runs the recurring background poll cycle (default every 5 minutes). Reads config
 
 Manages the `autonomy_policy` table and the promotion/demotion of action-type tiers. Handles approve/challenge/dismiss outcomes and updates consecutive-approval streaks used for automatic tier promotion.
 
+**Two-level tier resolution:** `resolveTier(obj)` looks up the earned per-`surface:verb` policy first, then falls back to the intent-type-level policy (what the user set in Settings for e.g. all "action" intents), then to the hardcoded default (tier 2). This means user Settings choices are live defaults that earned trust can refine on top of.
+
 ---
 
 ## `triggers.ts` — Trigger evaluators
@@ -188,10 +190,23 @@ The core of the ambient intelligence pipeline. See [knowledge-graph.md](knowledg
 
 ---
 
+## `memory-export.ts` — Memory export
+
+Builds a self-contained Markdown export of all memories and the full knowledge graph, suitable for direct LLM ingestion and migration. Called by the `memory:export-markdown` IPC handler.
+
+**Key export:**
+
+| Export | Description |
+|---|---|
+| `buildMemoryExportMarkdown(memories, nodes, edges)` | Returns a Markdown string with migration prompt, human-readable memories (grouped by type), graph nodes + edges, and a JSON data appendix |
+
+---
+
 ## `claude-import.ts` — Claude Code config import
 
 Reads an existing Claude Code config file (typically `~/.claude.json` or `~/Library/Application Support/Claude/claude.json`) and returns `DetectedMcpServer[]` that can be imported into mypa's MCP server list.
 
 ## Changelog
 
+- 2026-06-07 — added `memory-export.ts` service; fixed `autonomy.ts` two-level tier resolution + streak reset; hardened `generateRoutineDigest` to never throw (returns graceful default)
 - 2026-06-06 — initial documentation; reflects services as of commit d8a8774

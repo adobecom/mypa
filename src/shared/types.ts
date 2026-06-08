@@ -468,6 +468,7 @@ export interface IpcApi {
     deleteEdge(id: string): Promise<void>
     deleteMemory(id: string): Promise<void>
     updateMemory(id: string, update: { content?: string; importance?: number; status?: 'active' | 'superseded' }): Promise<void>
+    exportMarkdown(): Promise<{ saved: boolean; path?: string }>
   }
   on(
     channel:

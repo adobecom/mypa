@@ -1,5 +1,6 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, dialog } from 'electron'
 import { execFileSync } from 'child_process'
+import { writeFileSync } from 'fs'
 import {
   dbGetRoutines,
   dbCreateRoutine,
@@ -14,6 +15,7 @@ import {
   dbGetBadgeCount,
   dbGetAllNodes,
   dbGetAllEdges,
+  dbGetAllMemories,
   dbGetNodeById,
   dbGetEdgesFrom,
   dbGetEdgesTo,
@@ -47,6 +49,7 @@ import {
   stopAmbient
 } from './services/ambient'
 import { dbGetActionLog } from './db/index'
+import { buildMemoryExportMarkdown } from './services/memory-export'
 import { setTrayState } from './tray'
 import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, McpServerConfig, SetupHealth, DigestSlot, Tier } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
@@ -381,5 +384,23 @@ export function registerIpcHandlers(
 
   ipcMain.handle('memory:update-memory', async (_e, id: string, update: { content?: string; importance?: number; status?: 'active' | 'superseded' }) => {
     dbUpdateMemory(id, update)
+  })
+
+  ipcMain.handle('memory:export-markdown', async () => {
+    const dateStr = new Date().toISOString().slice(0, 10)
+    const result = await dialog.showSaveDialog({
+      title: 'Export memory',
+      defaultPath: `mypa-memory-export-${dateStr}.md`,
+      filters: [{ name: 'Markdown', extensions: ['md'] }]
+    })
+    if (result.canceled || !result.filePath) {
+      return { saved: false }
+    }
+    const memories = dbGetAllMemories()
+    const nodes = dbGetAllNodes()
+    const edges = dbGetAllEdges()
+    const markdown = buildMemoryExportMarkdown(memories, nodes, edges)
+    writeFileSync(result.filePath, markdown, 'utf8')
+    return { saved: true, path: result.filePath }
   })
 }

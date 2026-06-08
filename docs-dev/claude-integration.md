@@ -117,7 +117,7 @@ Returns:
 { summary: string, items: string[], proposed_actions: string[] }
 ```
 
-Falls back to `{ summary: 'Routine completed', items: [], proposed_actions: [] }` on parse failure.
+**Never throws.** Returns the graceful default `{ summary: '<name> completed', items: [], proposed_actions: [] }` on any failure — including `runClaude` errors, markdown-fenced responses, and JSON parse failures. Strips ` ```json ` fences before parsing so Claude's habit of wrapping JSON in code blocks doesn't cause errors.
 
 ### `generateRoutineSetup(intent, servers)`
 
@@ -145,4 +145,5 @@ Users set their persona in the Settings panel.
 
 ## Changelog
 
+- 2026-06-07 — `generateRoutineDigest` hardened to never throw (strips markdown fences, wraps JSON.parse in try/catch, returns graceful default on any failure); `parseStreamEvent` in `runClaudeStream` hardened to only pass the `result` fallback when it is plain prose (not a JSON blob), preventing raw MCP tool output from appearing in chat
 - 2026-06-06 — initial documentation

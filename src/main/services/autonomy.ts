@@ -26,16 +26,22 @@ const DEFAULT_TIER: Tier = 2
 
 export function resolveTier(obj: IntentObject): Tier {
   const actionType = actionTypeOf(obj)
-  const policy = dbGetPolicy(actionType)
-  let tier: Tier = policy?.tier ?? DEFAULT_TIER
+
+  // Two-level lookup:
+  // 1. Earned per-surface:verb policy (granular, from approve/challenge interactions)
+  // 2. Intent-type default set by the user in Settings (e.g. 'action', 'suggestion')
+  // 3. Hardcoded DEFAULT_TIER
+  const surfacePolicy = dbGetPolicy(actionType)
+  const typePolicy = dbGetPolicy(obj.type)
+  let tier: Tier = surfacePolicy?.tier ?? typePolicy?.tier ?? DEFAULT_TIER
 
   // Safety floor: irreversible or required_approval actions can never be below tier 2
   if (obj.reversibility === 'irreversible' || obj.required_approval) {
     if (tier < 2) tier = 2
   }
 
-  // Tier 3 (locked) is absolute
-  if (policy?.tier === 3) tier = 3
+  // Tier 3 (locked) is absolute at either level
+  if (surfacePolicy?.tier === 3 || typePolicy?.tier === 3) tier = 3
 
   return tier
 }
@@ -60,10 +66,11 @@ export function recordApproval(actionType: string): void {
   // Don't lower tier if locked, already at floor or below, or locked at tier 3
   if (policy.tier_locked || policy.tier <= AUTO_DECAY_FLOOR || policy.tier === 3) return
 
-  // Use consecutive_approvals (reset on challenge/dismissal) for accurate streak tracking
+  // Use consecutive_approvals (reset on challenge/dismissal) for accurate streak tracking.
+  // Reset the streak when lowering so each subsequent tier step also costs CONSECUTIVE_APPROVALS_TO_LOWER.
   if (policy.consecutive_approvals >= CONSECUTIVE_APPROVALS_TO_LOWER) {
     const newTier = Math.max(AUTO_DECAY_FLOOR, policy.tier - 1) as Tier
-    dbUpsertPolicy(actionType, { tier: newTier })
+    dbUpsertPolicy(actionType, { tier: newTier, consecutive_approvals: 0 })
     console.log(`[autonomy] trust raised for ${actionType}: tier ${policy.tier} → ${newTier}`)
   }
 }

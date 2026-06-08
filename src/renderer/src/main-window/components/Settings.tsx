@@ -456,7 +456,10 @@ function AmbientAutonomyCard(): React.ReactElement {
   }
 
   function getTierForType(type: IntentType): Tier {
-    return (policies.find((p) => p.action_type.startsWith(type))?.tier ?? 2) as Tier
+    // Match the intent-type-level policy exactly (e.g. action_type === 'action').
+    // Per-surface:verb policies (e.g. 'github:comment') are earned autonomously
+    // and are NOT displayed here — this control sets the per-type default tier.
+    return (policies.find((p) => p.action_type === type)?.tier ?? 2) as Tier
   }
 
   async function handleSetTier(type: IntentType, tier: Tier): Promise<void> {

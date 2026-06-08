@@ -56,8 +56,9 @@ function parseStreamEvent(line: string, full: string, onChunk: (chunk: string) =
   try {
     const event = JSON.parse(line)
     if (event.type === 'assistant') {
+      // Only extract plain text blocks — skip tool_use and any other structured blocks
       const textBlocks = (event.message?.content ?? []).filter(
-        (b: any) => b.type === 'text' && b.text
+        (b: any) => b.type === 'text' && typeof b.text === 'string' && b.text
       )
       if (textBlocks.length > 0 && full) {
         onChunk('\x00SPLIT\x00')
@@ -66,11 +67,16 @@ function parseStreamEvent(line: string, full: string, onChunk: (chunk: string) =
         full += block.text
         onChunk(block.text)
       }
-    } else if (event.type === 'result' && !event.is_error && typeof event.result === 'string' && !full) {
-      // Fallback: use the result event's text if no chunks were captured from assistant events
-      full = event.result
-      onChunk(event.result)
+    } else if (event.type === 'result' && !event.is_error && !full) {
+      // Fallback: only use the result event when no assistant text was captured and
+      // the result looks like a plain prose string (not a JSON blob or structured data).
+      const resultText = typeof event.result === 'string' ? event.result.trim() : ''
+      if (resultText && !resultText.startsWith('{') && !resultText.startsWith('[')) {
+        full = resultText
+        onChunk(resultText)
+      }
     }
+    // Explicitly ignore: 'system', 'user' (tool_result), 'tool_use', and all other event types
   } catch {
     // ignore parse errors on partial lines
   }
@@ -193,11 +199,19 @@ export async function generateRoutineDigest(
   promptTemplate: string,
   rawOutput: string
 ): Promise<RoutineDigest> {
-  const persona = readConfig().persona?.trim() || 'a personal assistant'
-  const text = await runClaude(
-    `You are ${persona} digesting data feeds.
+  const defaultDigest: RoutineDigest = {
+    summary: `${routineName} completed`,
+    items: [],
+    proposed_actions: []
+  }
+
+  let text: string
+  try {
+    const persona = readConfig().persona?.trim() || 'a personal assistant'
+    text = await runClaude(
+      `You are ${persona} digesting data feeds.
 Respond ONLY with valid JSON matching the schema provided.`,
-    `Routine: ${routineName}
+      `Routine: ${routineName}
 
 Instructions: ${promptTemplate}
 
@@ -210,18 +224,25 @@ Return JSON:
   "items": ["item needing attention", ...],
   "proposed_actions": ["I can do X", "Want me to Y?", ...]
 }`
-  )
-
-  const jsonMatch = text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) {
-    return { summary: 'Routine completed', items: [], proposed_actions: [] }
+    )
+  } catch {
+    return defaultDigest
   }
 
-  const parsed = JSON.parse(jsonMatch[0])
-  return {
-    summary: parsed.summary ?? 'Routine completed',
-    items: parsed.items ?? [],
-    proposed_actions: parsed.proposed_actions ?? []
+  // Strip markdown fences if Claude wrapped the JSON
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '')
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) return defaultDigest
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0])
+    return {
+      summary: typeof parsed.summary === 'string' ? parsed.summary : defaultDigest.summary,
+      items: Array.isArray(parsed.items) ? parsed.items : [],
+      proposed_actions: Array.isArray(parsed.proposed_actions) ? parsed.proposed_actions : []
+    }
+  } catch {
+    return defaultDigest
   }
 }
 

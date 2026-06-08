@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
 import type { ForceGraphMethods } from 'react-force-graph-2d'
-import { X, Trash2, Archive, RefreshCw, ChevronRight, Maximize2 } from 'lucide-react'
+import { X, Trash2, Archive, RefreshCw, ChevronRight, Maximize2, Download } from 'lucide-react'
 import type { GraphNode, GraphEdge, Memory, NodeSignalLink, NodeType, EdgeRel } from '@shared/types'
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
@@ -593,6 +593,7 @@ export default function MemoryGraph(): React.ReactElement {
   const [detailLoading, setDetailLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [stats, setStats] = useState({ nodes: 0, edges: 0 })
+  const [exporting, setExporting] = useState<'idle' | 'saving' | 'saved' | 'cancelled'>('idle')
 
   // Canvas sizing via ResizeObserver
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -823,6 +824,28 @@ export default function MemoryGraph(): React.ReactElement {
           </div>
         </div>
         <div style={{ flex: 1 }} />
+        <button
+          style={{
+            ...BTN,
+            opacity: exporting === 'saving' ? 0.6 : 1,
+            color: exporting === 'saved' ? 'rgba(74,222,158,0.9)' : BTN.color
+          }}
+          disabled={exporting === 'saving'}
+          title="Export memory as Markdown"
+          onClick={async () => {
+            setExporting('saving')
+            try {
+              const result = await api.memory.exportMarkdown()
+              setExporting(result.saved ? 'saved' : 'cancelled')
+            } catch {
+              setExporting('cancelled')
+            }
+            setTimeout(() => setExporting('idle'), 2500)
+          }}
+        >
+          <Download size={11} />
+          {exporting === 'saving' ? 'Saving…' : exporting === 'saved' ? 'Saved!' : exporting === 'cancelled' ? 'Cancelled' : 'Export'}
+        </button>
         <button
           style={BTN}
           onClick={() => fgRef.current?.zoomToFit(400, 60)}

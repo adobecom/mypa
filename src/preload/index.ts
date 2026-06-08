@@ -70,7 +70,8 @@ const api: IpcApi = {
     deleteNode: (id: string) => ipcRenderer.invoke('memory:delete-node', id),
     deleteEdge: (id: string) => ipcRenderer.invoke('memory:delete-edge', id),
     deleteMemory: (id: string) => ipcRenderer.invoke('memory:delete-memory', id),
-    updateMemory: (id: string, update: object) => ipcRenderer.invoke('memory:update-memory', id, update)
+    updateMemory: (id: string, update: object) => ipcRenderer.invoke('memory:update-memory', id, update),
+    exportMarkdown: () => ipcRenderer.invoke('memory:export-markdown')
   },
   on: (channel, listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => listener(...args)
