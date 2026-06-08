@@ -110,7 +110,7 @@ export default function App(): React.ReactElement {
   const needsSetup = config !== null && !config.onboarding_complete
 
   return (
-    <div style={{ position: 'relative', width: 380, height: 580 }}>
+    <div style={{ position: 'relative', width: 440, height: 580 }}>
       <AmbientBackground variant="widget" />
       <div className="widget" style={{ position: 'relative', zIndex: 1 }}>
       <TabStrip

@@ -45,7 +45,7 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body, #root {
-  width: 380px;
+  width: 440px;
   height: 580px;
   overflow: hidden;
   background: transparent;
@@ -195,7 +195,7 @@ body {
 /* ─── Widget Shell ──────────────────────────────────────────────────────────── */
 
 .widget {
-  width: 380px;
+  width: 440px;
   height: 580px;
   display: flex;
   flex-direction: column;

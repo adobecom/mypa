@@ -10,7 +10,9 @@ const api: IpcApi = {
     delete: (id) => ipcRenderer.invoke('plan:delete', id),
     sendMessage: (itemId, message) => ipcRenderer.invoke('plan:send-message', itemId, message),
     getThread: (itemId) => ipcRenderer.invoke('plan:get-thread', itemId),
-    cancelStream: (itemId) => ipcRenderer.invoke('plan:cancel-stream', itemId)
+    cancelStream: (itemId) => ipcRenderer.invoke('plan:cancel-stream', itemId),
+    getItem: (itemId) => ipcRenderer.invoke('plan:get-item', itemId),
+    openInMainWindow: (itemId) => ipcRenderer.invoke('plan:open-in-main-window', itemId)
   },
   routines: {
     getAll: () => ipcRenderer.invoke('routines:get-all'),
@@ -24,7 +26,8 @@ const api: IpcApi = {
     sendMessage: (runId, message) => ipcRenderer.invoke('routines:send-message', runId, message),
     updateRunStatus: (runId, status) => ipcRenderer.invoke('routines:update-run-status', runId, status),
     generateSetup: (intent) => ipcRenderer.invoke('routines:generate-setup', intent),
-    cancelStream: (runId) => ipcRenderer.invoke('routines:cancel-stream', runId)
+    cancelStream: (runId) => ipcRenderer.invoke('routines:cancel-stream', runId),
+    openRunInMainWindow: (runId) => ipcRenderer.invoke('routines:open-run-in-main-window', runId)
   },
   config: {
     get: () => ipcRenderer.invoke('config:get'),

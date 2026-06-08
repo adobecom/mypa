@@ -11,6 +11,7 @@ import {
   dbGetRunThread,
   dbUpdateRun,
   dbGetPlanItems,
+  dbGetPlanItem,
   dbGetPlanThread,
   dbGetBadgeCount,
   dbGetAllNodes,
@@ -99,6 +100,22 @@ export function registerIpcHandlers(
     cancelStream(itemId)
   })
 
+  ipcMain.handle('plan:get-item', async (_e, itemId: string) => {
+    return dbGetPlanItem(itemId)
+  })
+
+  ipcMain.handle('plan:open-in-main-window', async (_e, itemId: string) => {
+    const win = openMainWindow()
+    const send = (): void => win.webContents.send('navigate:plan-item', itemId)
+    const url = win.webContents.getURL()
+    const ready = url !== '' && url !== 'about:blank' && !win.webContents.isLoading()
+    if (ready) {
+      send()
+    } else {
+      win.webContents.once('did-finish-load', send)
+    }
+  })
+
   // ─── Routines ──────────────────────────────────────────────────────────────
 
   ipcMain.handle('routines:get-all', async () => {
@@ -157,6 +174,18 @@ export function registerIpcHandlers(
 
   ipcMain.handle('routines:cancel-stream', (_e, runId: string) => {
     cancelStream(runId)
+  })
+
+  ipcMain.handle('routines:open-run-in-main-window', async (_e, runId: string) => {
+    const win = openMainWindow()
+    const send = (): void => win.webContents.send('navigate:run-chat', runId)
+    const url = win.webContents.getURL()
+    const ready = url !== '' && url !== 'about:blank' && !win.webContents.isLoading()
+    if (ready) {
+      send()
+    } else {
+      win.webContents.once('did-finish-load', send)
+    }
   })
 
   // ─── Config ────────────────────────────────────────────────────────────────

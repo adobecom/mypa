@@ -6,6 +6,7 @@ import {
   dbGetPendingIntents,
   dbGetAllIntents,
   dbUpdateIntentStatus,
+  dbSetIntentChallengeReason,
   dbGetBadgeCount,
   dbAppendActionLog,
   dbGetAllPolicies,
@@ -357,6 +358,7 @@ export async function ambientChallengeIntent(id: string, reason: string): Promis
   const intent = dbGetIntent(id)
   if (!intent) throw new Error(`Intent ${id} not found`)
   dbUpdateIntentStatus(id, 'challenged')
+  dbSetIntentChallengeReason(id, reason)
   recordChallenge(`${intent.surface}:${intent.verb}`, reason)
   dbAppendActionLog({
     intent_id: id,

@@ -131,7 +131,7 @@ export async function handleRunMessage(
         } else {
           segments[segments.length - 1] += chunk
         }
-        widgetWin?.webContents.send('routine:run-message', { runId, chunk, done: false })
+        broadcast('routine:run-message', { runId, chunk, done: false })
       },
       (full) => {
         fullResponse = full
@@ -144,9 +144,9 @@ export async function handleRunMessage(
     for (const seg of toSave.length > 0 ? toSave : [fullResponse]) {
       if (seg.trim()) dbAddRunMessage(runId, 'assistant', seg)
     }
-    widgetWin?.webContents.send('routine:run-message', { runId, chunk: '', done: true })
+    broadcast('routine:run-message', { runId, chunk: '', done: true })
   } catch (err: any) {
-    widgetWin?.webContents.send('routine:run-message', {
+    broadcast('routine:run-message', {
       runId,
       chunk: '',
       done: true,

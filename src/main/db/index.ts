@@ -633,12 +633,17 @@ export function dbUpdateIntentStatus(id: string, status: IntentStatus, error?: s
   }
 }
 
+export function dbSetIntentChallengeReason(id: string, reason: string): void {
+  getDb().prepare('UPDATE intents SET challenge_reason = ? WHERE id = ?').run(reason, id)
+}
+
 function deserializeIntent(row: any): Intent {
   return {
     ...row,
     required_approval: row.required_approval === 1,
     payload: safeJsonParse<Record<string, unknown>>(row.payload, {}),
-    context_packet: safeJsonParse<Record<string, unknown>>(row.context_packet, {})
+    context_packet: safeJsonParse<Record<string, unknown>>(row.context_packet, {}),
+    challenge_reason: row.challenge_reason ?? null
   }
 }
 

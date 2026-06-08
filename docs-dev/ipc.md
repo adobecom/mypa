@@ -23,11 +23,13 @@ Manage plan items and their chat threads.
 | `createDraft` | `(intent: string) → PlanDraft` | Ask Claude to parse a free-text intent into a structured draft |
 | `confirm` | `(draft: PlanDraft) → PlanItem` | Persist a draft as a plan item (and mirror it into the knowledge graph) |
 | `getAll` | `() → PlanItem[]` | Fetch all plan items |
+| `getItem` | `(itemId) → PlanItem \| null` | Fetch a single plan item by ID |
 | `updateStatus` | `(id, status: PlanItemStatus) → void` | Update status: `pending \| in_progress \| done \| skipped` |
 | `delete` | `(id) → void` | Delete a plan item and its thread |
 | `sendMessage` | `(itemId, message) → void` | Send a user chat message on a plan-item thread (streaming) |
 | `getThread` | `(itemId) → ChatMessage[]` | Fetch the chat history for a plan item |
 | `cancelStream` | `(itemId) → void` | Cancel an active streaming response |
+| `openInMainWindow` | `(itemId) → void` | Open main window and navigate to the plan item's full chat view |
 
 ### `routines`
 
@@ -47,6 +49,7 @@ Manage scheduled routines, their runs, and run chat threads.
 | `updateRunStatus` | `(runId, status: RunStatus) → void` | Manually update a run's status |
 | `generateSetup` | `(intent: string) → RoutineSetupDraft` | Ask Claude to create a routine config from a natural-language intent |
 | `cancelStream` | `(runId) → void` | Cancel an active streaming response |
+| `openRunInMainWindow` | `(runId) → void` | Open main window, navigate to Run Logs, and expand the target run in conversation view |
 
 ### `config`
 
@@ -137,7 +140,9 @@ Subscribed with `window.electron.on(channel, listener)`. Returns an unsubscribe 
 | `routine:run-message` | `{ runId, chunk: string, done: boolean, error?: string }` | Streaming chat chunk on a run thread | widget only |
 | `plan:item-message` | `{ itemId, chunk: string, done: boolean, error?: string }` | Streaming chat chunk on a plan-item thread | widget only |
 | `badge:updated` | `number` | Badge count changed | widget only |
-| `navigate:edit-routine` | `{ routineId: string }` | Main window should navigate to the routine editor | main only |
+| `navigate:edit-routine` | `routineId: string` | Main window should navigate to the routine editor | main only |
+| `navigate:run-chat` | `runId: string` | Main window should navigate to Run Logs and open that run in conversation view | main only |
+| `navigate:plan-item` | `itemId: string` | Main window should navigate to the plan item's full chat detail page | main only |
 | `ambient:intent-created` | `Intent` | A new intent was generated | widget only |
 | `ambient:intent-updated` | `Intent` | An existing intent changed status | widget only |
 | `ambient:tray-state` | `TrayState` | Tray icon state changed | widget only |
@@ -206,6 +211,7 @@ type MemoryType      = 'fact' | 'pattern' | 'preference' | 'status'
 
 ## Changelog
 
+- 2026-06-08 — added `plan.getItem`, `plan.openInMainWindow`; `routines.openRunInMainWindow`; new push channels `navigate:run-chat` and `navigate:plan-item`; `Intent` type gained `challenge_reason: string | null`
 - 2026-06-07 — added `update` namespace (`checkNow`, `install`); new push channels `update:available`, `update:progress`, `update:downloaded`, `update:error`
 - 2026-06-07 — added `usage` namespace (`getSummary`, `getDaily`, `getBySource`, `getByModel`, `getRecent`); new types `UsageSource`, `UsageEvent`, `UsageSummary`, `UsageDailyPoint`, `UsageBreakdownRow`, `UsageRange` in `@shared/types`
 - 2026-06-07 — added `ambient:action-executed` push channel (broadcast to both windows on tier-0 auto-execution); `routine:run-started` and `routine:run-completed` are now broadcast to both windows via `broadcast()` in `src/main/windows.ts` (previously widget-only)

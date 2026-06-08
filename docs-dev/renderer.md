@@ -119,7 +119,17 @@ Navigating here with a `routineId` (via `navigate:edit-routine` push event) open
 
 | Component | Description |
 |---|---|
-| `RunLogs` | Paginated table of all routine runs across all routines; click a row to expand the digest and thread |
+| `RunLogs` | Paginated table of all routine runs; click a row to expand it; expanded view has "Raw output" / "Conversation" tab toggle |
+
+Navigating here via `navigate:run-chat` (sent by `routines.openRunInMainWindow`) auto-expands the target run in conversation view and scrolls it into view.
+
+#### Plan item detail
+
+| Component | Description |
+|---|---|
+| `PlanItemDetail` | Full-height chat view for a single plan item; no height cap on the conversation |
+
+Reached via `navigate:plan-item` push event (sent by `plan.openInMainWindow`). Renders a "Back to plan" button that returns to the Routines page. The sidebar shows a transient "Plan item" nav entry while this page is active.
 
 #### Memory (Knowledge Graph)
 
@@ -189,6 +199,8 @@ Located in `src/renderer/src/` (shared between widget and main window):
 
 ## Changelog
 
+- 2026-06-08 — added all chat CSS classes (`.chat-thread`, `.chat-message`, `.chat-message__bubble`, `.chat-input-row`, `.chat-input`, `.chat-send-btn`, `.chat-stop-btn`, `.typing-dot`, `.md-text` and variants) to `main-window/index.css`; `.chat-thread` max-height set to 480px (vs 240px in widget) and `.chat-message` font-size to 13px to match main-window type scale; fixes unstyled chat in `RunDetail` conversation tab and `PlanItemDetail`
+- 2026-06-08 — `RunLogs` extended: expanded runs now have "Raw output" / "Conversation" tab toggle; `navigate:run-chat` auto-expands target run in conversation view; added `PlanItemDetail` component and `plan` page in main window; challenge reason now persisted to `Intent.challenge_reason` and rendered in IntentCard Recent view; inline challenge confirmation added to IntentCard; "Open full chat" button added to `PlanItemCard` and `RoutineCard` in widget
 - 2026-06-07 — added `UsageDashboard` page (`components/UsageDashboard.tsx`); new `'usage'` nav item in `App.tsx`; added `.segmented`/`.segmented__btn`, `.stat-card`, `.breakdown-row`, `.usage-call-row`, `.usage-chart` CSS classes to `index.css`; no new dependencies
 - 2026-06-07 — added unified toast notification system (`toast/ToastProvider.tsx`; `useToast()` hook); `App.tsx` now wraps `AppShell` in `<ToastProvider>` and runs `useRunToasts` bridge for routine run and ambient auto-exec events; `RoutinesManager`, `Settings`, `MemoryGraph` now toast on mutating action success/error
 - 2026-06-07 — added "About You" card in Settings and step 5 in OnboardingWizard; both surface owner-identity fields (name + handles) with auto-fill from MCP

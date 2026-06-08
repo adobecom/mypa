@@ -224,6 +224,8 @@ export function initSchema(db: Database.Database): void {
   // Embedding columns on signals — nullable so old rows remain valid immediately
   tryExec('ALTER TABLE signals ADD COLUMN embedding BLOB')
   tryExec('ALTER TABLE signals ADD COLUMN embedding_model TEXT')
+  // Store the user's challenge reason directly on the intent so it's visible in the Recent feed
+  tryExec('ALTER TABLE intents ADD COLUMN challenge_reason TEXT')
 
   // Migrate signals from old UNIQUE(surface, external_id, fingerprint) → UNIQUE(surface, external_id).
   // The 3-column constraint allowed duplicate (surface, external_id) rows to accumulate, causing

@@ -289,6 +289,7 @@ export interface Intent {
   created_at: string
   resolved_at: string | null
   error: string | null
+  challenge_reason: string | null
 }
 
 export interface Signal {
@@ -479,6 +480,8 @@ export interface IpcApi {
     sendMessage(itemId: string, message: string): Promise<void>
     getThread(itemId: string): Promise<ChatMessage[]>
     cancelStream(itemId: string): Promise<void>
+    getItem(itemId: string): Promise<PlanItem | null>
+    openInMainWindow(itemId: string): Promise<void>
   }
   routines: {
     getAll(): Promise<Routine[]>
@@ -493,6 +496,7 @@ export interface IpcApi {
     updateRunStatus(runId: string, status: RunStatus): Promise<void>
     generateSetup(intent: string): Promise<RoutineSetupDraft>
     cancelStream(runId: string): Promise<void>
+    openRunInMainWindow(runId: string): Promise<void>
   }
   config: {
     get(): Promise<AppConfig>
@@ -557,6 +561,8 @@ export interface IpcApi {
       | 'plan:item-message'
       | 'badge:updated'
       | 'navigate:edit-routine'
+      | 'navigate:run-chat'
+      | 'navigate:plan-item'
       | 'ambient:intent-created'
       | 'ambient:intent-updated'
       | 'ambient:tray-state'

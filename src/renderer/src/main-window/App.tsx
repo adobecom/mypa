@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Zap, List, Settings as SettingsIcon, Network, BarChart3 } from 'lucide-react'
+import { Zap, List, Settings as SettingsIcon, Network, BarChart3, LayoutList } from 'lucide-react'
 import LogoMark from '../LogoMark'
 import AmbientBackground from '../AmbientBackground'
 import RoutinesManager from './components/RoutinesManager'
@@ -8,10 +8,11 @@ import RunLogs from './components/RunLogs'
 import OnboardingWizard from './components/OnboardingWizard'
 import MemoryGraph from './components/MemoryGraph'
 import UsageDashboard from './components/UsageDashboard'
+import PlanItemDetail from './components/PlanItemDetail'
 import { ToastProvider, useToast } from './toast/ToastProvider'
 import type { AppConfig, RoutineRun, Intent } from '@shared/types'
 
-type Page = 'routines' | 'logs' | 'settings' | 'memory' | 'usage'
+type Page = 'routines' | 'logs' | 'settings' | 'memory' | 'usage' | 'plan'
 
 // ─── Background-event → toast bridge ─────────────────────────────────────────
 // Subscribes to routine:run-started/completed and ambient:action-executed and
@@ -126,10 +127,14 @@ const NAV: { id: Page; icon: React.ReactNode; label: string }[] = [
   { id: 'settings', icon: <SettingsIcon size={14} strokeWidth={2} />, label: 'Settings' }
 ]
 
+const NAV_HIDDEN: Set<Page> = new Set(['plan'])
+
 // Inner shell (needs access to ToastProvider context via useRunToasts)
 function AppShell(): React.ReactElement {
   const [page, setPage] = useState<Page>('routines')
   const [editRoutineId, setEditRoutineId] = useState<string | null>(null)
+  const [activePlanItemId, setActivePlanItemId] = useState<string | null>(null)
+  const [navigateRunId, setNavigateRunId] = useState<string | null>(null)
   const [config, setConfig] = useState<AppConfig | null>(null)
 
   useRunToasts(setPage)
@@ -140,10 +145,23 @@ function AppShell(): React.ReactElement {
   }, [])
 
   useEffect(() => {
-    return window.electron.on('navigate:edit-routine', (id) => {
+    const offRoutine = window.electron.on('navigate:edit-routine', (id) => {
       setPage('routines')
       setEditRoutineId(id as string)
     })
+    const offPlanItem = window.electron.on('navigate:plan-item', (id) => {
+      setActivePlanItemId(id as string)
+      setPage('plan')
+    })
+    const offRunChat = window.electron.on('navigate:run-chat', (id) => {
+      setNavigateRunId(id as string)
+      setPage('logs')
+    })
+    return () => {
+      offRoutine()
+      offPlanItem()
+      offRunChat()
+    }
   }, [])
 
   if (!config) {
@@ -176,7 +194,7 @@ function AppShell(): React.ReactElement {
           </div>
 
           <nav className="sidebar__nav">
-            {NAV.map((item) => (
+            {NAV.filter((item) => !NAV_HIDDEN.has(item.id)).map((item) => (
               <button
                 key={item.id}
                 className={`nav-item${page === item.id ? ' active' : ''}`}
@@ -186,6 +204,12 @@ function AppShell(): React.ReactElement {
                 {item.label}
               </button>
             ))}
+            {page === 'plan' && (
+              <button className="nav-item active" disabled>
+                <span className="nav-item__icon"><LayoutList size={14} strokeWidth={2} /></span>
+                Plan item
+              </button>
+            )}
           </nav>
         </aside>
 
@@ -199,10 +223,21 @@ function AppShell(): React.ReactElement {
               onEditHandled={() => setEditRoutineId(null)}
             />
           )}
-          {page === 'logs' && <RunLogs />}
+          {page === 'logs' && (
+            <RunLogs
+              initialRunId={navigateRunId}
+              onInitialRunHandled={() => setNavigateRunId(null)}
+            />
+          )}
           {page === 'memory' && <MemoryGraph />}
           {page === 'usage' && <UsageDashboard />}
           {page === 'settings' && <Settings />}
+          {page === 'plan' && (
+            <PlanItemDetail
+              itemId={activePlanItemId}
+              onBack={() => setPage('routines')}
+            />
+          )}
         </main>
       </div>
     </div>

@@ -2,7 +2,7 @@ import { BrowserWindow, screen } from 'electron'
 import { join } from 'path'
 import { readConfig } from './services/config'
 
-const WIDGET_WIDTH = 380
+const WIDGET_WIDTH = 440
 const WIDGET_HEIGHT = 580
 
 let widgetWin: BrowserWindow | null = null
