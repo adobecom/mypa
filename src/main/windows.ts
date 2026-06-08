@@ -157,7 +157,7 @@ function attachExternalLinkGuards(win: BrowserWindow): void {
       shell.openExternal(url)
     }
   })
-  win.setWindowOpenHandler(({ url }) => {
+  win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) {
       shell.openExternal(url)
     }
