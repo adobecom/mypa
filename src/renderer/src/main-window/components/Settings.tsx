@@ -22,6 +22,7 @@ export default function Settings(): React.ReactElement {
   } | null>(null)
   const [autoFilling, setAutoFilling] = useState(false)
   const [handleStatus, setHandleStatus] = useState<ResolvedOwnerHandles>({})
+  const [autoFillMessage, setAutoFillMessage] = useState<string | null>(null)
 
   const api = window.electron
 
@@ -125,18 +126,30 @@ export default function Settings(): React.ReactElement {
 
   const handleAutoFillOwner = async () => {
     setAutoFilling(true)
+    setAutoFillMessage(null)
     try {
       const resolved = await api.setup.resolveOwnerHandles()
       setHandleStatus(resolved)
-      // Merge resolved values into config, keeping any existing values the user typed
-      const currentHandles = config.owner?.handles ?? {}
-      const mergedHandles = { ...currentHandles }
-      for (const [surface, entry] of Object.entries(resolved) as [keyof typeof resolved, typeof resolved[keyof typeof resolved]][]) {
-        if (entry && !currentHandles[surface]) {
-          mergedHandles[surface] = entry.value
+      const found = Object.keys(resolved).length
+      if (found === 0) {
+        setAutoFillMessage('No identity tools found on connected servers — fill in your handles manually.')
+      } else {
+        const reviewCount = Object.values(resolved).filter((e) => e?.needsReview).length
+        setAutoFillMessage(
+          reviewCount > 0
+            ? `Found ${found} handle${found === 1 ? '' : 's'} — ${reviewCount} marked ⚠ for review (may not match your graph).`
+            : `Found ${found} handle${found === 1 ? '' : 's'}.`
+        )
+        // Merge resolved values into config, keeping any existing values the user typed
+        const currentHandles = config.owner?.handles ?? {}
+        const mergedHandles = { ...currentHandles }
+        for (const [surface, entry] of Object.entries(resolved) as [keyof typeof resolved, typeof resolved[keyof typeof resolved]][]) {
+          if (entry && !currentHandles[surface]) {
+            mergedHandles[surface] = entry.value
+          }
         }
+        setConfig({ ...config, owner: { ...(config.owner ?? {}), handles: mergedHandles } })
       }
-      setConfig({ ...config, owner: { ...(config.owner ?? {}), handles: mergedHandles } })
     } finally {
       setAutoFilling(false)
     }
@@ -204,6 +217,12 @@ export default function Settings(): React.ReactElement {
             {autoFilling ? 'Resolving…' : 'Auto-fill'}
           </button>
         </div>
+
+        {autoFillMessage && (
+          <div className="form-hint" style={{ marginBottom: 12, color: autoFillMessage.startsWith('No') ? 'var(--text-muted)' : 'var(--text-secondary)' }}>
+            {autoFillMessage}
+          </div>
+        )}
 
         <div className="form-group">
           <label className="form-label">Your name</label>
