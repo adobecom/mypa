@@ -12,12 +12,24 @@ Spawns the `claude` CLI for all AI work. See [claude-integration.md](claude-inte
 
 | Export | Description |
 |---|---|
-| `runClaude(systemPrompt, userPrompt)` | One-shot text completion (120 s timeout) |
-| `streamChat(history, userMessage, onChunk, onDone, rawContext?, streamId?)` | Streaming multi-turn chat |
+| `runClaude(systemPrompt, userPrompt, source?)` | One-shot JSON completion (120 s timeout); records usage |
+| `streamChat(history, userMessage, onChunk, onDone, rawContext?, streamId?, source?)` | Streaming multi-turn chat; records usage on completion |
 | `cancelStream(streamId)` | Kill an active stream by ID; returns `true` if found |
 | `generatePlanDraft(intent)` | Parse free-text intent → `PlanDraft` |
 | `generateRoutineDigest(name, promptTemplate, rawOutput)` | Summarize MCP output → `RoutineDigest` |
 | `generateRoutineSetup(intent, servers)` | Natural-language intent → validated `RoutineSetupDraft` |
+
+---
+
+## `usage.ts` — Usage recorder
+
+Thin wrapper around `dbInsertUsage` so `claude.ts` doesn't import the DB layer directly. All errors are swallowed — telemetry never breaks an AI call.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `recordUsage(source, model, cliResult)` | Persist a `usage_events` row from a CLI result object |
 
 ---
 
@@ -210,6 +222,7 @@ Reads an existing Claude Code config file (typically `~/.claude.json` or `~/Libr
 
 ## Changelog
 
+- 2026-06-07 — new `usage.ts` recorder; `claude.ts` switched `runClaude` to `--output-format json` and added `source: UsageSource` param; both `runClaude` and `runClaudeStream` call `recordUsage()` after each Claude call; `streamChat` and all callers (`routines.ts`, `plan.ts`, `inference.ts`, `memories.ts`) updated with source labels
 - 2026-06-07 — `routines.ts`: `routine:run-started` and `routine:run-completed` now sent via `broadcast()` (both widget + main windows) instead of widget-only `webContents.send`; `ambient.ts`: emits new `ambient:action-executed` broadcast after a tier-0 intent auto-executes successfully; added `broadcast()` helper to `windows.ts`
 - 2026-06-07 — added `getOwnerHandles()` and `buildOwnerClause()` to `config.ts`; added `resolveOwnerHandles()` to `mcp.ts`; owner clause injected into all AI system prompts; owner nodes tagged `you (handle)` in `renderPacketForPrompt`
 - 2026-06-07 — added `memory-export.ts` service; fixed `autonomy.ts` two-level tier resolution + streak reset; hardened `generateRoutineDigest` to never throw (returns graceful default)

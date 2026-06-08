@@ -60,7 +60,7 @@ export async function inferIntent(
 
   let text: string
   try {
-    text = await runClaude(systemPrompt, userPrompt)
+    text = await runClaude(systemPrompt, userPrompt, 'inference')
   } catch (e) {
     console.error('[inference] runClaude failed:', e)
     return null

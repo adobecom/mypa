@@ -148,6 +148,22 @@ Subscribed with `window.electron.on(channel, listener)`. Returns an unsubscribe 
 
 ---
 
+### `usage`
+
+Token usage and estimated cost dashboard data. All data is recorded from the moment mypa was installed (no historical backfill).
+
+| Method | Signature | Description |
+|---|---|---|
+| `getSummary` | `(range: UsageRange) → UsageSummary` | Headline totals: total tokens, cost, call count |
+| `getDaily` | `(range: UsageRange) → UsageDailyPoint[]` | Per-day aggregates for the bar chart |
+| `getBySource` | `(range: UsageRange) → UsageBreakdownRow[]` | Breakdown by feature (`UsageSource`) |
+| `getByModel` | `(range: UsageRange) → UsageBreakdownRow[]` | Breakdown by model id |
+| `getRecent` | `(limit: number) → UsageEvent[]` | Most recent N individual calls |
+
+`UsageRange = '7d' | '30d' | '90d' | 'all'`
+
+IPC channels: `usage:get-summary`, `usage:get-daily`, `usage:get-by-source`, `usage:get-by-model`, `usage:get-recent`.
+
 ## Key types (abbreviated)
 
 Full definitions in `src/shared/types.ts`.
@@ -168,6 +184,7 @@ type MemoryType      = 'fact' | 'pattern' | 'preference' | 'status'
 
 ## Changelog
 
+- 2026-06-07 — added `usage` namespace (`getSummary`, `getDaily`, `getBySource`, `getByModel`, `getRecent`); new types `UsageSource`, `UsageEvent`, `UsageSummary`, `UsageDailyPoint`, `UsageBreakdownRow`, `UsageRange` in `@shared/types`
 - 2026-06-07 — added `ambient:action-executed` push channel (broadcast to both windows on tier-0 auto-execution); `routine:run-started` and `routine:run-completed` are now broadcast to both windows via `broadcast()` in `src/main/windows.ts` (previously widget-only)
 - 2026-06-07 — added `setup.resolveOwnerHandles` channel; added `AppConfig.owner` (`OwnerIdentity`) type; added `ResolvedOwnerHandles` / `ResolvedHandle` types to `@shared/types`
 - 2026-06-07 — added `memory.exportMarkdown` channel; IPC handler drives `dialog.showSaveDialog` + `fs.writeFileSync`

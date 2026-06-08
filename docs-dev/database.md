@@ -240,6 +240,22 @@ Extracted facts, patterns, preferences, and statuses tied to graph nodes.
 | `created_at` | TEXT | |
 | `last_accessed` | TEXT | Nullable |
 
+#### `usage_events`
+
+Records every individual Claude CLI call with its token counts and estimated cost. Populated by `src/main/services/usage.ts` via `dbInsertUsage()` in `src/main/db/index.ts`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | TEXT PK | UUID |
+| `source` | TEXT | `UsageSource` — which feature triggered the call (e.g. `routine_digest`, `plan_chat`, `inference`) |
+| `model` | TEXT | Model id string (e.g. `claude-opus-4-8`) |
+| `input_tokens` | INTEGER | Input token count |
+| `output_tokens` | INTEGER | Output token count |
+| `cache_creation_tokens` | INTEGER | Prompt-cache write tokens |
+| `cache_read_tokens` | INTEGER | Prompt-cache read tokens |
+| `cost_usd` | REAL | Estimated USD cost as reported by the Claude CLI |
+| `created_at` | TEXT | ISO 8601 |
+
 ---
 
 ## Indexes
@@ -263,6 +279,8 @@ All indexes use `CREATE INDEX IF NOT EXISTS`.
 | `idx_node_signals_node` | `node_signals` | `node_id, observed_at` | Node timeline |
 | `idx_memories_active` | `memories` | `status, importance` | Active memory retrieval |
 | `idx_memories_node` | `memories` | `node_id` | Memories for a node |
+| `idx_usage_events_created` | `usage_events` | `created_at` | Time-range queries |
+| `idx_usage_events_source` | `usage_events` | `source, created_at` | Per-source breakdown |
 
 ---
 
@@ -285,5 +303,6 @@ There is no migration framework. `initSchema()` uses `CREATE TABLE IF NOT EXISTS
 
 ## Changelog
 
+- 2026-06-07 — added `usage_events` table + indexes (`idx_usage_events_created`, `idx_usage_events_source`); new query functions `dbInsertUsage`, `dbGetUsageSummary`, `dbGetUsageByDay`, `dbGetUsageBySource`, `dbGetUsageByModel`, `dbGetRecentUsage` in `src/main/db/index.ts`
 - 2026-06-07 — added `dbGetAllMemories()` (all rows incl. superseded, ordered by `created_at`); used by the memory export feature; `dbUpsertPolicy` now accepts `consecutive_approvals` reset to fix the trust-accumulation streak bug
 - 2026-06-06 — initial documentation; reflects schema as of commit d8a8774

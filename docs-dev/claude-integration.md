@@ -36,16 +36,19 @@ Model args: `['--model', model]` — omitted if the config value is empty/unset 
 ```ts
 export async function runClaude(
   systemPrompt: string,
-  userPrompt: string
+  userPrompt: string,
+  source?: UsageSource   // default 'other'
 ): Promise<string>
 ```
 
 - Concatenates system + user prompts into a single `-p` argument.
-- Flags: `--output-format text`.
+- Flags: `--output-format json` (switched from `text` to capture token usage).
+- The CLI returns a single JSON object `{ result, usage, total_cost_usd, is_error }`. `result` is returned to the caller (existing callers regex-extract JSON from it unchanged).
+- After a successful call, `recordUsage(source, model, cliResult)` is called to persist a row in `usage_events`.
 - Hard timeout: **120 seconds** — kills the process and rejects if exceeded.
-- Returns `stdout.trim()`.
+- On JSON parse failure (unexpected CLI output format), falls back to returning raw `stdout.trim()`.
 
-Used for: `generatePlanDraft`, `generateRoutineDigest`, `generateRoutineSetup`.
+Used for: `generatePlanDraft` (`source='plan_draft'`), `generateRoutineDigest` (`'routine_digest'`), `generateRoutineSetup` (`'routine_setup'`), `inferIntent` in `inference.ts` (`'inference'`), `runMemorySummarization` in `memories.ts` (`'memory'`).
 
 ---
 
@@ -58,9 +61,12 @@ export async function streamChat(
   onChunk: (chunk: string) => void,
   onDone:  (fullText: string) => void,
   rawContext?: string,
-  streamId?:   string
+  streamId?:   string,
+  source?:     UsageSource   // default 'chat'
 ): Promise<void>
 ```
+
+The `source` param is threaded to `runClaudeStream`, which captures the `result` event from the CLI's NDJSON stream (the event carrying `usage` and `total_cost_usd`) and calls `recordUsage` on process exit.
 
 Internally calls `runClaudeStream`:
 - Flags: `--output-format stream-json --verbose`.
@@ -156,8 +162,15 @@ second person ("you"), never in the third person or by their handle.
 
 This clause is appended in: `generateRoutineDigest`, `streamChat`, `generatePlanDraft` (all in `claude.ts`), `inferIntent` (`inference.ts`), and `runMemorySummarization` (`memories.ts`). Returns `''` when owner is not configured, so prompts degrade gracefully.
 
+## Usage recording
+
+`src/main/services/usage.ts` provides the `recordUsage(source, model, cliResult)` function imported by `claude.ts`. It calls `dbInsertUsage()` and swallows all errors so telemetry never disrupts an AI call.
+
+`UsageSource` labels: `'plan_draft'`, `'routine_digest'`, `'routine_setup'`, `'routine_chat'`, `'plan_chat'`, `'inference'`, `'memory'`, `'chat'`, `'other'`.
+
 ## Changelog
 
+- 2026-06-07 — `runClaude` switched from `--output-format text` to `--output-format json`; added `source: UsageSource` param; both `runClaude` and `runClaudeStream` now call `recordUsage()` after each call; new `src/main/services/usage.ts` thin recorder
 - 2026-06-07 — added owner-identity clause (`buildOwnerClause`) injected into all system prompts so the model addresses the owner as "you" when `AppConfig.owner` is configured
 - 2026-06-07 — `generateRoutineDigest` hardened to never throw (strips markdown fences, wraps JSON.parse in try/catch, returns graceful default on any failure); `parseStreamEvent` in `runClaudeStream` hardened to only pass the `result` fallback when it is plain prose (not a JSON blob), preventing raw MCP tool output from appearing in chat
 - 2026-06-06 — initial documentation

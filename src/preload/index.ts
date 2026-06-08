@@ -74,6 +74,13 @@ const api: IpcApi = {
     updateMemory: (id: string, update: object) => ipcRenderer.invoke('memory:update-memory', id, update),
     exportMarkdown: () => ipcRenderer.invoke('memory:export-markdown')
   },
+  usage: {
+    getSummary: (range) => ipcRenderer.invoke('usage:get-summary', range),
+    getDaily: (range) => ipcRenderer.invoke('usage:get-daily', range),
+    getBySource: (range) => ipcRenderer.invoke('usage:get-by-source', range),
+    getByModel: (range) => ipcRenderer.invoke('usage:get-by-model', range),
+    getRecent: (limit, range) => ipcRenderer.invoke('usage:get-recent', limit, range)
+  },
   on: (channel, listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => listener(...args)
     ipcRenderer.on(channel, wrapped)

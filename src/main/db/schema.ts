@@ -198,6 +198,23 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_node_signals_node ON node_signals(node_id, observed_at);
     CREATE INDEX IF NOT EXISTS idx_memories_active ON memories(status, importance);
     CREATE INDEX IF NOT EXISTS idx_memories_node   ON memories(node_id);
+
+    -- ─── Usage tracking ───────────────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS usage_events (
+      id                    TEXT PRIMARY KEY,
+      source                TEXT NOT NULL DEFAULT 'other',
+      model                 TEXT NOT NULL DEFAULT '',
+      input_tokens          INTEGER NOT NULL DEFAULT 0,
+      output_tokens         INTEGER NOT NULL DEFAULT 0,
+      cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+      cost_usd              REAL NOT NULL DEFAULT 0,
+      created_at            TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_usage_events_created ON usage_events(created_at);
+    CREATE INDEX IF NOT EXISTS idx_usage_events_source  ON usage_events(source, created_at);
   `)
 
   // Schema migrations — add columns introduced after initial table creation.

@@ -68,7 +68,8 @@ export async function handlePlanMessage(
         fullResponse = full
       },
       undefined,
-      itemId
+      itemId,
+      'plan_chat'
     )
     const toSave = segments.filter((s) => s.trim())
     for (const seg of toSave.length > 0 ? toSave : [fullResponse]) {

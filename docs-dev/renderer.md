@@ -73,7 +73,7 @@ Free-text input at the bottom of the widget. Calls `window.electron.plan.createD
 main-window/App.tsx (exports App → ToastProvider + AppShell)
   ├── ToastProvider         — global toast context + portal-rendered ToastContainer
   ├── AppShell
-  │     ├── Sidebar nav (4 items: Routines, Run Logs, Memory, Settings)
+  │     ├── Sidebar nav (5 items: Routines, Run Logs, Memory, Usage, Settings)
   │     ├── OnboardingWizard    — shown if onboarding_complete = false
   │     └── <page content>
   └── ToastContainer        — fixed top-right portal; renders Toast items
@@ -137,6 +137,22 @@ Interactions:
 
 Data: `window.electron.memory.getGraph()` on mount; `getNode(id)` on selection.
 
+#### Usage
+
+| Component | Description |
+|---|---|
+| `UsageDashboard` | Token usage and estimated cost dashboard; all data recorded from mypa install forward |
+
+Layout:
+- **Range selector** — segmented control (7d / 30d / 90d / All); re-fetches all five IPC calls on change.
+- **Stat grid** — 4 `.stat-card`s: Est. cost, Total tokens, Total calls, Avg cost/call.
+- **Bar chart** — SVG bar chart of daily usage (toggle cost/tokens); custom-drawn with existing CSS tokens; no chart library dependency.
+- **By feature** — proportion-bar breakdown rows grouped by `UsageSource`.
+- **By model** — same pattern grouped by model id.
+- **Recent calls** — last 30 individual `UsageEvent`s with source, model, token counts, cost, and relative time.
+
+Data: `window.electron.usage.*` — all five calls made in parallel on mount and on range change.
+
 #### Settings
 
 | Component | Description |
@@ -173,6 +189,7 @@ Located in `src/renderer/src/` (shared between widget and main window):
 
 ## Changelog
 
+- 2026-06-07 — added `UsageDashboard` page (`components/UsageDashboard.tsx`); new `'usage'` nav item in `App.tsx`; added `.segmented`/`.segmented__btn`, `.stat-card`, `.breakdown-row`, `.usage-call-row`, `.usage-chart` CSS classes to `index.css`; no new dependencies
 - 2026-06-07 — added unified toast notification system (`toast/ToastProvider.tsx`; `useToast()` hook); `App.tsx` now wraps `AppShell` in `<ToastProvider>` and runs `useRunToasts` bridge for routine run and ambient auto-exec events; `RoutinesManager`, `Settings`, `MemoryGraph` now toast on mutating action success/error
 - 2026-06-07 — added "About You" card in Settings and step 5 in OnboardingWizard; both surface owner-identity fields (name + handles) with auto-fill from MCP
 - 2026-06-07 — `MemoryGraph` header: added Export button (calls `memory.exportMarkdown`); shows saving/saved/cancelled state with a 2.5 s reset

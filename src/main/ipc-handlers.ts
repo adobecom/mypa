@@ -24,7 +24,12 @@ import {
   dbDeleteNode,
   dbDeleteEdge,
   dbDeleteMemory,
-  dbUpdateMemory
+  dbUpdateMemory,
+  dbGetUsageSummary,
+  dbGetUsageByDay,
+  dbGetUsageBySource,
+  dbGetUsageByModel,
+  dbGetRecentUsage
 } from './db/index'
 import { readConfig, updateConfig } from './services/config'
 import { testServer, getServerStatus, connectAllServers, resolveOwnerHandles } from './services/mcp'
@@ -51,7 +56,7 @@ import {
 import { dbGetActionLog } from './db/index'
 import { buildMemoryExportMarkdown } from './services/memory-export'
 import { setTrayState } from './tray'
-import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, McpServerConfig, SetupHealth, DigestSlot, Tier } from '@shared/types'
+import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, McpServerConfig, SetupHealth, DigestSlot, Tier, UsageRange } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 
 export function registerIpcHandlers(
@@ -404,5 +409,27 @@ export function registerIpcHandlers(
     const markdown = buildMemoryExportMarkdown(memories, nodes, edges)
     writeFileSync(result.filePath, markdown, 'utf8')
     return { saved: true, path: result.filePath }
+  })
+
+  // ─── Usage ────────────────────────────────────────────────────────────────
+
+  ipcMain.handle('usage:get-summary', (_e, range: UsageRange) => {
+    return dbGetUsageSummary(range)
+  })
+
+  ipcMain.handle('usage:get-daily', (_e, range: UsageRange) => {
+    return dbGetUsageByDay(range)
+  })
+
+  ipcMain.handle('usage:get-by-source', (_e, range: UsageRange) => {
+    return dbGetUsageBySource(range)
+  })
+
+  ipcMain.handle('usage:get-by-model', (_e, range: UsageRange) => {
+    return dbGetUsageByModel(range)
+  })
+
+  ipcMain.handle('usage:get-recent', (_e, limit: number, range: UsageRange) => {
+    return dbGetRecentUsage(limit, range)
   })
 }

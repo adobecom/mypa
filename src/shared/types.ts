@@ -400,6 +400,57 @@ export interface NodeSignalLink {
   observed_at: string
 }
 
+// ─── Usage tracking ──────────────────────────────────────────────────────────
+
+export type UsageSource =
+  | 'plan_draft'
+  | 'routine_digest'
+  | 'routine_setup'
+  | 'routine_chat'
+  | 'plan_chat'
+  | 'inference'
+  | 'memory'
+  | 'chat'
+  | 'other'
+
+export type UsageRange = '7d' | '30d' | '90d' | 'all'
+
+export interface UsageEvent {
+  id: string
+  source: UsageSource
+  model: string
+  input_tokens: number
+  output_tokens: number
+  cache_creation_tokens: number
+  cache_read_tokens: number
+  cost_usd: number
+  created_at: string
+}
+
+export interface UsageSummary {
+  total_input: number
+  total_output: number
+  total_cache_creation: number
+  total_cache_read: number
+  total_cost: number
+  call_count: number
+}
+
+export interface UsageDailyPoint {
+  day: string
+  input_tokens: number
+  output_tokens: number
+  cost: number
+  calls: number
+}
+
+export interface UsageBreakdownRow {
+  key: string
+  tokens: number
+  cost: number
+  calls: number
+}
+
 // ─── Setup / Health ───────────────────────────────────────────────────────────
 
 export interface SetupHealthServer {
@@ -486,6 +537,13 @@ export interface IpcApi {
     deleteMemory(id: string): Promise<void>
     updateMemory(id: string, update: { content?: string; importance?: number; status?: 'active' | 'superseded' }): Promise<void>
     exportMarkdown(): Promise<{ saved: boolean; path?: string }>
+  }
+  usage: {
+    getSummary(range: UsageRange): Promise<UsageSummary>
+    getDaily(range: UsageRange): Promise<UsageDailyPoint[]>
+    getBySource(range: UsageRange): Promise<UsageBreakdownRow[]>
+    getByModel(range: UsageRange): Promise<UsageBreakdownRow[]>
+    getRecent(limit: number, range: UsageRange): Promise<UsageEvent[]>
   }
   on(
     channel:

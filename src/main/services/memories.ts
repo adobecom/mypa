@@ -115,7 +115,7 @@ export async function runMemorySummarization(): Promise<void> {
 
   let text: string
   try {
-    text = await runClaude(SYSTEM_PROMPT + buildOwnerClause(), userPrompt)
+    text = await runClaude(SYSTEM_PROMPT + buildOwnerClause(), userPrompt, 'memory')
   } catch (e) {
     console.error('[memories] runClaude failed:', e)
     return
