@@ -391,7 +391,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
 
       {/* ── Action footer ── */}
       {!isTerminal && !challenging && (
-        <div className="routine-card__body" style={{ paddingTop: 0, display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+        <div className="routine-card__body" style={{ paddingTop: 10, display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
           {isObservation ? (
             <>
               <button

@@ -3,6 +3,7 @@ import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2 } from 'lucide-
 import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import ServerCatalogPicker from './ServerCatalogPicker'
+import { ScheduleBuilder } from './ScheduleBuilder'
 import { useToast } from '../toast/ToastProvider'
 
 const OWNER_SURFACES = ['github', 'slack', 'jira', 'linear', 'notion'] as const
@@ -984,30 +985,16 @@ function CheckInScheduleCard(): React.ReactElement {
         </div>
 
         {enabled && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-              Schedule (cron expression)
-            </label>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input
-                className="input"
-                style={{ flex: 1, fontSize: 13, fontFamily: 'var(--font-mono)' }}
-                value={schedule}
-                onChange={(e) => setSchedule(e.target.value)}
-                placeholder="0 9 * * 1"
-              />
-              <button
-                className="btn btn--primary"
-                style={{ fontSize: 12, padding: '5px 12px' }}
-                onClick={handleSaveSchedule}
-                disabled={saving}
-              >
-                {saving ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              e.g. <code>0 9 * * 1</code> = every Monday at 9 AM
-            </span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <ScheduleBuilder cron={schedule || '0 9 * * 1'} onChange={setSchedule} />
+            <button
+              className="btn btn--primary"
+              style={{ alignSelf: 'flex-end', fontSize: 12, padding: '5px 12px' }}
+              onClick={handleSaveSchedule}
+              disabled={saving}
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
           </div>
         )}
       </div>
