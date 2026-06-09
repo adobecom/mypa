@@ -64,25 +64,8 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
       status: 'pending_response'
     })
 
-    // Step 3: Infer action candidates from the raw output and route them through
-    // the intent pipeline (tier resolution → DB → graph → notify → widget card).
-    // Errors are caught per-intent so a bad result never aborts the rest of the run.
-    const intentObjects = await inferRoutineIntents(routine.name, rawOutput)
-    for (const obj of intentObjects) {
-      try {
-        await routeIntent(
-          obj,
-          'routine',
-          { routine_id: routine.id, routine_name: routine.name },
-          routineNodeId ? [routineNodeId] : [],
-          widgetWin
-        )
-      } catch (e) {
-        console.error('[routines] failed to route intent:', e)
-      }
-    }
-
-    // Step 4: OS notification (summary of what the routine found)
+    // Step 3: OS notification + push events — fire immediately after the digest so the
+    // user sees the routine result without waiting for the intent inference pipeline.
     const notification = new Notification({
       title: `mypa: ${routine.name}`,
       body: summary,
@@ -91,10 +74,26 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
     notification.show()
     notification.on('click', () => widgetWin?.show())
 
-    // Step 5: push to both windows (widget: inline card update; main: toast)
     const updatedRun = dbGetRun(run.id)
     broadcast('routine:run-completed', updatedRun)
     broadcast('badge:updated', dbGetBadgeCount())
+
+    // Step 4: Infer action candidates and route them through the intent pipeline.
+    // Runs after the completion signal so a slow or failing inference never delays
+    // the user's feedback. Intent cards arrive via ambient:intent-created broadcasts.
+    // routeIntent calls are independent — run them in parallel.
+    const intentObjects = await inferRoutineIntents(routine.name, rawOutput)
+    await Promise.allSettled(
+      intentObjects.map((obj) =>
+        routeIntent(
+          obj,
+          'routine',
+          { routine_id: routine.id, routine_name: routine.name },
+          routineNodeId ? [routineNodeId] : [],
+          widgetWin
+        ).catch((e) => console.error('[routines] failed to route intent:', e))
+      )
+    )
   } catch (err: any) {
     dbUpdateRun(run.id, {
       completed_at: new Date().toISOString(),

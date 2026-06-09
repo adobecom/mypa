@@ -6,6 +6,11 @@ import { readConfig } from './config'
 import type { Routine } from '@shared/types'
 
 const scheduledTasks = new Map<string, cron.ScheduledTask>()
+// Tracks routines whose executeRoutine promise is still in-flight. node-cron fires
+// callbacks unconditionally on every tick with no built-in overlap protection, so
+// without this guard a slow routine (Phase B inference can take up to ~120s) would
+// accumulate concurrent executions on every subsequent tick.
+const runningRoutines = new Set<string>()
 let checkinTask: cron.ScheduledTask | null = null
 
 export function startScheduler(getWidgetWin: () => BrowserWindow | null): void {
@@ -36,9 +41,18 @@ export function scheduleRoutine(routine: Routine, getWidgetWin: () => BrowserWin
   }
 
   const task = cron.schedule(routine.cron, async () => {
+    if (runningRoutines.has(routine.id)) {
+      console.log(`[cron] skipping routine "${routine.name}" — previous run still in progress`)
+      return
+    }
+    runningRoutines.add(routine.id)
     console.log(`[cron] firing routine: ${routine.name}`)
-    const win = getWidgetWin()
-    await executeRoutine(routine, win)
+    try {
+      const win = getWidgetWin()
+      await executeRoutine(routine, win)
+    } finally {
+      runningRoutines.delete(routine.id)
+    }
   })
 
   scheduledTasks.set(routine.id, task)

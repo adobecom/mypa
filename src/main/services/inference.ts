@@ -193,13 +193,22 @@ export async function inferRoutineIntents(
     return []
   }
 
-  const match = text.match(/\[[\s\S]*\]/)
-  if (!match) return []
+  // Strip optional markdown code fence the model sometimes wraps around JSON output,
+  // then try a direct parse. If the model added any preamble text with its own bracket
+  // characters, fall back to slicing from the last '[' so greedy matching can't grab
+  // a mid-sentence "[N items]..." fragment instead of the real array.
+  const stripped = text.trim().replace(/^```(?:json)?\n?([\s\S]*?)\n?```$/i, '$1').trim()
   let arr: unknown[]
   try {
-    arr = JSON.parse(match[0])
+    arr = JSON.parse(stripped)
   } catch {
-    return []
+    const lastOpen = stripped.lastIndexOf('[')
+    if (lastOpen === -1) return []
+    try {
+      arr = JSON.parse(stripped.slice(lastOpen))
+    } catch {
+      return []
+    }
   }
   if (!Array.isArray(arr)) return []
 
