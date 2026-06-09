@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { GitBranch, SquareKanban, MessageSquare, ChevronDown } from 'lucide-react'
 import type { Intent } from '../../../../../../shared/types'
+import MarkdownText from '@renderer/components/MarkdownText'
 
 interface Props {
   intent: Intent
@@ -87,7 +88,11 @@ function renderPayloadVal(v: unknown): React.ReactNode {
 }
 
 export default function IntentCard({ intent, onIntentChange }: Props): React.ReactElement {
-  const [expanded, setExpanded] = useState(false)
+  // Auto-expand cards that have a draft body for the user to review before sending
+  const hasDraft = ['body', 'text', 'comment', 'message'].some(
+    (k) => typeof (intent.payload ?? {})[k] === 'string' && String((intent.payload ?? {})[k]).trim()
+  )
+  const [expanded, setExpanded] = useState(hasDraft && intent.required_approval && !TERMINAL_STATUSES.includes(intent.status))
   const [challenging, setChallenging] = useState(false)
   const [challengeReason, setChallengeReason] = useState('')
   const [loading, setLoading] = useState(false)
@@ -98,6 +103,14 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
   const isObservation = intent.type === 'suggestion' || intent.type === 'flag'
   const needsApproval = !isObservation && intent.required_approval && intent.tier >= 2
   const agentWillHandle = !isObservation && !needsApproval && !isTerminal && intent.tier <= 1
+
+  // Editable draft — initialized from the payload's body/text/comment/message field
+  const payloadDraftKey = ['body', 'text', 'comment', 'message'].find(
+    (k) => typeof (intent.payload ?? {})[k] === 'string'
+  )
+  const [draftText, setDraftText] = useState<string>(
+    payloadDraftKey ? String((intent.payload ?? {})[payloadDraftKey]) : ''
+  )
 
   const cardClass = [
     'routine-card',
@@ -120,7 +133,13 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
   async function handleApprove(): Promise<void> {
     setLoading(true)
     try {
-      const updated = await api.ambient.approve(intent.id)
+      // Pass the user-edited draft text back as the updated payload so the agent
+      // executes the reviewed, edited version rather than the original draft.
+      let editedPayload: Record<string, unknown> | undefined
+      if (payloadDraftKey && draftText.trim()) {
+        editedPayload = { ...(intent.payload ?? {}), [payloadDraftKey]: draftText }
+      }
+      const updated = await api.ambient.approve(intent.id, editedPayload)
       onIntentChange(updated as Intent)
     } catch (e) {
       console.error('approve error:', e)
@@ -154,7 +173,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
   // ── Expand detail helpers ──────────────────────────────────────────────────
 
   const payload = intent.payload ?? {}
-  const payloadTextKey = ['body', 'text', 'comment', 'message'].find((k) => typeof payload[k] === 'string')
+  const payloadTextKey = payloadDraftKey  // same key, kept for clarity in JSX below
   const payloadText = payloadTextKey ? String(payload[payloadTextKey]) : null
   const payloadExtra = Object.entries(payload).filter(([k]) => k !== payloadTextKey)
 
@@ -222,7 +241,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
           {/* Why this surfaced */}
           <div className="intent-detail__section">
             <div className="intent-detail__label">Why this surfaced</div>
-            <div className="intent-detail__text">{intent.rationale}</div>
+            <MarkdownText className="intent-detail__text">{intent.rationale}</MarkdownText>
           </div>
 
           {/* Proposed action */}
@@ -240,8 +259,18 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
                   <span style={{ color: 'var(--yellow)' }}>· irreversible</span>
                 )}
               </div>
-              {payloadText && (
-                <div className="intent-detail__quote">{payloadText}</div>
+              {payloadText !== null && !isTerminal && (
+                <textarea
+                  className="intent-detail__draft"
+                  value={draftText}
+                  onChange={(e) => setDraftText(e.target.value)}
+                  rows={4}
+                  placeholder="Edit draft before sending…"
+                  style={{ width: '100%', resize: 'vertical', marginTop: 6, boxSizing: 'border-box' }}
+                />
+              )}
+              {payloadText !== null && isTerminal && (
+                <MarkdownText className="intent-detail__quote">{payloadText}</MarkdownText>
               )}
               {payloadExtra.length > 0 && (
                 <div className="intent-detail__kv">
@@ -309,9 +338,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
              <>
                <span>Challenged</span>
                {intent.challenge_reason && (
-                 <div className="intent-detail__quote" style={{ marginTop: 4, fontSize: 11 }}>
-                   {intent.challenge_reason}
-                 </div>
+                 <MarkdownText className="intent-detail__quote">{intent.challenge_reason}</MarkdownText>
                )}
              </>
            ) :
@@ -363,7 +390,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
 
       {/* ── Action footer ── */}
       {!isTerminal && !challenging && (
-        <div className="routine-card__body" style={{ paddingTop: 0, display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+        <div className="routine-card__body" style={{ paddingTop: 10, display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
           {isObservation ? (
             <>
               <button
@@ -405,10 +432,10 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
                 <button
                   className="btn btn--primary"
                   onClick={(e) => { e.stopPropagation(); handleApprove() }}
-                  disabled={loading}
+                  disabled={loading || (!!payloadDraftKey && !draftText.trim())}
                   style={{ fontSize: 11 }}
                 >
-                  Approve
+                  {payloadDraftKey ? 'Send' : 'Approve'}
                 </button>
               )}
             </>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Sparkles } from 'lucide-react'
 import type { AmbientDigest, DigestSlot } from '../../../../../../shared/types'
+import MarkdownText from '@renderer/components/MarkdownText'
 
 const SLOTS: DigestSlot[] = ['morning', 'midday', 'eod']
 const SLOT_LABELS: Record<DigestSlot, string> = { morning: 'Morning', midday: 'Midday', eod: 'End of Day' }
@@ -84,7 +85,10 @@ export default function DigestView(): React.ReactElement {
               <div style={{ marginBottom: 10 }}>
                 <div className="section-subheader">Did</div>
                 {digest.section.did.map((item, i) => (
-                  <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', padding: '2px 0' }}>• {item}</div>
+                  <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'flex-start', padding: '2px 0', fontSize: 12, color: 'var(--text-secondary)' }}>
+                    <span style={{ fontSize: 11, lineHeight: '18px', flexShrink: 0 }}>·</span>
+                    <MarkdownText>{item}</MarkdownText>
+                  </div>
                 ))}
               </div>
             )}
@@ -93,7 +97,10 @@ export default function DigestView(): React.ReactElement {
               <div style={{ marginBottom: 10 }}>
                 <div className="section-subheader">Watching</div>
                 {digest.section.watching.map((item, i) => (
-                  <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', padding: '2px 0' }}>• {item}</div>
+                  <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'flex-start', padding: '2px 0', fontSize: 12, color: 'var(--text-secondary)' }}>
+                    <span style={{ fontSize: 11, lineHeight: '18px', flexShrink: 0 }}>·</span>
+                    <MarkdownText>{item}</MarkdownText>
+                  </div>
                 ))}
               </div>
             )}

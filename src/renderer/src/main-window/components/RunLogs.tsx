@@ -165,11 +165,6 @@ export default function RunLogs({ initialRunId, onInitialRunHandled }: Props): R
 
   return (
     <div>
-      <div className="page-header">
-        <div className="page-title">Run Logs</div>
-        <div className="page-subtitle">History of all routine executions</div>
-      </div>
-
       {loading ? (
         <div style={{ padding: 24, color: 'var(--text-muted)' }}>Loading…</div>
       ) : runs.length === 0 ? (

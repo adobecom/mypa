@@ -48,6 +48,7 @@ import {
 } from './db/index'
 import {
   ambientGetIntents,
+  ambientGetAllIntents,
   ambientApproveIntent,
   ambientDismissIntent,
   ambientChallengeIntent,
@@ -375,9 +376,14 @@ export function registerIpcHandlers(
     return ambientGetIntents()
   })
 
-  ipcMain.handle('ambient:approve', async (_e, id: string) => {
-    const intent = await ambientApproveIntent(id)
-    getWidgetWin()?.webContents.send('ambient:intent-updated', intent)
+  ipcMain.handle('ambient:get-all-intents', async (_e, limit?: number) => {
+    return ambientGetAllIntents(limit)
+  })
+
+  ipcMain.handle('ambient:approve', async (_e, id: string, payload?: Record<string, unknown>) => {
+    const intent = await ambientApproveIntent(id, payload)
+    // broadcast updated intent so both windows reflect the new status
+    broadcast('ambient:intent-updated', intent)
     refreshAmbientTray()
     getWidgetWin()?.webContents.send('badge:updated', dbGetBadgeCount())
     return intent
@@ -385,15 +391,15 @@ export function registerIpcHandlers(
 
   ipcMain.handle('ambient:dismiss', async (_e, id: string) => {
     const intent = ambientDismissIntent(id)
-    // Send a full Intent object (same shape as approve/challenge) so renderer can merge it
-    getWidgetWin()?.webContents.send('ambient:intent-updated', intent)
+    // broadcast to all windows so Activity page reflects dismissals too
+    broadcast('ambient:intent-updated', intent)
     refreshAmbientTray()
     getWidgetWin()?.webContents.send('badge:updated', dbGetBadgeCount())
   })
 
   ipcMain.handle('ambient:challenge', async (_e, id: string, reason: string) => {
     const intent = await ambientChallengeIntent(id, reason)
-    getWidgetWin()?.webContents.send('ambient:intent-updated', intent)
+    broadcast('ambient:intent-updated', intent)
     refreshAmbientTray()
     return intent
   })

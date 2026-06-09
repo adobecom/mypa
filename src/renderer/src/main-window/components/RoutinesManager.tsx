@@ -32,9 +32,6 @@ function RoutineAiSetup({
 
   return (
     <div>
-      <div className="page-header">
-        <div className="page-title">New routine</div>
-      </div>
       <div className="card">
         <div className="card__header">
           <div>
@@ -178,10 +175,8 @@ export default function RoutinesManager({ editRoutineId, onEditHandled }: Props)
   if (editing) {
     return (
       <div>
-        <div className="page-header">
-          <button className="btn btn--ghost btn--sm" onClick={() => setEditing(null)}>
-            ← Back
-          </button>
+        <div style={{ marginBottom: 12 }}>
+          <button className="btn btn--ghost btn--sm" onClick={() => setEditing(null)}>← Back</button>
         </div>
         <RoutineForm
           initial={editing}
@@ -195,10 +190,8 @@ export default function RoutinesManager({ editRoutineId, onEditHandled }: Props)
   if (showForm) {
     return (
       <div>
-        <div className="page-header">
-          <button className="btn btn--ghost btn--sm" onClick={() => { setShowForm(false); setSetupDraft(null); setShowAiSetup(true) }}>
-            ← Back
-          </button>
+        <div style={{ marginBottom: 12 }}>
+          <button className="btn btn--ghost btn--sm" onClick={() => { setShowForm(false); setSetupDraft(null); setShowAiSetup(true) }}>← Back</button>
         </div>
         <RoutineForm
           setupDraft={setupDraft ?? undefined}
@@ -211,16 +204,10 @@ export default function RoutinesManager({ editRoutineId, onEditHandled }: Props)
 
   return (
     <div>
-      <div className="page-header">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <div className="page-title">Routines</div>
-            <div className="page-subtitle">Scheduled jobs that check your tools and notify you</div>
-          </div>
-          <button className="btn btn--primary" onClick={() => setShowAiSetup(true)}>
-            + New routine
-          </button>
-        </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+        <button className="btn btn--primary" onClick={() => setShowAiSetup(true)}>
+          + New routine
+        </button>
       </div>
 
       {loading ? (

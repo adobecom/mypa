@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef, KeyboardEvent } from 'react'
 import { Sparkles, ArrowUp, Square } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import type { ChatMessage } from '../../../../../../shared/types'
+import MarkdownText from '@renderer/components/MarkdownText'
 
 interface Props {
   messages: ChatMessage[]
@@ -12,22 +11,6 @@ interface Props {
   sendDisabled?: boolean
   error?: string | null
   onStop?: () => void
-}
-
-const markdownComponents = {
-  a: ({ href, children }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { children?: React.ReactNode }) => (
-    <a
-      href={href}
-      onClick={(e) => {
-        if (href) {
-          e.preventDefault()
-          window.electron.system.openExternal(href)
-        }
-      }}
-    >
-      {children}
-    </a>
-  )
 }
 
 export default function ChatThread({
@@ -74,8 +57,8 @@ export default function ChatThread({
               {segments.map((seg, i) => (
                 <div key={i} className="chat-message chat-message--assistant">
                   <div className="chat-message__avatar"><Sparkles size={10} /></div>
-                  <div className="chat-message__bubble md-text">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{seg}</ReactMarkdown>
+                  <div className="chat-message__bubble">
+                    <MarkdownText>{seg}</MarkdownText>
                   </div>
                 </div>
               ))}
@@ -137,8 +120,8 @@ function ChatBubble({ message }: { message: ChatMessage }): React.ReactElement {
   return (
     <div className={`chat-message chat-message--${message.role}`}>
       <div className="chat-message__avatar">{isUser ? 'U' : <Sparkles size={10} />}</div>
-      <div className="chat-message__bubble md-text">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{message.content}</ReactMarkdown>
+      <div className="chat-message__bubble">
+        <MarkdownText>{message.content}</MarkdownText>
       </div>
     </div>
   )
