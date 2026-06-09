@@ -231,6 +231,22 @@ export function dbCreatePlanItem(draft: PlanDraft): PlanItem {
   return dbGetPlanItem(id)!
 }
 
+// Creates a read-only done record for an intent the agent executed autonomously.
+// The record surfaces in the Queue's Done section as a durable trail of agent actions.
+export function dbCreateAmbientActionRecord(intent: Intent): PlanItem {
+  const id = uuidv4()
+  const created_at = new Date().toISOString()
+  const title = intent.target
+    ? `${intent.verb ?? 'act'} on ${intent.target}`
+    : `${intent.surface ?? 'agent'}:${intent.verb ?? 'action'}`
+  getDb()
+    .prepare(
+      'INSERT INTO plan_items (id, title, detail, status, timing, source, created_at, actions) VALUES (?,?,?,?,?,?,?,?)'
+    )
+    .run(id, title.slice(0, 200), intent.rationale ?? '', 'done', 'anytime', 'ambient_action', created_at, '[]')
+  return dbGetPlanItem(id)!
+}
+
 export function dbUpdatePlanItemStatus(id: string, status: PlanItemStatus): void {
   const current = dbGetPlanItem(id)
   if (!current) return

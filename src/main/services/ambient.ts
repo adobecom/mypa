@@ -9,6 +9,7 @@ import {
   dbSetIntentChallengeReason,
   dbUpdateIntentPayload,
   dbGetBadgeCount,
+  dbCreateAmbientActionRecord,
   dbAppendActionLog,
   dbGetAllPolicies,
   dbUpsertNode,
@@ -267,6 +268,16 @@ async function executeIntent(intent: Intent, win: BrowserWindow | null): Promise
       detail: {},
       created_at: new Date().toISOString()
     })
+
+    // Graduate the executed intent into a done plan record so the Queue's Done
+    // section shows a durable trail of what the agent did. Failures here are
+    // non-fatal — they don't affect the intent's own executed status.
+    try {
+      dbCreateAmbientActionRecord(intent)
+      broadcast('badge:updated', dbGetBadgeCount())
+    } catch (graduationErr) {
+      console.error('[ambient] failed to create graduation plan record:', graduationErr)
+    }
   } catch (e: any) {
     console.error(`[ambient] execution failed for ${actionType}:`, e)
     dbUpdateIntentStatus(intent.id, 'failed', String(e?.message ?? e))
