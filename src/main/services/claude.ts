@@ -25,9 +25,14 @@ function getClaude(): string {
 
 const activeStreams = new Map<string, { proc: import('child_process').ChildProcess; killed: boolean }>()
 
-function modelArgs(): string[] {
-  const model = readConfig().claude.model
-  return model ? ['--model', model] : []
+function modelArgs(model?: string): string[] {
+  const m = model ?? readConfig().claude.model
+  return m ? ['--model', m] : []
+}
+
+function claudeEnv(key?: string): NodeJS.ProcessEnv {
+  const k = key ?? readConfig().claude.apiKey
+  return k ? { ...process.env, ANTHROPIC_API_KEY: k } : process.env
 }
 
 export async function runClaude(
@@ -36,12 +41,13 @@ export async function runClaude(
   source: UsageSource = 'other'
 ): Promise<string> {
   const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
-  const model = readConfig().claude.model ?? ''
+  const cfg = readConfig().claude
+  const model = cfg.model ?? ''
   return new Promise((resolve, reject) => {
     const proc = spawn(
       getClaude(),
-      ['-p', fullPrompt, '--output-format', 'json', ...modelArgs()],
-      { stdio: ['ignore', 'pipe', 'pipe'] }
+      ['-p', fullPrompt, '--output-format', 'json', ...modelArgs(cfg.model)],
+      { stdio: ['ignore', 'pipe', 'pipe'], env: claudeEnv(cfg.apiKey) }
     )
     let stdout = ''
     let stderr = ''
@@ -127,15 +133,16 @@ async function runClaudeStream(
 ): Promise<string> {
   const history = messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')
   const fullPrompt = `${systemPrompt}\n\n${history}`
-  const model = readConfig().claude.model ?? ''
+  const cfg = readConfig().claude
+  const model = cfg.model ?? ''
 
   return new Promise((resolve, reject) => {
     const proc = spawn(getClaude(), [
       '-p', fullPrompt,
       '--output-format', 'stream-json',
       '--verbose',
-      ...modelArgs()
-    ])
+      ...modelArgs(cfg.model)
+    ], { env: claudeEnv(cfg.apiKey) })
     proc.stdin?.end()
     let full = ''
     let buf = ''

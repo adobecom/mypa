@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { Check, AlertTriangle, XCircle, RefreshCw, Wand2 } from 'lucide-react'
+import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2 } from 'lucide-react'
 import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import ServerCatalogPicker from './ServerCatalogPicker'
@@ -26,6 +26,8 @@ export default function Settings(): React.ReactElement {
   } | null>(null)
   const [autoFilling, setAutoFilling] = useState(false)
   const [handleStatus, setHandleStatus] = useState<ResolvedOwnerHandles>({})
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [apiKeyStatus, setApiKeyStatus] = useState<{ configured: boolean; preview: string | null }>({ configured: false, preview: null })
 
   const api = window.electron
   const toast = useToast()
@@ -42,6 +44,7 @@ export default function Settings(): React.ReactElement {
   useEffect(() => {
     api.config.get().then(setConfig)
     api.config.getMcpStatus().then(setStatus)
+    api.config.getClaudeKey().then(setApiKeyStatus)
     refreshHealth()
   }, [])
 
@@ -65,6 +68,12 @@ export default function Settings(): React.ReactElement {
     setSaving(true)
     try {
       await api.config.update(config)
+      // Save API key if the user typed a new one
+      if (apiKeyInput.trim()) {
+        await api.config.setClaudeKey(apiKeyInput.trim())
+        setApiKeyInput('')
+        setApiKeyStatus(await api.config.getClaudeKey())
+      }
       setSaved(true)
       setTimeout(() => setSaved(false), 2500)
       const [newStatus] = await Promise.all([api.config.getMcpStatus(), refreshHealth()])
@@ -74,6 +83,17 @@ export default function Settings(): React.ReactElement {
       toast.error('Failed to save settings', { message: err?.message })
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleRemoveApiKey = async () => {
+    try {
+      await api.config.setClaudeKey(null)
+      setApiKeyInput('')
+      setApiKeyStatus({ configured: false, preview: null })
+      toast.success('API key removed')
+    } catch (err: any) {
+      toast.error('Failed to remove API key', { message: err?.message })
     }
   }
 
@@ -354,7 +374,7 @@ export default function Settings(): React.ReactElement {
         </div>
         <div className="form-group">
           <div className="form-hint" style={{ marginBottom: 12 }}>
-            Powered by your local Claude Code CLI — no API key required.
+            Powered by your local Claude Code CLI. Optionally provide your own Anthropic API key — when set it overrides the CLI's own authentication.
           </div>
           <label className="form-label">Model</label>
           <select
@@ -366,6 +386,38 @@ export default function Settings(): React.ReactElement {
             <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
             <option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (fastest)</option>
           </select>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Anthropic API Key</label>
+          {apiKeyStatus.configured && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                {apiKeyStatus.preview}
+              </span>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={handleRemoveApiKey}
+                style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text-danger, #e53e3e)' }}
+              >
+                <Trash2 size={12} />
+                Remove
+              </button>
+            </div>
+          )}
+          <input
+            className="form-input"
+            type="password"
+            placeholder={apiKeyStatus.configured ? 'Enter a new key to replace' : 'sk-ant-…'}
+            value={apiKeyInput}
+            onChange={(e) => setApiKeyInput(e.target.value)}
+            autoComplete="off"
+          />
+          <div className="form-hint">
+            {apiKeyStatus.configured
+              ? 'Leave blank to keep the current key. The key is encrypted at rest.'
+              : 'Optional. Leave blank to use the Claude Code CLI\'s own authentication.'}
+          </div>
         </div>
       </div>
 

@@ -170,6 +170,7 @@ This clause is appended in: `generateRoutineDigest`, `streamChat`, `generatePlan
 
 ## Changelog
 
+- 2026-06-09 — added `claudeEnv()` helper in `claude.ts`; both `runClaude` and `runClaudeStream` now pass `env: claudeEnv()` to `spawn`, injecting `ANTHROPIC_API_KEY` when `AppConfig.claude.apiKey` is set; if unset the process inherits the parent env (CLI's own auth)
 - 2026-06-07 — `runClaude` switched from `--output-format text` to `--output-format json`; added `source: UsageSource` param; both `runClaude` and `runClaudeStream` now call `recordUsage()` after each call; new `src/main/services/usage.ts` thin recorder
 - 2026-06-07 — added owner-identity clause (`buildOwnerClause`) injected into all system prompts so the model addresses the owner as "you" when `AppConfig.owner` is configured
 - 2026-06-07 — `generateRoutineDigest` hardened to never throw (strips markdown fences, wraps JSON.parse in try/catch, returns graceful default on any failure); `parseStreamEvent` in `runClaudeStream` hardened to only pass the `result` fallback when it is plain prose (not a JSON blob), preventing raw MCP tool output from appearing in chat
