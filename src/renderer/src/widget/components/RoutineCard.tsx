@@ -38,7 +38,13 @@ export default function RoutineCard({ run, onRunChange, collapsed }: Props): Rea
   }, [expanded, run.id])
 
   useEffect(() => {
-    const unsub = api.on('routine:run-message', (payload) => {
+    const unsubMsg = api.on('routine:user-message', (payload) => {
+      const p = payload as { runId: string; message: ChatMessage }
+      if (p.runId !== run.id) return
+      setThread((prev) => [...prev, p.message])
+      setStreaming(true)
+    })
+    const unsubStream = api.on('routine:run-message', (payload) => {
       const p = payload as { runId: string; chunk: string; done: boolean; error?: string }
       if (p.runId !== run.id) return
       if (p.done) {
@@ -59,17 +65,12 @@ export default function RoutineCard({ run, onRunChange, collapsed }: Props): Rea
         setStreamContent((prev) => prev + p.chunk)
       }
     })
-    return unsub
+    return () => { unsubMsg(); unsubStream() }
   }, [run.id])
 
   const handleSend = async (msg: string) => {
     setChatError(null)
-    setStreaming(true)
     setStreamContent('')
-    setThread((prev) => [
-      ...prev,
-      { id: Date.now().toString(), role: 'user', content: msg, timestamp: new Date().toISOString() }
-    ])
     await api.routines.sendMessage(run.id, msg)
   }
 

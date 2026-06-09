@@ -42,6 +42,17 @@ export default function PlanItemDetail({ itemId, onBack }: Props): React.ReactEl
 
   useEffect(() => {
     if (!itemId) return
+    const unsub = api.on('plan:user-message', (payload) => {
+      const p = payload as { itemId: string; message: ChatMessage }
+      if (p.itemId !== itemId) return
+      setThread((prev) => [...prev, p.message])
+      setStreaming(true)
+    })
+    return unsub
+  }, [itemId])
+
+  useEffect(() => {
+    if (!itemId) return
     const unsub = api.on('plan:item-message', (payload) => {
       const p = payload as { itemId: string; chunk: string; done: boolean; error?: string }
       if (p.itemId !== itemId) return
@@ -64,12 +75,7 @@ export default function PlanItemDetail({ itemId, onBack }: Props): React.ReactEl
   const handleSend = async (msg: string) => {
     if (!itemId) return
     setChatError(null)
-    setStreaming(true)
     setStreamContent('')
-    setThread((prev) => [
-      ...prev,
-      { id: Date.now().toString(), role: 'user', content: msg, timestamp: new Date().toISOString() }
-    ])
     await api.plan.sendMessage(itemId, msg)
   }
 

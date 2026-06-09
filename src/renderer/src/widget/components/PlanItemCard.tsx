@@ -31,7 +31,16 @@ export default function PlanItemCard({
     api.plan.getThread(item.id).then(setThread)
   }, [expanded, item.id])
 
-  // Listen for streaming messages
+  useEffect(() => {
+    const unsub = api.on('plan:user-message', (payload) => {
+      const p = payload as { itemId: string; message: ChatMessage }
+      if (p.itemId !== item.id) return
+      setThread((prev) => [...prev, p.message])
+      setStreaming(true)
+    })
+    return unsub
+  }, [item.id])
+
   useEffect(() => {
     if (!expanded) return
     const unsub = api.on('plan:item-message', (payload) => {
@@ -77,12 +86,7 @@ export default function PlanItemCard({
 
   const handleSend = async (msg: string) => {
     setChatError(null)
-    setStreaming(true)
     setStreamContent('')
-    setThread((prev) => [
-      ...prev,
-      { id: Date.now().toString(), role: 'user', content: msg, timestamp: new Date().toISOString() }
-    ])
     await api.plan.sendMessage(item.id, msg)
   }
 

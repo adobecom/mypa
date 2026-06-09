@@ -1,4 +1,3 @@
-import { BrowserWindow } from 'electron'
 import { broadcast } from '../windows'
 import {
   dbCreatePlanItem,
@@ -44,10 +43,10 @@ export function deletePlanItem(id: string): void {
 
 export async function handlePlanMessage(
   itemId: string,
-  userMessage: string,
-  widgetWin: BrowserWindow | null
+  userMessage: string
 ): Promise<void> {
-  dbAddPlanMessage(itemId, 'user', userMessage)
+  const userMsg = dbAddPlanMessage(itemId, 'user', userMessage)
+  broadcast('plan:user-message', { itemId, message: userMsg })
 
   const history = dbGetPlanThread(itemId).slice(0, -1)
 
@@ -77,7 +76,7 @@ export async function handlePlanMessage(
       if (seg.trim()) dbAddPlanMessage(itemId, 'assistant', seg)
     }
     broadcast('plan:item-message', { itemId, chunk: '', done: true })
-    widgetWin?.webContents.send('badge:updated', dbGetBadgeCount())
+    broadcast('badge:updated', dbGetBadgeCount())
   } catch (err: any) {
     broadcast('plan:item-message', {
       itemId,
