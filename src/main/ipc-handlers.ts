@@ -32,7 +32,7 @@ import {
   dbGetUsageByModel,
   dbGetRecentUsage
 } from './db/index'
-import { readConfig, updateConfig } from './services/config'
+import { readConfig, updateConfig, clearClaudeApiKey } from './services/config'
 import { testServer, getServerStatus, connectAllServers, resolveOwnerHandles } from './services/mcp'
 import { startDeviceFlow, pollDeviceFlow, startPkceFlow } from './services/oauth'
 import { detectClaudeMcpServers } from './services/claude-import'
@@ -199,7 +199,30 @@ export function registerIpcHandlers(
   // ─── Config ────────────────────────────────────────────────────────────────
 
   ipcMain.handle('config:get', async () => {
-    return readConfig()
+    // Strip the API key — it must never be sent to the renderer in plaintext.
+    // Use getClaudeKey() for the masked preview.
+    const cfg = readConfig()
+    const safeConfig = { ...cfg, claude: { ...cfg.claude } }
+    delete safeConfig.claude.apiKey
+    return safeConfig
+  })
+
+  ipcMain.handle('config:get-claude-key', async () => {
+    const key = readConfig().claude.apiKey ?? ''
+    if (!key) return { configured: false, preview: null }
+    // Show prefix up through the third dash (e.g. 'sk-ant-') + last 4 chars
+    const parts = key.split('-')
+    const prefix = parts.length >= 3 ? `${parts.slice(0, 3).join('-')}-` : key.slice(0, Math.min(10, key.length))
+    const preview = key.length > 8 ? `${prefix}…${key.slice(-4)}` : '…'
+    return { configured: true, preview }
+  })
+
+  ipcMain.handle('config:set-claude-key', async (_e, key: string | null) => {
+    if (key && key.trim()) {
+      updateConfig({ claude: { apiKey: key.trim() } })
+    } else {
+      clearClaudeApiKey()
+    }
   })
 
   ipcMain.handle('config:update', async (_e, partial) => {

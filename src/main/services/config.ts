@@ -53,6 +53,22 @@ function decryptEnvs(config: AppConfig): AppConfig {
   }
 }
 
+function encryptClaude(config: AppConfig): AppConfig {
+  if (!config.claude?.apiKey) return config
+  return {
+    ...config,
+    claude: { ...config.claude, apiKey: encryptValue(config.claude.apiKey) },
+  }
+}
+
+function decryptClaude(config: AppConfig): AppConfig {
+  if (!config.claude?.apiKey) return config
+  return {
+    ...config,
+    claude: { ...config.claude, apiKey: decryptValue(config.claude.apiKey) },
+  }
+}
+
 function encryptOAuthApps(config: AppConfig): AppConfig {
   if (!config.oauth_apps) return config
   return {
@@ -92,7 +108,7 @@ export function readConfig(): AppConfig {
   try {
     const raw = readFileSync(CONFIG_PATH, 'utf8')
     const parsed = JSON.parse(raw)
-    return decryptOAuthApps(decryptEnvs(deepMerge(DEFAULT_CONFIG, parsed) as AppConfig))
+    return decryptClaude(decryptOAuthApps(decryptEnvs(deepMerge(DEFAULT_CONFIG, parsed) as AppConfig)))
   } catch {
     return { ...DEFAULT_CONFIG }
   }
@@ -100,7 +116,16 @@ export function readConfig(): AppConfig {
 
 export function writeConfig(config: AppConfig): void {
   ensureConfigDir()
-  writeFileSync(CONFIG_PATH, JSON.stringify(encryptOAuthApps(encryptEnvs(config)), null, 2))
+  writeFileSync(CONFIG_PATH, JSON.stringify(encryptClaude(encryptOAuthApps(encryptEnvs(config))), null, 2))
+}
+
+/** Removes the stored Anthropic API key. Separate from updateConfig because deepMerge skips undefined. */
+export function clearClaudeApiKey(): AppConfig {
+  const current = readConfig()
+  const updated: AppConfig = { ...current, claude: { ...current.claude } }
+  delete updated.claude.apiKey
+  writeConfig(updated)
+  return updated
 }
 
 export function updateConfig(partial: Partial<AppConfig>): AppConfig {

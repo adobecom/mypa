@@ -57,10 +57,12 @@ Read and write app configuration; query MCP server status.
 
 | Method | Signature | Description |
 |---|---|---|
-| `get` | `() → AppConfig` | Read the full config (secrets are decrypted in memory, not transmitted raw) |
+| `get` | `() → AppConfig` | Read the full config; `claude.apiKey` is stripped — use `getClaudeKey` for key status |
 | `update` | `(config: Partial<AppConfig>) → void` | Deep-merge a partial config update |
 | `testMcpServer` | `(cfg: McpServerConfig) → { ok, tools, error? }` | Test a single MCP server connection |
 | `getMcpStatus` | `() → McpServerStatus[]` | Live connection status + tool list for all configured servers |
+| `getClaudeKey` | `() → { configured: boolean; preview: string \| null }` | Returns whether a custom Anthropic API key is stored and a masked preview (e.g. `sk-ant-…AB12`); never returns the raw key |
+| `setClaudeKey` | `(key: string \| null) → void` | Store or remove the custom API key (encrypted at rest); pass `null` or empty string to clear |
 
 ### `oauth`
 
@@ -232,6 +234,7 @@ Manage PA check-in sessions and their chat threads.
 
 ## Changelog
 
+- 2026-06-09 — added `config.getClaudeKey` and `config.setClaudeKey` channels; `config.get` now strips `claude.apiKey` before returning to the renderer (raw key never transmitted); `ClaudeConfig` gained `apiKey?: string` (encrypted at rest via `safeStorage`)
 - 2026-06-08 — added `checkin` namespace (`start`, `getActive`, `getAll`, `getThread`, `sendMessage`, `end`, `cancelStream`, `openInMainWindow`); new push channels `checkin:started`, `checkin:message`, `checkin:status-changed`, `navigate:checkin`; added `CheckInStatus`, `CheckIn`, `CheckInConfig`, `CheckInExtractionSummary` types; `AppConfig.checkin?: CheckInConfig`; `UsageSource` extended with `'checkin_chat'` and `'checkin_extract'`
 - 2026-06-08 — added `system.openExternal` method + `system:open-external` IPC handler (opens URL in default browser via `shell.openExternal`); added `plan:item-updated` push channel (broadcast to both windows when plan item status changes); both windows now have `will-navigate` + `setWindowOpenHandler` guards that redirect external URLs to the default browser
 - 2026-06-08 — added `plan.getItem`, `plan.openInMainWindow`; `routines.openRunInMainWindow`; new push channels `navigate:run-chat` and `navigate:plan-item`; `Intent` type gained `challenge_reason: string | null`

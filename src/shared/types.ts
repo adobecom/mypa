@@ -129,6 +129,7 @@ export interface DetectedMcpServer {
 
 export interface ClaudeConfig {
   model?: string
+  apiKey?: string
 }
 
 export interface AppPreferences {
@@ -534,6 +535,8 @@ export interface IpcApi {
     update(config: Partial<AppConfig>): Promise<void>
     testMcpServer(cfg: McpServerConfig): Promise<{ ok: boolean; tools: McpTool[]; error?: string }>
     getMcpStatus(): Promise<McpServerStatus[]>
+    getClaudeKey(): Promise<{ configured: boolean; preview: string | null }>
+    setClaudeKey(key: string | null): Promise<void>
   }
   oauth: {
     startDevice(): Promise<DeviceFlowStart>
