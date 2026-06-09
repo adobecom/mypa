@@ -313,6 +313,49 @@ function verbToTool(surface: string, verb: string): string | null {
   return VERB_TO_TOOL[surface]?.[verb] ?? null
 }
 
+// ─── External-pipeline routing ───────────────────────────────────────────────
+// Called by other services (e.g. routines.ts) to route an already-inferred
+// IntentObject through the same tier/DB/graph/notify pipeline as ambient intents.
+
+export async function routeIntent(
+  obj: IntentObject,
+  triggerKind: TriggerKind,
+  contextPacket: Record<string, unknown>,
+  focusNodeIds: string[],
+  win: BrowserWindow | null
+): Promise<void> {
+  const tier = resolveTier(obj)
+  const intent = dbCreateIntent(obj, triggerKind, tier, contextPacket)
+
+  try {
+    const label = (obj.rationale ?? `${obj.proposed_action.verb} intent`).slice(0, 120)
+    const intentNode = dbUpsertNode('intent', `intent:${intent.id}`, label, {
+      type: intent.type,
+      surface: intent.surface,
+      verb: intent.verb,
+      tier,
+      status: intent.status
+    })
+    dbBumpNodeWeight(intentNode.id, 1.5)
+    for (const nodeId of focusNodeIds.slice(0, 3)) {
+      dbUpsertEdge(intentNode.id, nodeId, 'targets', 1.0)
+    }
+  } catch (e) {
+    console.error('[ambient] routeIntent graph node error:', e)
+  }
+
+  dbAppendActionLog({
+    intent_id: intent.id,
+    event: 'emitted',
+    action_type: actionTypeOf(obj),
+    tier,
+    detail: { trigger: triggerKind },
+    created_at: new Date().toISOString()
+  })
+
+  await handleIntent(intent, win)
+}
+
 // ─── IPC-callable operations ──────────────────────────────────────────────────
 
 export function ambientGetIntents(): Intent[] {

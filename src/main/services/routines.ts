@@ -11,17 +11,21 @@ import {
 } from '../db/index'
 import { callTool } from './mcp'
 import { generateRoutineDigest, streamChat } from './claude'
+import { inferRoutineIntents } from './inference'
+import { routeIntent } from './ambient'
 import { broadcast } from '../windows'
 import type { Routine, RunStatus } from '@shared/types'
 
 export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow | null): Promise<void> {
   // Upsert the routine as a graph node (idempotent — same key on every run)
+  let routineNodeId: string | null = null
   try {
     const routineNode = dbUpsertNode('routine', `routine:${routine.id}`, routine.name, {
       cron: routine.cron,
       enabled: routine.enabled
     })
     dbBumpNodeWeight(routineNode.id, 0.5)
+    routineNodeId = routineNode.id
   } catch (e) {
     console.error('[routines] graph node error:', e)
   }
@@ -60,7 +64,25 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
       status: 'pending_response'
     })
 
-    // Step 3: OS notification
+    // Step 3: Infer action candidates from the raw output and route them through
+    // the intent pipeline (tier resolution → DB → graph → notify → widget card).
+    // Errors are caught per-intent so a bad result never aborts the rest of the run.
+    const intentObjects = await inferRoutineIntents(routine.name, rawOutput)
+    for (const obj of intentObjects) {
+      try {
+        await routeIntent(
+          obj,
+          'routine',
+          { routine_id: routine.id, routine_name: routine.name },
+          routineNodeId ? [routineNodeId] : [],
+          widgetWin
+        )
+      } catch (e) {
+        console.error('[routines] failed to route intent:', e)
+      }
+    }
+
+    // Step 4: OS notification (summary of what the routine found)
     const notification = new Notification({
       title: `mypa: ${routine.name}`,
       body: summary,
@@ -69,7 +91,7 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
     notification.show()
     notification.on('click', () => widgetWin?.show())
 
-    // Step 4: push to both windows (widget: inline card update; main: toast)
+    // Step 5: push to both windows (widget: inline card update; main: toast)
     const updatedRun = dbGetRun(run.id)
     broadcast('routine:run-completed', updatedRun)
     broadcast('badge:updated', dbGetBadgeCount())

@@ -213,7 +213,7 @@ export type IntentStatus =
   | 'expired'
   | 'failed'
 export type IntentReversibility = 'reversible' | 'irreversible'
-export type TriggerKind = 'spike' | 'staleness' | 'dependency' | 'threshold' | 'time' | 'directed'
+export type TriggerKind = 'spike' | 'staleness' | 'dependency' | 'threshold' | 'time' | 'directed' | 'routine'
 export type Tier = 0 | 1 | 2 | 3
 export type TrayState = 'idle' | 'has-something' | 'needs-you'
 export type DigestSlot = 'morning' | 'midday' | 'eod'

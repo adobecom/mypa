@@ -16,6 +16,9 @@ mypa runs a background loop that monitors external surfaces, builds a knowledge 
 
 ## Overview
 
+Two pipelines feed the same intent queue:
+
+**Ambient pipeline** (signal-driven):
 ```
 External APIs (GitHub / Jira / Slack)
           │
@@ -29,14 +32,30 @@ External APIs (GitHub / Jira / Slack)
    graph_nodes / graph_edges / node_signals
           │  triggers.ts evaluates TriggerKinds
           ▼
-   inference.ts  → scored IntentObject candidates
+   inference.ts inferIntent()  → IntentObject
           │  filtered by confidence ≥ AmbientConfig.confidenceFloor (default 0.4)
+          ▼
+   ambient.ts routeIntent()
+          │  resolveTier → dbCreateIntent → graph node → dbAppendActionLog → handleIntent
           ▼
    intents table
           │
           ├──► renderer: widget Ambient tab (IntentCard)
           ├──► push event: ambient:intent-created
           └──► tray state: 'has-something' or 'needs-you'
+```
+
+**Routine pipeline** (schedule-driven, Phase B):
+```
+cron.ts fires → routines.ts executeRoutine()
+          │
+          ├─1─ MCP tools → rawOutput
+          ├─2─ generateRoutineDigest → digest card + chat thread
+          ├─3─ inference.ts inferRoutineIntents(name, rawOutput)
+          │         → up to 3 IntentObjects (JSON array, one Claude call)
+          └─4─ ambient.ts routeIntent() for each
+                    → same tier/DB/graph/notify pipeline as ambient intents
+                    → trigger_kind = 'routine'; context_packet links to routine node
 ```
 
 ---
@@ -202,6 +221,7 @@ See [ipc.md](ipc.md) for full signatures. Quick reference:
 
 ## Changelog
 
+- 2026-06-09 — **routines as action generators (Phase B):** `executeRoutine` now runs `inferRoutineIntents(name, rawOutput)` after the digest step, producing up to 3 `IntentObject`s from one Claude call. Each result is routed through `ambient.routeIntent()` with `trigger_kind:'routine'` so routine-generated action candidates appear in the widget queue alongside ambient intents, use the same tier/trust engine, and appear in the main-window Activity page. `TriggerKind` extended with `'routine'`. The digest card and chat thread are preserved.
 - 2026-06-09 — **action-centric redesign (Phase A):** inference `SYSTEM_PROMPT` now strongly prefers `type:"action"` over `suggestion`/`flag`; instructs the model to draft the full artifact text into `payload.body`/`message` so the user gets an editable draft rather than a vague suggestion. `suggestion` type is no longer emitted (kept in `VALID_TYPES` for backwards compat with stored intents). Triage split: only `action`-type intents fire OS notifications, update the badge, and drive tray state; informational intents (`flag`/`digest`) are still stored and pushed via `broadcast` to both windows but do not interrupt the user. `pushIntent` now uses `broadcast()` (all windows) instead of widget-only send, so the new main-window Activity page receives all intents. `ambientApproveIntent` accepts an optional `payload` arg and persists the user-edited draft via `dbUpdateIntentPayload` before executing.
 - 2026-06-08 — added `directed` trigger kind (`evalDirectedAtMe`); fires on single inbound signals from non-owner actors containing question/request language; documented autonomy path for "reply on my behalf" PM use case
 - 2026-06-07 — `executeIntent` now calls `broadcast('ambient:action-executed', intent)` after a tier-0 intent succeeds, so the main window can surface a toast; `ambient.ts` imports `broadcast` from `../windows`
