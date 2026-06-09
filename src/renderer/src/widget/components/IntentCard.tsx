@@ -25,7 +25,7 @@ function formatAge(iso: string): string {
 
 const TERMINAL_STATUSES: Intent['status'][] = ['executed', 'dismissed', 'challenged', 'failed', 'expired']
 
-const VERB_LABELS: Record<string, string> = {
+const VERB_LABELS: Record<string, string | null> = {
   comment: 'Comment',
   label: 'Label',
   close: 'Close',
@@ -34,6 +34,14 @@ const VERB_LABELS: Record<string, string> = {
   reply: 'Reply',
   send: 'Send',
   summarize: 'Summarize',
+  none: null,
+}
+
+const TYPE_LABELS: Record<string, string> = {
+  action: 'Action',
+  suggestion: 'Observation',
+  flag: 'Flag',
+  digest: 'Digest',
 }
 
 const TIER_LABELS = ['Silent', 'Notify', 'Approve', 'Locked']
@@ -87,7 +95,9 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
 
   const api = window.electron
   const isTerminal = TERMINAL_STATUSES.includes(intent.status)
-  const needsApproval = intent.required_approval && intent.tier >= 2
+  const isObservation = intent.type === 'suggestion' || intent.type === 'flag'
+  const needsApproval = !isObservation && intent.required_approval && intent.tier >= 2
+  const agentWillHandle = !isObservation && !needsApproval && !isTerminal && intent.tier <= 1
 
   const cardClass = [
     'routine-card',
@@ -104,7 +114,8 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
 
   const confidencePct = Math.round(intent.confidence * 100)
   const tierLabel = TIER_LABELS[intent.tier] ?? 'Approve'
-  const verbLabel = intent.verb ? (VERB_LABELS[intent.verb] ?? intent.verb) : null
+  const typeLabel = TYPE_LABELS[intent.type] ?? intent.type
+  const verbLabel = intent.verb && intent.verb !== 'none' ? (VERB_LABELS[intent.verb] ?? intent.verb) : null
 
   async function handleApprove(): Promise<void> {
     setLoading(true)
@@ -186,8 +197,12 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
             >
               {confidencePct}%
             </span>
+            <span className="intent-chip intent-chip--muted">{typeLabel}</span>
             {needsApproval && !isTerminal && (
               <span className="intent-chip intent-chip--muted">needs approval</span>
+            )}
+            {agentWillHandle && (
+              <span className="intent-chip intent-chip--muted">agent will handle</span>
             )}
             {intent.reversibility === 'irreversible' && (
               <span className="intent-chip intent-chip--warning">irreversible</span>
@@ -308,7 +323,9 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
       {/* ── Challenge confirmation banner ── */}
       {challengeConfirmed && (
         <div className="routine-card__body" style={{ fontSize: 11, color: 'var(--green)', paddingTop: 0 }}>
-          Challenge recorded — {intent.surface}:{intent.verb} will ask for approval more often
+          {isObservation
+            ? 'Feedback recorded — will surface fewer observations like this'
+            : `Challenge recorded — ${intent.surface}:${intent.verb} will ask for approval more often`}
         </div>
       )}
 
@@ -347,31 +364,54 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
       {/* ── Action footer ── */}
       {!isTerminal && !challenging && (
         <div className="routine-card__body" style={{ paddingTop: 0, display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-          <button
-            className="btn btn--ghost"
-            onClick={(e) => { e.stopPropagation(); handleDismiss() }}
-            disabled={loading}
-            style={{ fontSize: 11 }}
-          >
-            Dismiss
-          </button>
-          <button
-            className="btn btn--danger"
-            onClick={(e) => { e.stopPropagation(); setChallenging(true) }}
-            disabled={loading}
-            style={{ fontSize: 11 }}
-          >
-            Challenge
-          </button>
-          {needsApproval && (
-            <button
-              className="btn btn--primary"
-              onClick={(e) => { e.stopPropagation(); handleApprove() }}
-              disabled={loading}
-              style={{ fontSize: 11 }}
-            >
-              Approve
-            </button>
+          {isObservation ? (
+            <>
+              <button
+                className="btn btn--ghost"
+                onClick={(e) => { e.stopPropagation(); setChallenging(true) }}
+                disabled={loading}
+                style={{ fontSize: 11 }}
+              >
+                Correct it
+              </button>
+              <button
+                className="btn btn--ghost"
+                onClick={(e) => { e.stopPropagation(); handleDismiss() }}
+                disabled={loading}
+                style={{ fontSize: 11 }}
+              >
+                Got it
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="btn btn--ghost"
+                onClick={(e) => { e.stopPropagation(); handleDismiss() }}
+                disabled={loading}
+                style={{ fontSize: 11 }}
+              >
+                Dismiss
+              </button>
+              <button
+                className="btn btn--danger"
+                onClick={(e) => { e.stopPropagation(); setChallenging(true) }}
+                disabled={loading}
+                style={{ fontSize: 11 }}
+              >
+                Challenge
+              </button>
+              {needsApproval && (
+                <button
+                  className="btn btn--primary"
+                  onClick={(e) => { e.stopPropagation(); handleApprove() }}
+                  disabled={loading}
+                  style={{ fontSize: 11 }}
+                >
+                  Approve
+                </button>
+              )}
+            </>
           )}
         </div>
       )}

@@ -24,16 +24,26 @@ export function actionTypeOf(obj: IntentObject): string {
 
 const DEFAULT_TIER: Tier = 2
 
+// Informational intent types that don't require user approval by default.
+// These surface as notifications (tier 1) rather than approval requests (tier 2).
+const TYPE_DEFAULT_TIER: Partial<Record<string, Tier>> = {
+  action: 2,
+  suggestion: 1,
+  flag: 1,
+  digest: 1,
+}
+
 export function resolveTier(obj: IntentObject): Tier {
   const actionType = actionTypeOf(obj)
 
   // Two-level lookup:
   // 1. Earned per-surface:verb policy (granular, from approve/challenge interactions)
   // 2. Intent-type default set by the user in Settings (e.g. 'action', 'suggestion')
-  // 3. Hardcoded DEFAULT_TIER
+  // 3. Type-aware default (flag/suggestion → 1, action → 2)
+  // 4. Hardcoded DEFAULT_TIER
   const surfacePolicy = dbGetPolicy(actionType)
   const typePolicy = dbGetPolicy(obj.type)
-  let tier: Tier = surfacePolicy?.tier ?? typePolicy?.tier ?? DEFAULT_TIER
+  let tier: Tier = surfacePolicy?.tier ?? typePolicy?.tier ?? TYPE_DEFAULT_TIER[obj.type] ?? DEFAULT_TIER
 
   // Safety floor: irreversible or required_approval actions can never be below tier 2
   if (obj.reversibility === 'irreversible' || obj.required_approval) {
