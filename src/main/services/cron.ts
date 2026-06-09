@@ -1,13 +1,16 @@
 import cron from 'node-cron'
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, Notification } from 'electron'
 import { dbGetRoutines } from '../db/index'
 import { executeRoutine } from './routines'
+import { readConfig } from './config'
 import type { Routine } from '@shared/types'
 
 const scheduledTasks = new Map<string, cron.ScheduledTask>()
+let checkinTask: cron.ScheduledTask | null = null
 
 export function startScheduler(getWidgetWin: () => BrowserWindow | null): void {
   refreshSchedules(getWidgetWin)
+  refreshCheckinSchedule(getWidgetWin)
 }
 
 export function refreshSchedules(getWidgetWin: () => BrowserWindow | null): void {
@@ -54,4 +57,36 @@ export function stopScheduler(): void {
     task.stop()
   }
   scheduledTasks.clear()
+  checkinTask?.stop()
+  checkinTask = null
+}
+
+export function refreshCheckinSchedule(getWidgetWin: () => BrowserWindow | null): void {
+  checkinTask?.stop()
+  checkinTask = null
+
+  const cfg = readConfig()
+  const ccfg = cfg.checkin
+  if (!ccfg?.scheduleEnabled || !ccfg.schedule) return
+  if (!cron.validate(ccfg.schedule)) {
+    console.warn('[cron] invalid checkin cron:', ccfg.schedule)
+    return
+  }
+
+  checkinTask = cron.schedule(ccfg.schedule, async () => {
+    console.log('[cron] firing scheduled check-in')
+    const notification = new Notification({
+      title: 'mypa: Time for your check-in',
+      body: 'Your PA is ready to brief you.',
+      silent: false
+    })
+    notification.show()
+    notification.on('click', () => {
+      getWidgetWin()?.webContents.send('checkin:open-in-main-window')
+    })
+    const { startCheckIn } = await import('./checkin')
+    await startCheckIn('scheduled', getWidgetWin())
+  })
+
+  console.log('[cron] check-in scheduled:', ccfg.schedule)
 }

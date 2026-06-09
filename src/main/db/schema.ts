@@ -215,6 +215,30 @@ export function initSchema(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_usage_events_created ON usage_events(created_at);
     CREATE INDEX IF NOT EXISTS idx_usage_events_source  ON usage_events(source, created_at);
+
+    -- ─── Check-ins ────────────────────────────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS check_ins (
+      id                 TEXT PRIMARY KEY,
+      status             TEXT NOT NULL DEFAULT 'active',
+      trigger            TEXT NOT NULL DEFAULT 'manual',
+      started_at         TEXT NOT NULL,
+      completed_at       TEXT,
+      briefing           TEXT NOT NULL DEFAULT '',
+      extraction_summary TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS checkin_messages (
+      id          TEXT PRIMARY KEY,
+      checkin_id  TEXT NOT NULL,
+      role        TEXT NOT NULL,
+      content     TEXT NOT NULL,
+      timestamp   TEXT NOT NULL,
+      FOREIGN KEY (checkin_id) REFERENCES check_ins(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_checkin_messages_checkin ON checkin_messages(checkin_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_check_ins_status ON check_ins(status, started_at);
   `)
 
   // Schema migrations — add columns introduced after initial table creation.

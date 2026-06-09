@@ -35,7 +35,9 @@ import type {
   UsageSource,
   UsageSummary,
   UsageDailyPoint,
-  UsageBreakdownRow
+  UsageBreakdownRow,
+  CheckIn,
+  CheckInStatus
 } from '@shared/types'
 import { createHash } from 'crypto'
 
@@ -1083,4 +1085,76 @@ export function dbGetRecentUsage(limit = 30, range = 'all'): UsageEvent[] {
     cost_usd: r.cost_usd,
     created_at: r.created_at
   }))
+}
+
+// ─── Check-ins ────────────────────────────────────────────────────────────────
+
+function deserializeCheckIn(row: any): CheckIn {
+  return {
+    id: row.id,
+    status: row.status as CheckInStatus,
+    trigger: row.trigger as 'manual' | 'scheduled',
+    started_at: row.started_at,
+    completed_at: row.completed_at ?? null,
+    briefing: row.briefing ?? '',
+    extraction_summary: row.extraction_summary ?? null
+  }
+}
+
+export function dbCreateCheckIn(trigger: 'manual' | 'scheduled'): CheckIn {
+  const id = uuidv4()
+  const started_at = new Date().toISOString()
+  getDb()
+    .prepare('INSERT INTO check_ins (id, status, trigger, started_at, briefing) VALUES (?,?,?,?,?)')
+    .run(id, 'active', trigger, started_at, '')
+  return dbGetCheckIn(id)!
+}
+
+export function dbGetCheckIn(id: string): CheckIn | null {
+  const row = getDb().prepare('SELECT * FROM check_ins WHERE id = ?').get(id) as any
+  return row ? deserializeCheckIn(row) : null
+}
+
+export function dbGetActiveCheckIn(): CheckIn | null {
+  const row = getDb().prepare("SELECT * FROM check_ins WHERE status = 'active' ORDER BY started_at DESC LIMIT 1").get() as any
+  return row ? deserializeCheckIn(row) : null
+}
+
+export function dbGetCheckIns(limit = 30): CheckIn[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM check_ins ORDER BY started_at DESC LIMIT ?')
+    .all(limit) as any[]
+  return rows.map(deserializeCheckIn)
+}
+
+export function dbUpdateCheckIn(
+  id: string,
+  fields: Partial<{
+    status: CheckInStatus
+    completed_at: string
+    briefing: string
+    extraction_summary: string
+  }>
+): void {
+  const keys = Object.keys(fields)
+  if (keys.length === 0) return
+  const sets = keys.map((k) => `${k} = ?`).join(', ')
+  const vals = [...Object.values(fields), id]
+  getDb().prepare(`UPDATE check_ins SET ${sets} WHERE id = ?`).run(...vals)
+}
+
+export function dbAddCheckInMessage(checkinId: string, role: string, content: string): ChatMessage {
+  const id = uuidv4()
+  const timestamp = new Date().toISOString()
+  getDb()
+    .prepare('INSERT INTO checkin_messages (id, checkin_id, role, content, timestamp) VALUES (?,?,?,?,?)')
+    .run(id, checkinId, role, content, timestamp)
+  return { id, role: role as any, content, timestamp }
+}
+
+export function dbGetCheckInThread(checkinId: string): ChatMessage[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM checkin_messages WHERE checkin_id = ? ORDER BY timestamp ASC')
+    .all(checkinId) as any[]
+  return rows.map((r) => ({ id: r.id, role: r.role, content: r.content, timestamp: r.timestamp }))
 }

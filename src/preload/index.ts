@@ -85,6 +85,16 @@ const api: IpcApi = {
     getByModel: (range) => ipcRenderer.invoke('usage:get-by-model', range),
     getRecent: (limit, range) => ipcRenderer.invoke('usage:get-recent', limit, range)
   },
+  checkin: {
+    start: () => ipcRenderer.invoke('checkin:start'),
+    getActive: () => ipcRenderer.invoke('checkin:get-active'),
+    getAll: (limit?: number) => ipcRenderer.invoke('checkin:get-all', limit),
+    getThread: (checkinId: string) => ipcRenderer.invoke('checkin:get-thread', checkinId),
+    sendMessage: (checkinId: string, message: string) => ipcRenderer.invoke('checkin:send-message', checkinId, message),
+    end: (checkinId: string) => ipcRenderer.invoke('checkin:end', checkinId),
+    cancelStream: (checkinId: string) => ipcRenderer.invoke('checkin:cancel-stream', checkinId),
+    openInMainWindow: (checkinId?: string) => ipcRenderer.invoke('checkin:open-in-main-window', checkinId)
+  },
   update: {
     checkNow: () => ipcRenderer.invoke('update:check-now'),
     install:  () => ipcRenderer.invoke('update:install')
