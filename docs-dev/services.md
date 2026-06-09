@@ -78,7 +78,7 @@ Orchestrates the full MCP → Claude → notification pipeline for a routine run
 | Export | Description |
 |---|---|
 | `executeRoutine(routine, widgetWin)` | Run all MCP actions, call `generateRoutineDigest`, persist the run, fire OS notification, push events to renderer, upsert the routine as a `routine` graph node |
-| `handleRunMessage(runId, userMsg, widgetWin)` | Streaming follow-up chat on a run thread |
+| `handleRunMessage(runId, userMsg)` | Streaming follow-up chat on a run thread; broadcasts `routine:user-message` before streaming |
 | `dismissRun(runId, status)` | Mark a run as resolved/dismissed |
 
 ---
@@ -93,7 +93,7 @@ Orchestrates the full MCP → Claude → notification pipeline for a routine run
 | `confirmPlanDraft(draft)` | Persists the draft as a `PlanItem`, mirrors it into the graph as a `plan_item` node with `targets` edges to referenced entities |
 | `updatePlanItemStatus(id, status)` | Update status; appends to `plan_item_history` |
 | `deletePlanItem(id)` | Delete item and cascade |
-| `handlePlanMessage(itemId, userMsg, widgetWin)` | Streaming chat on a plan-item thread |
+| `handlePlanMessage(itemId, userMsg)` | Streaming chat on a plan-item thread; broadcasts `plan:user-message` before streaming |
 
 ---
 
@@ -265,6 +265,7 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 
 ## Changelog
 
+- 2026-06-09 — `plan.ts`, `routines.ts`: removed `widgetWin` param from `handlePlanMessage` and `handleRunMessage`; both now broadcast `plan:user-message` / `routine:user-message` (with the saved `ChatMessage`) immediately after the DB write, before streaming; `badge:updated` changed from widget-only send to `broadcast()` in both services
 - 2026-06-09 — `config.ts`: added `encryptClaude` / `decryptClaude` helpers (mirror the OAuth single-field pattern); chained into `readConfig` and `writeConfig`; added `clearClaudeApiKey()` export (explicit delete, since `deepMerge` skips `undefined`); `AppConfig.claude.apiKey` is now encrypted at rest via `safeStorage`
 - 2026-06-08 — added `checkin.ts`; new exports `startCheckIn`, `handleCheckInMessage`, `endCheckIn`, `cancelCheckinStream`; `cron.ts` gains `refreshCheckinSchedule` (module-level scheduled task for periodic check-ins); `config:update` IPC handler now calls `refreshCheckinSchedule` when `checkin.*` config fields change
 - 2026-06-08 — `triggers.ts`: added `directed` trigger kind; `evalDirectedAtMe` fires on single inbound signals from non-owner actors that contain question/request language; wired into `evalEventTriggers` alongside spike and dependency

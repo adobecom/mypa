@@ -72,7 +72,7 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
     // Step 4: push to both windows (widget: inline card update; main: toast)
     const updatedRun = dbGetRun(run.id)
     broadcast('routine:run-completed', updatedRun)
-    widgetWin?.webContents.send('badge:updated', dbGetBadgeCount())
+    broadcast('badge:updated', dbGetBadgeCount())
   } catch (err: any) {
     dbUpdateRun(run.id, {
       completed_at: new Date().toISOString(),
@@ -105,14 +105,14 @@ function buildDigestMessage(digest: {
 
 export async function handleRunMessage(
   runId: string,
-  userMessage: string,
-  widgetWin: BrowserWindow | null
+  userMessage: string
 ): Promise<void> {
   const run = dbGetRun(runId)
   if (!run) throw new Error(`Run ${runId} not found`)
 
   // Save user message
-  dbAddRunMessage(runId, 'user', userMessage)
+  const userMsg = dbAddRunMessage(runId, 'user', userMessage)
+  broadcast('routine:user-message', { runId, message: userMsg })
 
   // Update status to in_progress
   dbUpdateRun(runId, { status: 'in_progress' })

@@ -97,7 +97,7 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('plan:send-message', async (_e, itemId: string, message: string) => {
-    await handlePlanMessage(itemId, message, getWidgetWin())
+    await handlePlanMessage(itemId, message)
   })
 
   ipcMain.handle('plan:get-thread', async (_e, itemId: string) => {
@@ -167,7 +167,7 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('routines:send-message', async (_e, runId: string, message: string) => {
-    await handleRunMessage(runId, message, getWidgetWin())
+    await handleRunMessage(runId, message)
   })
 
   ipcMain.handle('routines:update-run-status', async (_e, runId: string, status: RunStatus) => {

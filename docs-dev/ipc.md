@@ -140,10 +140,12 @@ Subscribed with `window.electron.on(channel, listener)`. Returns an unsubscribe 
 |---|---|---|---|
 | `routine:run-started` | `RoutineRun` | A routine begins executing | **widget + main** |
 | `routine:run-completed` | `RoutineRun` | A routine run finishes (success or error — inspect `run.status`) | **widget + main** |
-| `routine:run-message` | `{ runId, chunk: string, done: boolean, error?: string }` | Streaming chat chunk on a run thread | widget only |
-| `plan:item-message` | `{ itemId, chunk: string, done: boolean, error?: string }` | Streaming chat chunk on a plan-item thread | widget only |
+| `routine:run-message` | `{ runId, chunk: string, done: boolean, error?: string }` | Streaming chat chunk on a run thread | **widget + main** |
+| `routine:user-message` | `{ runId, message: ChatMessage }` | User message saved to a run thread (fires before streaming begins) | **widget + main** |
+| `plan:item-message` | `{ itemId, chunk: string, done: boolean, error?: string }` | Streaming chat chunk on a plan-item thread | **widget + main** |
+| `plan:user-message` | `{ itemId, message: ChatMessage }` | User message saved to a plan-item thread (fires before streaming begins) | **widget + main** |
 | `plan:item-updated` | `{ id: string, status: PlanItemStatus }` | Plan item status changed (e.g. done/skipped from widget) | **widget + main** |
-| `badge:updated` | `number` | Badge count changed | widget only |
+| `badge:updated` | `number` | Badge count changed | **widget + main** |
 | `navigate:edit-routine` | `routineId: string` | Main window should navigate to the routine editor | main only |
 | `navigate:run-chat` | `runId: string` | Main window should navigate to Run Logs and open that run in conversation view | main only |
 | `navigate:plan-item` | `itemId: string` | Main window should navigate to the plan item's full chat detail page | main only |
@@ -234,6 +236,7 @@ Manage PA check-in sessions and their chat threads.
 
 ## Changelog
 
+- 2026-06-09 — added `plan:user-message` and `routine:user-message` push channels (broadcast to both windows immediately after user message is saved to DB, before streaming begins); changed `badge:updated` to broadcast to both windows (was widget-only); removed unused `widgetWin` parameter from `handlePlanMessage` and `handleRunMessage` services
 - 2026-06-09 — added `config.getClaudeKey` and `config.setClaudeKey` channels; `config.get` now strips `claude.apiKey` before returning to the renderer (raw key never transmitted); `ClaudeConfig` gained `apiKey?: string` (encrypted at rest via `safeStorage`)
 - 2026-06-08 — added `checkin` namespace (`start`, `getActive`, `getAll`, `getThread`, `sendMessage`, `end`, `cancelStream`, `openInMainWindow`); new push channels `checkin:started`, `checkin:message`, `checkin:status-changed`, `navigate:checkin`; added `CheckInStatus`, `CheckIn`, `CheckInConfig`, `CheckInExtractionSummary` types; `AppConfig.checkin?: CheckInConfig`; `UsageSource` extended with `'checkin_chat'` and `'checkin_extract'`
 - 2026-06-08 — added `system.openExternal` method + `system:open-external` IPC handler (opens URL in default browser via `shell.openExternal`); added `plan:item-updated` push channel (broadcast to both windows when plan item status changes); both windows now have `will-navigate` + `setWindowOpenHandler` guards that redirect external URLs to the default browser
