@@ -77,9 +77,16 @@ Orchestrates the full MCP → Claude → notification pipeline for a routine run
 
 | Export | Description |
 |---|---|
-| `executeRoutine(routine, widgetWin)` | Run all MCP actions, call `generateRoutineDigest`, persist the run, fire OS notification, push events to renderer, upsert the routine as a `routine` graph node |
+| `executeRoutine(routine, widgetWin)` | Run all MCP actions, call `generateRoutineDigest`, run `inferRoutineIntents` over the raw output, route each result through `routeIntent`, fire OS notification, push events to renderer |
 | `handleRunMessage(runId, userMsg)` | Streaming follow-up chat on a run thread; broadcasts `routine:user-message` before streaming |
 | `dismissRun(runId, status)` | Mark a run as resolved/dismissed |
+
+**Execution steps (Phase B):**
+1. Execute all MCP actions → collect `rawOutput`
+2. `generateRoutineDigest` → persist digest + chat message
+3. `inferRoutineIntents(name, rawOutput)` → up to 3 `IntentObject`s
+4. `routeIntent(obj, 'routine', ...)` for each — tier resolution, DB persist, graph node, notify
+5. OS notification (digest summary) + push events to both windows
 
 ---
 
@@ -139,6 +146,12 @@ Handles authentication with GitHub, Notion, and Linear. See [mcp-and-oauth.md](m
 
 Runs the recurring background poll cycle (default every 5 minutes). Reads config, calls each surface's trigger evaluator, generates intents, pushes `ambient:*` events to the renderer, and updates tray state.
 
+**Key exports (non-IPC):**
+
+| Export | Description |
+|---|---|
+| `routeIntent(obj, triggerKind, contextPacket, focusNodeIds, win)` | Route an already-inferred `IntentObject` through the full tier/DB/graph/notify pipeline. Used by `routines.ts` to feed routine-generated action candidates into the same queue as ambient intents. |
+
 ---
 
 ## `autonomy.ts` — Trust tier engine
@@ -166,6 +179,14 @@ Coordinates the flow from raw API payloads to structured `Signal` rows and graph
 ## `inference.ts` — Intent generation
 
 Takes a `ContextPacket` (assembled by `memory-graph.ts`) and produces scored `Intent` candidates that are persisted to the `intents` table and surfaced in the renderer.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `inferIntent(hit, packet?)` | Single-intent inference from a `TriggerHit`; returns one `IntentObject` or null |
+| `inferRoutineIntents(name, rawOutput, maxIntents?)` | Multi-intent inference over routine MCP output; returns up to `maxIntents` (default 3) `IntentObject`s as a JSON array parsed from one Claude call |
+| `parseIntentObject(text)` | Parse + validate a raw JSON string into an `IntentObject`; clamps unknown verbs to `'none'` |
 
 ---
 
