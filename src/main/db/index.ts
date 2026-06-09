@@ -454,11 +454,17 @@ export function dbGetNodeById(id: string): GraphNode | null {
   return row ? deserializeNode(row) : null
 }
 
+// Hard cap prevents runaway accumulation on frequently-updated nodes. Decay
+// (via dbDecayNodes) still reduces weight over time; the cap just stops it
+// growing past a point where it dominates every context-packet query.
+const GRAPH_NODE_WEIGHT_CAP = 10.0
+const GRAPH_EDGE_WEIGHT_CAP = 10.0
+
 export function dbBumpNodeWeight(id: string, delta: number): void {
   const now = new Date().toISOString()
   getDb()
-    .prepare('UPDATE graph_nodes SET weight = weight + ?, last_seen = ? WHERE id = ?')
-    .run(delta, now, id)
+    .prepare('UPDATE graph_nodes SET weight = MIN(weight + ?, ?), last_seen = ? WHERE id = ?')
+    .run(delta, GRAPH_NODE_WEIGHT_CAP, now, id)
 }
 
 export function dbDecayNodes(halfLifeDays: number, asOfIso?: string): void {
@@ -504,10 +510,10 @@ export function dbUpsertEdge(srcId: string, dstId: string, rel: EdgeRel, weightD
       `INSERT INTO graph_edges (id, src_id, dst_id, rel, weight, attrs, first_seen, last_seen)
        VALUES (?,?,?,?,?,?,?,?)
        ON CONFLICT(src_id, dst_id, rel) DO UPDATE SET
-         weight = graph_edges.weight + ?,
+         weight = MIN(graph_edges.weight + ?, ?),
          last_seen = excluded.last_seen`
     )
-    .run(id, srcId, dstId, rel, weightDelta, '{}', now, now, weightDelta)
+    .run(id, srcId, dstId, rel, weightDelta, '{}', now, now, weightDelta, GRAPH_EDGE_WEIGHT_CAP)
   const row = getDb().prepare('SELECT * FROM graph_edges WHERE src_id = ? AND dst_id = ? AND rel = ?').get(srcId, dstId, rel) as any
   return deserializeEdge(row)
 }

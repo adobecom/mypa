@@ -37,9 +37,11 @@ export default function QueueView({
   // "Tasks" — active plan items
   const activeItems = items.filter((i) => i.status === 'pending' || i.status === 'in_progress')
 
-  // "Done" — completed plan items (includes agent-executed ambient_action records)
+  // "Done" — completed plan items newest-first (includes agent-executed ambient_action records).
+  // getAll() returns items ORDER BY created_at ASC so we sort before slicing.
   const doneItems = items
     .filter((i) => i.status === 'done' || i.status === 'skipped')
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     .slice(0, 10)
 
   const isEmpty = pendingIntents.length === 0 && activeItems.length === 0 && doneItems.length === 0
@@ -119,6 +121,7 @@ export default function QueueView({
               onStatusChange={onStatusChange}
               onDelete={handleDelete}
               collapsed
+              readOnly={item.source === 'ambient_action'}
             />
           ))}
         </>

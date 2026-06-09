@@ -8,13 +8,15 @@ interface Props {
   onStatusChange: (id: string, status: PlanItem['status']) => void
   onDelete: (id: string) => void
   collapsed?: boolean
+  readOnly?: boolean
 }
 
 export default function PlanItemCard({
   item,
   onStatusChange,
   onDelete,
-  collapsed
+  collapsed,
+  readOnly
 }: Props): React.ReactElement {
   const [expanded, setExpanded] = useState(false)
   const [thread, setThread] = useState<ChatMessage[]>([])
@@ -63,6 +65,7 @@ export default function PlanItemCard({
   }, [expanded, item.id])
 
   const handleCheck = () => {
+    if (readOnly) return
     if (isDone) {
       onStatusChange(item.id, 'pending')
     } else {
@@ -90,11 +93,11 @@ export default function PlanItemCard({
     await api.plan.sendMessage(item.id, msg)
   }
 
-  const checkboxClass = `plan-item__checkbox${isDone ? ' checked' : isSkipped ? ' skipped' : ''}`
+  const checkboxClass = `plan-item__checkbox${isDone ? ' checked' : isSkipped ? ' skipped' : ''}${readOnly ? ' readonly' : ''}`
 
   return (
     <div className={`plan-item${expanded ? ' active' : ''}`}>
-      <button className={checkboxClass} onClick={handleCheck}>
+      <button className={checkboxClass} onClick={handleCheck} disabled={readOnly}>
         {isDone && <Check size={10} color="white" />}
         {isSkipped && <Minus size={10} color="var(--text-muted)" />}
       </button>
