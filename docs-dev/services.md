@@ -151,7 +151,9 @@ Manages the `autonomy_policy` table and the promotion/demotion of action-type ti
 
 ## `triggers.ts` — Trigger evaluators
 
-One evaluator per `TriggerKind` (`spike`, `staleness`, `dependency`, `threshold`, `time`). Each evaluator queries the graph/signals DB and returns candidate `IntentObject`s passed to `inference.ts`.
+One evaluator per `TriggerKind` (`spike`, `staleness`, `dependency`, `threshold`, `time`, `directed`). Each evaluator queries the graph/signals DB and returns candidate `TriggerHit`s passed to `inference.ts`.
+
+The `directed` trigger fires on a single inbound signal from a non-owner actor whose `title`/`body` matches a set of request/question patterns (`?`, `can we`, `please`, `lgtm`, `review`, etc.). It reads owner handles from `readConfig()` to distinguish the user's own activity from teammates' requests. At most one hit per poll cycle to avoid flooding inference.
 
 ---
 
@@ -244,6 +246,7 @@ Wraps `electron-updater` to check GitHub Releases for a newer version of mypa. O
 
 ## Changelog
 
+- 2026-06-08 — `triggers.ts`: added `directed` trigger kind; `evalDirectedAtMe` fires on single inbound signals from non-owner actors that contain question/request language; wired into `evalEventTriggers` alongside spike and dependency
 - 2026-06-07 — added `updater.ts`; wraps `electron-updater` for GitHub Releases auto-update; adds `checkForUpdatesNow` and `installUpdate` exports; pushes `update:available`, `update:progress`, `update:downloaded`, `update:error` channels to all windows
 - 2026-06-07 — new `usage.ts` recorder; `claude.ts` switched `runClaude` to `--output-format json` and added `source: UsageSource` param; both `runClaude` and `runClaudeStream` call `recordUsage()` after each Claude call; `streamChat` and all callers (`routines.ts`, `plan.ts`, `inference.ts`, `memories.ts`) updated with source labels
 - 2026-06-07 — `routines.ts`: `routine:run-started` and `routine:run-completed` now sent via `broadcast()` (both widget + main windows) instead of widget-only `webContents.send`; `ambient.ts`: emits new `ambient:action-executed` broadcast after a tier-0 intent auto-executes successfully; added `broadcast()` helper to `windows.ts`

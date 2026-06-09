@@ -143,27 +143,21 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
     name: 'Jira',
     description: 'Read and update Jira issues, sprints, and projects',
     category: 'Productivity',
-    command: 'npx',
-    baseArgs: ['-y', '--package', 'jsdom', '--package', 'mcp-atlassian', 'mcp-atlassian'],
+    command: 'uvx',
+    baseArgs: ['mcp-atlassian'],
     authType: 'api_key',
     requiredEnv: [
       {
-        key: 'ATLASSIAN_BASE_URL',
-        label: 'Jira site URL',
-        placeholder: 'https://yourorg.atlassian.net',
+        key: 'JIRA_URL',
+        label: 'Jira URL',
+        placeholder: 'https://jira.corp.adobe.com',
         secret: false
       },
       {
-        key: 'ATLASSIAN_EMAIL',
-        label: 'Atlassian email',
-        placeholder: 'you@example.com',
-        secret: false
-      },
-      {
-        key: 'ATLASSIAN_API_TOKEN',
-        label: 'API token',
-        placeholder: 'Paste your Atlassian API token',
-        hint: 'Generate at id.atlassian.com/manage-profile/security/api-tokens',
+        key: 'JIRA_PERSONAL_TOKEN',
+        label: 'Personal Access Token',
+        placeholder: 'Paste your Jira PAT',
+        hint: 'Generate at your Jira profile → Personal Access Tokens',
         secret: true
       }
     ]

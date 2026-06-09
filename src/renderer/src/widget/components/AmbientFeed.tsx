@@ -11,9 +11,13 @@ interface Props {
 const TERMINAL_STATUSES: Intent['status'][] = ['executed', 'dismissed', 'challenged', 'failed', 'expired']
 
 export default function AmbientFeed({ intents, onIntentsChange }: Props): React.ReactElement {
-  const needsYou = intents.filter((i) => !TERMINAL_STATUSES.includes(i.status) && i.required_approval && i.tier >= 2)
-  const suggestions = intents.filter((i) => !TERMINAL_STATUSES.includes(i.status) && !(i.required_approval && i.tier >= 2))
+  const active = intents.filter((i) => !TERMINAL_STATUSES.includes(i.status))
+  const actions = active.filter((i) => i.type === 'action')
+  const observations = active.filter((i) => i.type === 'suggestion' || i.type === 'flag')
+  const digests = active.filter((i) => i.type === 'digest')
   const recent = intents.filter((i) => TERMINAL_STATUSES.includes(i.status)).slice(0, 5)
+
+  const actionsNeedApproval = actions.some((i) => i.required_approval && i.tier >= 2)
 
   function handleChange(updated: Intent): void {
     onIntentsChange(intents.map((i) => (i.id === updated.id ? updated : i)))
@@ -31,19 +35,33 @@ export default function AmbientFeed({ intents, onIntentsChange }: Props): React.
 
   return (
     <div>
-      {needsYou.length > 0 && (
+      {actions.length > 0 && (
         <>
-          <div className="section-header" style={{ color: 'var(--accent)' }}>Needs You</div>
-          {needsYou.map((intent) => (
+          <div
+            className="section-header"
+            style={actionsNeedApproval ? { color: 'var(--accent)' } : undefined}
+          >
+            Actions
+          </div>
+          {actions.map((intent) => (
             <IntentCard key={intent.id} intent={intent} onIntentChange={handleChange} />
           ))}
         </>
       )}
 
-      {suggestions.length > 0 && (
+      {observations.length > 0 && (
         <>
-          <div className="section-header">Suggestions</div>
-          {suggestions.map((intent) => (
+          <div className="section-header">Observations</div>
+          {observations.map((intent) => (
+            <IntentCard key={intent.id} intent={intent} onIntentChange={handleChange} />
+          ))}
+        </>
+      )}
+
+      {digests.length > 0 && (
+        <>
+          <div className="section-header">Digests</div>
+          {digests.map((intent) => (
             <IntentCard key={intent.id} intent={intent} onIntentChange={handleChange} />
           ))}
         </>

@@ -5,6 +5,7 @@ import {
   dbGetNode
 } from '../db/index'
 import { getStaleCandidates, kindToNodeType } from './memory-graph'
+import { readConfig } from './config'
 import type { Signal, TriggerKind } from '@shared/types'
 
 export interface TriggerHit {
@@ -152,12 +153,56 @@ export function evalTime(slot: 'morning' | 'midday' | 'eod'): TriggerHit[] {
   ]
 }
 
+// ─── Directed-at-me trigger ───────────────────────────────────────────────────
+// Fires when a single inbound signal from a non-owner actor contains language
+// that looks like a question or request directed at the user.
+
+const REQUEST_PATTERNS = [
+  /\?/,
+  /\bcan (you|we|i)\b/i,
+  /\bshould (you|we|i)\b/i,
+  /\bplease\b/i,
+  /\blgtm\b/i,
+  /\breview\b/i,
+  /\bapprove\b/i,
+  /\bdefer\b/i,
+  /\bmove to\b/i,
+  /\bnext (sprint|release|milestone)\b/i,
+  /\bwhat do you think\b/i,
+  /\bis it (ok|okay)\b/i,
+]
+
+export function evalDirectedAtMe(newSignals: Signal[]): TriggerHit[] {
+  if (newSignals.length === 0) return []
+  const handles = readConfig().owner?.handles ?? {}
+  const ownerHandles = Object.values(handles).filter(Boolean).map((h) => h!.toLowerCase())
+
+  for (const signal of newSignals) {
+    // Skip own activity
+    if (signal.actor && ownerHandles.length > 0 &&
+        ownerHandles.some((h) => signal.actor.toLowerCase().includes(h))) continue
+
+    const text = `${signal.title} ${signal.body}`
+    if (!REQUEST_PATTERNS.some((p) => p.test(text))) continue
+
+    const taskKey = `${signal.surface}:${signal.kind}:${signal.external_id}`
+    const taskNode = dbGetNode(kindToNodeType(signal.kind), taskKey)
+    return [{
+      kind: 'directed',
+      focusNodeIds: taskNode ? [taskNode.id] : [],
+      reason: `Inbound request from ${signal.actor || 'unknown'} on '${signal.title.slice(0, 80)}'`
+    }]
+  }
+  return []
+}
+
 // ─── Convenience: all event triggers ─────────────────────────────────────────
 
 export function evalEventTriggers(newSignals: Signal[]): TriggerHit[] {
   const hits: TriggerHit[] = [
     ...evalSpike(newSignals),
-    ...evalDependency(newSignals)
+    ...evalDependency(newSignals),
+    ...evalDirectedAtMe(newSignals)
   ]
   // Only add staleness/threshold occasionally (not every poll cycle)
   // Use a rough "every 6th call" gate via a module counter

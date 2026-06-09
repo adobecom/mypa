@@ -148,4 +148,5 @@ Provider configurations (client IDs, scopes, token endpoints) live in `src/share
 
 ## Changelog
 
+- 2026-06-08 — Jira catalog entry switched from `mcp-atlassian` (Cloud-only, npx) to `sooperset/mcp-atlassian` (Server/DC support, uvx); env vars changed from `ATLASSIAN_BASE_URL`/`ATLASSIAN_EMAIL`/`ATLASSIAN_API_TOKEN` to `JIRA_URL`/`JIRA_PERSONAL_TOKEN`
 - 2026-06-06 — initial documentation; OAuth state nonce validation added in commit cacb072
