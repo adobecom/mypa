@@ -199,7 +199,9 @@ body {
   height: 580px;
   display: flex;
   flex-direction: column;
-  background: rgba(10, 12, 22, 0.55);
+  background: var(--bg-glass);
+  backdrop-filter: var(--blur-md);
+  -webkit-backdrop-filter: var(--blur-md);
   border: 1px solid var(--border-bright);
   overflow: hidden;
   box-shadow:
