@@ -59,7 +59,8 @@ const api: IpcApi = {
   },
   ambient: {
     getIntents: () => ipcRenderer.invoke('ambient:get-intents'),
-    approve: (id: string) => ipcRenderer.invoke('ambient:approve', id),
+    getAllIntents: (limit?: number) => ipcRenderer.invoke('ambient:get-all-intents', limit),
+    approve: (id: string, payload?: Record<string, unknown>) => ipcRenderer.invoke('ambient:approve', id, payload),
     dismiss: (id: string) => ipcRenderer.invoke('ambient:dismiss', id),
     challenge: (id: string, reason: string) => ipcRenderer.invoke('ambient:challenge', id, reason),
     getDigest: (slot?: string) => ipcRenderer.invoke('ambient:get-digest', slot),

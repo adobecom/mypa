@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Zap, List, Settings as SettingsIcon, Network, BarChart3, LayoutList, MessageSquare } from 'lucide-react'
+import { Zap, List, Settings as SettingsIcon, Network, BarChart3, LayoutList, MessageSquare, Activity } from 'lucide-react'
 import LogoMark from '../LogoMark'
 import AmbientBackground from '../AmbientBackground'
 import RoutinesManager from './components/RoutinesManager'
@@ -10,10 +10,11 @@ import MemoryGraph from './components/MemoryGraph'
 import UsageDashboard from './components/UsageDashboard'
 import PlanItemDetail from './components/PlanItemDetail'
 import CheckInPage from './components/CheckInPage'
+import ActivityPage from './components/ActivityPage'
 import { ToastProvider, useToast } from './toast/ToastProvider'
 import type { AppConfig, RoutineRun, Intent } from '@shared/types'
 
-type Page = 'routines' | 'logs' | 'settings' | 'memory' | 'usage' | 'plan' | 'checkin'
+type Page = 'routines' | 'logs' | 'settings' | 'memory' | 'usage' | 'plan' | 'checkin' | 'activity'
 
 // ─── Background-event → toast bridge ─────────────────────────────────────────
 // Subscribes to routine:run-started/completed and ambient:action-executed and
@@ -123,6 +124,7 @@ function useUpdateToasts(): void {
 const NAV: { id: Page; icon: React.ReactNode; label: string }[] = [
   { id: 'routines', icon: <Zap size={14} strokeWidth={2} />, label: 'Routines' },
   { id: 'logs', icon: <List size={14} strokeWidth={2} />, label: 'Run Logs' },
+  { id: 'activity', icon: <Activity size={14} strokeWidth={2} />, label: 'Activity' },
   { id: 'checkin', icon: <MessageSquare size={14} strokeWidth={2} />, label: 'Check-in' },
   { id: 'memory', icon: <Network size={14} strokeWidth={2} />, label: 'Memory' },
   { id: 'usage', icon: <BarChart3 size={14} strokeWidth={2} />, label: 'Usage' },
@@ -240,6 +242,7 @@ function AppShell(): React.ReactElement {
           {page === 'memory' && <MemoryGraph />}
           {page === 'usage' && <UsageDashboard />}
           {page === 'settings' && <Settings />}
+          {page === 'activity' && <ActivityPage />}
           {page === 'checkin' && (
             <CheckInPage
               activeCheckinId={activeCheckinId}

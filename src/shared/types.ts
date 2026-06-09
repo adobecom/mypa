@@ -557,7 +557,8 @@ export interface IpcApi {
   }
   ambient: {
     getIntents(): Promise<Intent[]>
-    approve(id: string): Promise<Intent>
+    getAllIntents(limit?: number): Promise<Intent[]>
+    approve(id: string, payload?: Record<string, unknown>): Promise<Intent>
     dismiss(id: string): Promise<void>
     challenge(id: string, reason: string): Promise<Intent>
     getDigest(slot?: DigestSlot): Promise<AmbientDigest>

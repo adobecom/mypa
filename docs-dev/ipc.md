@@ -105,11 +105,12 @@ Ambient intelligence — intents, digests, policy, tray state.
 | Method | Signature | Description |
 |---|---|---|
 | `getIntents` | `() → Intent[]` | Fetch all pending/surfaced intents |
-| `approve` | `(id) → Intent` | Approve an intent (executes it if tier allows) |
+| `getAllIntents` | `(limit?) → Intent[]` | Fetch all intents including terminal/historical ones (used by main-window Activity page) |
+| `approve` | `(id, payload?) → Intent` | Approve an intent, optionally passing a user-edited payload (for draft-and-confirm). Persists the edited payload before executing. |
 | `dismiss` | `(id) → void` | Dismiss an intent |
 | `challenge` | `(id, reason) → Intent` | Challenge an intent with a reason; adjusts trust policy |
 | `getDigest` | `(slot?) → AmbientDigest` | Fetch the latest digest for a slot (`morning \| midday \| eod`) |
-| `getTrayState` | `() → TrayState` | Current tray state: `idle \| has-something \| needs-you` |
+| `getTrayState` | `() → TrayState` | Current tray state: `idle \| has-something \| needs-you` (driven only by `action`-type intents) |
 | `getPolicy` | `() → AutonomyPolicy[]` | All per-action-type trust policies |
 | `setTier` | `(actionType, tier, locked?) → void` | Manually set (and optionally lock) the trust tier for an action type |
 | `resetTrust` | `() → void` | Reset all autonomy policies to defaults |
@@ -236,6 +237,7 @@ Manage PA check-in sessions and their chat threads.
 
 ## Changelog
 
+- 2026-06-09 — action-centric ambient redesign (Phase A): `ambient.approve` gains optional `payload?` arg for draft-and-confirm; `ambient.getAllIntents(limit?)` added for historical queries; `ambient:approve`/`dismiss`/`challenge` IPC handlers now broadcast updates to both windows (was widget-only); tray state and badge now driven only by `type:"action"` intents — informational (flag/digest/suggestion) no longer notify or light up the tray
 - 2026-06-09 — added `plan:user-message` and `routine:user-message` push channels (broadcast to both windows immediately after user message is saved to DB, before streaming begins); changed `badge:updated` to broadcast to both windows (was widget-only); removed unused `widgetWin` parameter from `handlePlanMessage` and `handleRunMessage` services
 - 2026-06-09 — added `config.getClaudeKey` and `config.setClaudeKey` channels; `config.get` now strips `claude.apiKey` before returning to the renderer (raw key never transmitted); `ClaudeConfig` gained `apiKey?: string` (encrypted at rest via `safeStorage`)
 - 2026-06-08 — added `checkin` namespace (`start`, `getActive`, `getAll`, `getThread`, `sendMessage`, `end`, `cancelStream`, `openInMainWindow`); new push channels `checkin:started`, `checkin:message`, `checkin:status-changed`, `navigate:checkin`; added `CheckInStatus`, `CheckIn`, `CheckInConfig`, `CheckInExtractionSummary` types; `AppConfig.checkin?: CheckInConfig`; `UsageSource` extended with `'checkin_chat'` and `'checkin_extract'`

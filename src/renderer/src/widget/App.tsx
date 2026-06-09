@@ -53,7 +53,13 @@ export default function App(): React.ReactElement {
     const unsubIntentCreated = api.on('ambient:intent-created', (intent) => {
       const i = intent as Intent
       setIntents((prev) => [i, ...prev.filter((x) => x.id !== i.id)])
-      setTab('ambient')
+      // Only switch to the ambient tab for pending actionable intents. Executed/dismissed
+      // intents also broadcast intent-created (via pushIntent in executeIntent) — ignore
+      // those so the user isn't bounced back to ambient after approving from another tab.
+      const TERMINAL: Intent['status'][] = ['executed', 'dismissed', 'challenged', 'failed', 'expired']
+      if (i.type === 'action' && !TERMINAL.includes(i.status)) {
+        setTab('ambient')
+      }
     })
     const unsubIntentUpdated = api.on('ambient:intent-updated', (updated) => {
       const u = updated as Partial<Intent> & { id: string }

@@ -639,6 +639,12 @@ export function dbSetIntentChallengeReason(id: string, reason: string): void {
   getDb().prepare('UPDATE intents SET challenge_reason = ? WHERE id = ?').run(reason, id)
 }
 
+export function dbUpdateIntentPayload(id: string, payload: Record<string, unknown>): void {
+  getDb()
+    .prepare('UPDATE intents SET payload = ? WHERE id = ?')
+    .run(JSON.stringify(payload), id)
+}
+
 function deserializeIntent(row: any): Intent {
   return {
     ...row,

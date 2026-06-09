@@ -7,12 +7,13 @@ import {
   dbGetAllIntents,
   dbUpdateIntentStatus,
   dbSetIntentChallengeReason,
+  dbUpdateIntentPayload,
   dbGetBadgeCount,
   dbAppendActionLog,
   dbGetAllPolicies,
   dbUpsertNode,
   dbBumpNodeWeight,
-  dbUpsertEdge
+  dbUpsertEdge,
 } from '../db/index'
 import { readConfig } from './config'
 import { callTool } from './mcp'
@@ -219,17 +220,20 @@ async function handleIntent(intent: Intent, win: BrowserWindow | null): Promise<
   const updated = dbGetIntent(intent.id)!
   pushIntent(updated, win)
 
-  // OS notification
-  const notif = new Notification({
-    title: `mypa: ${intent.surface ?? 'ambient'}`,
-    body: (intent.rationale ?? '').slice(0, 120),
-    silent: !(readConfig().preferences.notification_sound ?? true)
-  })
-  notif.on('click', () => win?.show())
-  notif.show()
+  // Only notify and badge for actionable intents — informational ones (flag/digest)
+  // live in the main-window Activity page and should not interrupt the user.
+  if (intent.type === 'action') {
+    const notif = new Notification({
+      title: `mypa: ${intent.surface ?? 'ambient'}`,
+      body: (intent.rationale ?? '').slice(0, 120),
+      silent: !(readConfig().preferences.notification_sound ?? true)
+    })
+    notif.on('click', () => win?.show())
+    notif.show()
 
-  // Badge + tray
-  win?.webContents.send('badge:updated', dbGetBadgeCount())
+    win?.webContents.send('badge:updated', dbGetBadgeCount())
+  }
+
   refreshTray(win)
 }
 
@@ -315,10 +319,22 @@ export function ambientGetIntents(): Intent[] {
   return dbGetPendingIntents()
 }
 
-export async function ambientApproveIntent(id: string): Promise<Intent> {
+export function ambientGetAllIntents(limit = 100): Intent[] {
+  return dbGetAllIntents(limit)
+}
+
+export async function ambientApproveIntent(
+  id: string,
+  editedPayload?: Record<string, unknown>
+): Promise<Intent> {
   const intent = dbGetIntent(id)
   if (!intent) throw new Error(`Intent ${id} not found`)
   const win = getWidgetWin?.() ?? null
+
+  // Persist user-edited payload before execution so executeIntent reads the updated text
+  if (editedPayload && Object.keys(editedPayload).length > 0) {
+    dbUpdateIntentPayload(id, editedPayload)
+  }
 
   dbUpdateIntentStatus(id, 'approved')
   recordApproval(`${intent.surface}:${intent.verb}`)
@@ -327,11 +343,11 @@ export async function ambientApproveIntent(id: string): Promise<Intent> {
     event: 'approved',
     action_type: `${intent.surface}:${intent.verb}`,
     tier: intent.tier,
-    detail: {},
+    detail: { edited: !!editedPayload },
     created_at: new Date().toISOString()
   })
 
-  // Execute the action
+  // Execute the action (reads fresh intent from DB, which now has the edited payload)
   await executeIntent(dbGetIntent(id)!, win)
   return dbGetIntent(id)!
 }
@@ -426,12 +442,13 @@ export async function ambientGetDigest(slot?: DigestSlot): Promise<AmbientDigest
 }
 
 export function ambientComputeTrayState(): TrayState {
-  const pending = dbGetPendingIntents()
+  // Only actionable intents drive the tray state — informational (flag/digest) do not interrupt.
+  const pending = dbGetPendingIntents().filter((i) => i.type === 'action')
   if (pending.some((i) => i.required_approval && i.tier >= 2)) return 'needs-you'
   if (pending.length > 0) return 'has-something'
-  // Also consider recently auto-executed in last hour
+  // Also consider recently auto-executed action intents in last hour
   const recent = dbGetAllIntents(20).filter((i) => {
-    if (i.status !== 'executed') return false
+    if (i.status !== 'executed' || i.type !== 'action') return false
     const age = Date.now() - Date.parse(i.created_at)
     return age < 60 * 60 * 1000
   })
@@ -506,8 +523,10 @@ function scheduleTimeTriggers(): void {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function pushIntent(intent: Intent, win: BrowserWindow | null): void {
-  win?.webContents.send('ambient:intent-created', intent)
+function pushIntent(intent: Intent, _win: BrowserWindow | null): void {
+  // Broadcast to all windows so the main-window Activity page receives informational intents
+  // and the widget receives actionable ones. Each window filters what it displays.
+  broadcast('ambient:intent-created', intent)
 }
 
 function refreshTray(win: BrowserWindow | null): void {

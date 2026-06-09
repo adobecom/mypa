@@ -1188,6 +1188,25 @@ body {
   word-break: break-word;
 }
 
+/* Editable draft text area — replaces the static quote when the intent is pending */
+.intent-detail__draft {
+  margin-top: 6px;
+  padding: 7px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11.5px;
+  color: var(--text);
+  line-height: 1.5;
+  font-family: inherit;
+  word-break: break-word;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.intent-detail__draft:focus {
+  border-color: var(--accent);
+}
+
 /* Key/value rows for extra payload fields */
 .intent-detail__kv {
   margin-top: 4px;
