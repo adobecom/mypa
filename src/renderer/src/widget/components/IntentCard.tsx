@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { GitBranch, SquareKanban, MessageSquare, ChevronDown } from 'lucide-react'
 import type { Intent } from '../../../../../../shared/types'
+import MarkdownText from '@renderer/components/MarkdownText'
 
 interface Props {
   intent: Intent
@@ -240,7 +241,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
           {/* Why this surfaced */}
           <div className="intent-detail__section">
             <div className="intent-detail__label">Why this surfaced</div>
-            <div className="intent-detail__text">{intent.rationale}</div>
+            <MarkdownText className="intent-detail__text">{intent.rationale}</MarkdownText>
           </div>
 
           {/* Proposed action */}
@@ -269,7 +270,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
                 />
               )}
               {payloadText !== null && isTerminal && (
-                <div className="intent-detail__quote">{payloadText}</div>
+                <MarkdownText className="intent-detail__quote">{payloadText}</MarkdownText>
               )}
               {payloadExtra.length > 0 && (
                 <div className="intent-detail__kv">
@@ -337,9 +338,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
              <>
                <span>Challenged</span>
                {intent.challenge_reason && (
-                 <div className="intent-detail__quote" style={{ marginTop: 4, fontSize: 11 }}>
-                   {intent.challenge_reason}
-                 </div>
+                 <MarkdownText className="intent-detail__quote">{intent.challenge_reason}</MarkdownText>
                )}
              </>
            ) :

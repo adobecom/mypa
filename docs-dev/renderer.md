@@ -73,7 +73,7 @@ Free-text input at the bottom of the widget. Calls `window.electron.plan.createD
 main-window/App.tsx (exports App → ToastProvider + AppShell)
   ├── ToastProvider         — global toast context + portal-rendered ToastContainer
   ├── AppShell
-  │     ├── Sidebar nav (5 items: Routines, Run Logs, Memory, Usage, Settings)
+  │     ├── Sidebar nav (6 items: Routines, Insights, Check-in, Memory, Usage, Settings)
   │     ├── OnboardingWizard    — shown if onboarding_complete = false
   │     └── <page content>
   └── ToastContainer        — fixed top-right portal; renders Toast items
@@ -97,9 +97,9 @@ toast.loading(title, opts?)      // sticky (duration: 0); update when done
 ```
 
 Variants: `success` (green), `error` (red), `info` (accent purple), `loading` (yellow spinner).  
-Toasts support an optional `action: { label, onClick }` button (e.g. "View logs" that navigates to Run Logs).
+Toasts support an optional `action: { label, onClick }` button (e.g. "View logs" that navigates to the Run Logs sub-tab of the Routines page).
 
-**Background-event bridge** (`useRunToasts` in `App.tsx`): subscribes to `routine:run-started` (→ loading toast), `routine:run-completed` (→ update to success/error; "View logs" action button), and `ambient:action-executed` (→ info toast). This is why clicking **Run now** in RoutinesManager now shows visible feedback — the run events are broadcast to both windows (see IPC docs).
+**Background-event bridge** (`useRunToasts` in `App.tsx`): subscribes to `routine:run-started` (→ loading toast), `routine:run-completed` (→ update to success/error; "View logs" action switches to the Run Logs sub-tab), and `ambient:action-executed` (→ info toast). This is why clicking **Run now** in RoutinesManager now shows visible feedback — the run events are broadcast to both windows (see IPC docs).
 
 Styles in `src/renderer/src/main-window/index.css` (`.toast*` block), using existing design tokens. Timer cleanup on unmount prevents leaks.
 
@@ -107,21 +107,34 @@ Styles in `src/renderer/src/main-window/index.css` (`.toast*` block), using exis
 
 #### Routines
 
+`RoutinesPage` is the nav-level wrapper; it owns the page header and the **Routines / Run Logs** tab strip. The active tab renders one of its two children:
+
 | Component | Description |
 |---|---|
-| `RoutinesManager` | List of all saved routines with enable/disable toggle and run-now button |
+| `RoutinesPage` | Outer shell: page header ("Routines"), Routines/Run Logs `<Tabs>` strip, conditionally renders child |
+| `RoutinesManager` | List of all saved routines with enable/disable toggle and run-now button; "+ New routine" action row at top |
 | `RoutineForm` | Create / edit a routine: name, cron expression (with human-readable preview via `cronUtils.ts`), MCP actions, digest prompt |
 | `ServerCatalogPicker` | Browse and add servers from the built-in MCP catalog |
+| `RunLogs` | Table of all routine runs; click a row to expand; expanded view has "Raw output" / "Conversation" toggle |
 
-Navigating here with a `routineId` (via `navigate:edit-routine` push event) opens the `RoutineForm` in edit mode for that routine.
+`navigate:edit-routine` → opens the Routines sub-tab and opens `RoutineForm` in edit mode.  
+`navigate:run-chat` → opens the Run Logs sub-tab and auto-expands the target run in conversation view.  
+"View logs" toast action → navigates to the Run Logs sub-tab.
 
-#### Run Logs
+#### Insights
+
+`InsightsPage` surfaces the agent's ambient intelligence in a structured layout:
+
+1. **Daily Digest (always on):** `DigestView` sits at the top of the page, always visible, with its morning / midday / end-of-day slot selector. Any non-terminal `digest`-type intents are listed directly below it under "Recent digests".
+2. **Observations / History tab strip:** below the digest, a two-tab `<Tabs>` strip lets the user browse active observations (suggestions and flags not yet resolved) and the full history of terminal intents (executed, dismissed, challenged, failed, expired).
 
 | Component | Description |
 |---|---|
-| `RunLogs` | Paginated table of all routine runs; click a row to expand it; expanded view has "Raw output" / "Conversation" tab toggle |
+| `InsightsPage` | Outer shell: page header ("Insights"), always-on `DigestView`, optional recent-digests list, Observations/History `<Tabs>` |
+| `DigestView` | Self-contained: fetches and renders the `AmbientDigest` for the selected slot; has its own slot selector and re-fetches on `ambient:digest-ready` |
+| `IntentCard` | Single intent card with Approve / Dismiss / Challenge actions; shared with widget |
 
-Navigating here via `navigate:run-chat` (sent by `routines.openRunInMainWindow`) auto-expands the target run in conversation view and scrolls it into view.
+Data flow: `window.electron.ambient.getAllIntents(200)` on mount; `ambient:intent-created` and `ambient:intent-updated` push events for live updates; `ambient:digest-ready` handled inside `DigestView`.
 
 #### Plan item detail
 
@@ -196,9 +209,14 @@ Located in `src/renderer/src/` (shared between widget and main window):
 |---|---|
 | `ChatThread` | Renders a `ChatMessage[]` history with a streaming-capable input box |
 | `cronUtils.ts` | Human-readable cron expression parser (used in `RoutineForm`) |
+| `components/MarkdownText.tsx` | Renders a markdown string via `ReactMarkdown` + `remark-gfm` wrapped in `<div className="md-text">`. Handles external link clicks via `window.electron.system.openExternal`. Used in `IntentCard`, `DigestView`, and `ChatThread`. |
+| `components/Tabs.tsx` | Reusable underline-tab strip. Props: `items: TabItem[]`, `active: string`, `onChange: (id: string) => void`. `TabItem` has `id`, `label`, optional `icon` and `count`. Active tab gets accent underline + bold; count shows a colored pill. CSS classes: `.tabs`, `.tab`, `.tab--active`, `.tab__count`, `.tab__count--active` (in `components.css`). |
+| `components.css` | Shared component stylesheet imported by both renderer entry points before their window-specific `index.css`. Contains `.routine-card*`, `.intent-card*`, `.intent-detail*`, `.intent-chip*`, `.plan-review-card*`, `.review-field*`, `.section-header`, `.section-subheader`, `.tabs`, `.tab*`. |
 
 ## Changelog
 
+- 2026-06-09 — **Insights page + merged Routines/Run Logs:** renamed "Activity" nav tab to **Insights** (`InsightsPage.tsx`); daily `DigestView` is now always-on at the top of the page (with digest-type intents in a "Recent digests" section below it) instead of being hidden in a tab; two-tab strip below: Observations / History. Merged the separate "Run Logs" nav entry into the **Routines** page: new `RoutinesPage.tsx` wrapper owns the page header and a Routines / Run Logs `<Tabs>` strip; `RoutinesManager` and `RunLogs` are rendered as children with their own redundant page-header title/subtitle removed. Created reusable `components/Tabs.tsx` (replaces inline-styled tab bars) with `.tabs`/`.tab`/`.tab--active`/`.tab__count`/`.tab__count--active` CSS classes added to `components.css`. Updated `App.tsx`: `Page` union removes `'logs'` and renames `'activity'` → `'insights'`; `routinesTab` state propagated through `RoutinesPage`; `navigate:run-chat` and "View logs" toast action land on the Run Logs sub-tab; `navigate:edit-routine` lands on the Routines sub-tab.
+- 2026-06-09 — **Activity tab: styled cards + Markdown prose:** extracted shared component CSS (`.routine-card*`, `.intent-card*`, `.intent-detail*`, `.intent-chip*`, `.plan-review-card*`, `.review-field*`, `.section-header/subheader`) from `widget/index.css` into a new `src/renderer/src/components.css` imported by both renderer entry points; this fixes the Activity tab (main window) where all card classes were previously undefined. Added `components/MarkdownText.tsx` shared component that renders prose through `ReactMarkdown` + `remark-gfm` + `md-text` styling; wired into `IntentCard` (rationale, payload quote, challenge reason), `DigestView` (did/watching items), and `ChatThread` (refactored to use the shared wrapper). Fixed undefined CSS vars in `ActivityPage.tsx` tab styles (`--text` → `--text-primary`, `--accent-dim` → `--accent-muted`, `--bg-raised` → `--bg-elevated`).
 - 2026-06-09 — **action-centric ambient redesign (Phase A):** widget `AmbientFeed` now shows only `type:"action"` intents (observations/flags/digests removed from widget); cards with a drafted body (`payload.body`/`message`/etc.) auto-expand and render an editable `<textarea>` instead of a static quote; primary CTA on draft cards changed from "Approve" to "Send" and passes the edited payload to `ambient.approve(id, payload)`; widget `App.tsx` only switches to the ambient tab for action-type intents. Main-window gains a new **Activity** page (`components/ActivityPage.tsx`) with three tabs — Observations, Digests, History — powered by `ambient.getAllIntents()`; both `ambient:intent-created` and `ambient:intent-updated` push events now reach the main window via `broadcast()`.
 - 2026-06-08 — `ChatThread` now uses a custom `markdownComponents` object passed to `<ReactMarkdown>` so that all `<a>` tags intercept clicks and call `window.electron.system.openExternal(href)` instead of navigating inside the webview; `PlanItemDetail` now listens for the `plan:item-updated` push event and updates its local `item.status` in real-time when the widget changes a plan item's status
 - 2026-06-08 — added all chat CSS classes (`.chat-thread`, `.chat-message`, `.chat-message__bubble`, `.chat-input-row`, `.chat-input`, `.chat-send-btn`, `.chat-stop-btn`, `.typing-dot`, `.md-text` and variants) to `main-window/index.css`; `.chat-thread` max-height set to 480px (vs 240px in widget) and `.chat-message` font-size to 13px to match main-window type scale; fixes unstyled chat in `RunDetail` conversation tab and `PlanItemDetail`

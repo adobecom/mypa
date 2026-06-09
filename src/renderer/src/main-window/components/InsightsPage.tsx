@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react'
-import { Eye, BookOpen, History, Radar } from 'lucide-react'
+import { Eye, History, Radar } from 'lucide-react'
 import IntentCard from '../../widget/components/IntentCard'
 import DigestView from '../../widget/components/DigestView'
+import Tabs from '@renderer/components/Tabs'
+import type { TabItem } from '@renderer/components/Tabs'
 import type { Intent } from '@shared/types'
 
-type Section = 'observations' | 'digests' | 'history'
+type Section = 'observations' | 'history'
 
 const TERMINAL_STATUSES: Intent['status'][] = ['executed', 'dismissed', 'challenged', 'failed', 'expired']
 
-export default function ActivityPage(): React.ReactElement {
+export default function InsightsPage(): React.ReactElement {
   const [section, setSection] = useState<Section>('observations')
   const [intents, setIntents] = useState<Intent[]>([])
   const [loading, setLoading] = useState(true)
@@ -64,57 +66,36 @@ export default function ActivityPage(): React.ReactElement {
   )
   const history = intents.filter((i) => TERMINAL_STATUSES.includes(i.status))
 
-  const SECTIONS: { id: Section; label: string; icon: React.ReactNode; count: number }[] = [
+  const TABS: TabItem[] = [
     { id: 'observations', label: 'Observations', icon: <Eye size={13} strokeWidth={2} />, count: observations.length },
-    { id: 'digests', label: 'Digests', icon: <BookOpen size={13} strokeWidth={2} />, count: digests.length },
     { id: 'history', label: 'History', icon: <History size={13} strokeWidth={2} />, count: history.length },
   ]
 
   return (
-    <div className="main-content">
+    <div>
       <div className="page-header">
-        <h1 className="page-title">Activity</h1>
-        <p className="page-subtitle">Observations, digests, and a full history of what the agent has surfaced.</p>
+        <h1 className="page-title">Insights</h1>
+        <p className="page-subtitle">Your daily digest, live observations, and a full history of what the agent has surfaced.</p>
       </div>
 
-      {/* Section tabs */}
-      <div style={{ display: 'flex', gap: 2, marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 0 }}>
-        {SECTIONS.map((s) => (
-          <button
-            key={s.id}
-            onClick={() => setSection(s.id)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '6px 12px',
-              fontSize: 12,
-              fontWeight: section === s.id ? 600 : 400,
-              color: section === s.id ? 'var(--text)' : 'var(--text-muted)',
-              background: 'none',
-              border: 'none',
-              borderBottom: section === s.id ? '2px solid var(--accent)' : '2px solid transparent',
-              cursor: 'pointer',
-              marginBottom: -1,
-              transition: 'color 0.15s, border-color 0.15s',
-            }}
-          >
-            {s.icon}
-            {s.label}
-            {s.count > 0 && (
-              <span style={{
-                fontSize: 10,
-                fontWeight: 600,
-                color: section === s.id ? 'var(--accent)' : 'var(--text-muted)',
-                background: section === s.id ? 'var(--accent-dim)' : 'var(--bg-raised)',
-                borderRadius: 10,
-                padding: '1px 5px',
-              }}>
-                {s.count}
-              </span>
-            )}
-          </button>
-        ))}
+      {/* Always-on daily digest */}
+      <DigestView />
+      {!loading && digests.length > 0 && (
+        <>
+          <div className="section-header" style={{ marginTop: 8 }}>Recent digests</div>
+          {digests.map((intent) => (
+            <IntentCard key={intent.id} intent={intent} onIntentChange={handleIntentChange} />
+          ))}
+        </>
+      )}
+
+      {/* Observations / History tabs */}
+      <div style={{ marginTop: 20 }}>
+        <Tabs
+          items={TABS}
+          active={section}
+          onChange={(id) => setSection(id as Section)}
+        />
       </div>
 
       {loading && (
@@ -135,20 +116,6 @@ export default function ActivityPage(): React.ReactElement {
             ))}
           </div>
         )
-      )}
-
-      {!loading && section === 'digests' && (
-        <div>
-          <DigestView />
-          {digests.length > 0 && (
-            <>
-              <div className="section-header" style={{ marginTop: 16 }}>Digest intents</div>
-              {digests.map((intent) => (
-                <IntentCard key={intent.id} intent={intent} onIntentChange={handleIntentChange} />
-              ))}
-            </>
-          )}
-        </div>
       )}
 
       {!loading && section === 'history' && (
