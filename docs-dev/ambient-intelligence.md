@@ -77,6 +77,19 @@ Evaluated by `triggers.ts` against the current graph state:
 | `dependency` | A dependency or blocker edge connects to a node with recent activity |
 | `threshold` | A numeric metric (PR age, issue count, etc.) crosses a configured limit |
 | `time` | A scheduled digest slot (morning / midday / eod) is due |
+| `directed` | A single inbound signal from a non-owner actor looks like a question or request |
+
+### Directed-at-me trigger
+
+The `directed` trigger is the only kind that fires on a **single signal** rather than a volume pattern. It addresses the gap where a single Jira comment ("can we move this to next sprint?") would never trip a spike, so the agent would never propose a response.
+
+**Logic** (`evalDirectedAtMe` in `triggers.ts`):
+1. For each new signal, skip it if `signal.actor` matches any of the user's configured handles (own activity).
+2. Concatenate `signal.title + signal.body` and test against a fixed set of regex patterns: `?`, `can we/you/i`, `should we`, `please`, `lgtm`, `review`, `approve`, `defer`, `move to`, `next sprint/release/milestone`, `what do you think`, `is it ok/okay`.
+3. On a match, resolve the signal to its memory-graph node and return a `TriggerHit` with `kind: 'directed'`.
+4. Returns at most one hit per poll cycle to avoid flooding inference.
+
+**Autonomy path**: once the inference pipeline generates a `jira:comment` or `github:comment` intent from a `directed` hit and the user approves it 5 consecutive times, the `surface:verb` policy drops to Tier 1 (notify-only). With an explicit Tier 0 opt-in, subsequent matching comments are sent automatically — enabling the "reply on my behalf" use case.
 
 ---
 
@@ -189,6 +202,7 @@ See [ipc.md](ipc.md) for full signatures. Quick reference:
 
 ## Changelog
 
+- 2026-06-08 — added `directed` trigger kind (`evalDirectedAtMe`); fires on single inbound signals from non-owner actors containing question/request language; documented autonomy path for "reply on my behalf" PM use case
 - 2026-06-07 — `executeIntent` now calls `broadcast('ambient:action-executed', intent)` after a tier-0 intent succeeds, so the main window can surface a toast; `ambient.ts` imports `broadcast` from `../windows`
 - 2026-06-07 — `inferIntent` now appends the owner-identity clause to its system prompt (via `buildOwnerClause`); `renderPacketForPrompt` tags owner person-nodes as `you (handle)` in relationship and focus lines when `AppConfig.owner.handles` is configured
 - 2026-06-07 — trust two-level tier resolution: `resolveTier` falls back to intent-type policy (Settings controls) when no per-surface:verb policy exists; streak is reset on tier promotion to ensure each step costs the full threshold; Settings UI now does exact `action_type` match instead of fragile `startsWith`
