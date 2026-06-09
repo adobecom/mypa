@@ -301,8 +301,33 @@ Several columns store JSON as TEXT and are parsed in the query layer:
 
 There is no migration framework. `initSchema()` uses `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`. Additive schema changes (new columns) use `ALTER TABLE` wrapped in a try/catch that silently ignores "column already exists" errors. Structural changes (constraint changes) use an explicit table-rename migration block inside `initSchema()`. See `src/main/db/schema.ts` for examples.
 
+### `check_ins`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | TEXT PK | UUID |
+| `status` | TEXT | `active \| extracting \| complete \| error` |
+| `trigger` | TEXT | `manual \| scheduled` |
+| `started_at` | TEXT | ISO 8601 |
+| `completed_at` | TEXT | Nullable; set when `end()` is called |
+| `briefing` | TEXT | Agent's opening self-report (plain text) |
+| `extraction_summary` | TEXT | Nullable; JSON `CheckInExtractionSummary` after extraction |
+
+### `checkin_messages`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | TEXT PK | UUID |
+| `checkin_id` | TEXT FK → `check_ins` | CASCADE DELETE |
+| `role` | TEXT | `user \| assistant` |
+| `content` | TEXT | Message text |
+| `timestamp` | TEXT | ISO 8601 |
+
+Indexes: `idx_checkin_messages_checkin` (checkin_id, timestamp), `idx_check_ins_status` (status, started_at).
+
 ## Changelog
 
+- 2026-06-08 — added `check_ins` and `checkin_messages` tables with indexes; new DB functions `dbCreateCheckIn`, `dbGetCheckIn`, `dbGetActiveCheckIn`, `dbGetCheckIns`, `dbUpdateCheckIn`, `dbAddCheckInMessage`, `dbGetCheckInThread`
 - 2026-06-07 — added `usage_events` table + indexes (`idx_usage_events_created`, `idx_usage_events_source`); new query functions `dbInsertUsage`, `dbGetUsageSummary`, `dbGetUsageByDay`, `dbGetUsageBySource`, `dbGetUsageByModel`, `dbGetRecentUsage` in `src/main/db/index.ts`
 - 2026-06-07 — added `dbGetAllMemories()` (all rows incl. superseded, ordered by `created_at`); used by the memory export feature; `dbUpsertPolicy` now accepts `consecutive_approvals` reset to fix the trust-accumulation streak bug
 - 2026-06-06 — initial documentation; reflects schema as of commit d8a8774

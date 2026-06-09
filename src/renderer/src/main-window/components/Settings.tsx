@@ -586,6 +586,9 @@ export default function Settings(): React.ReactElement {
 
       {/* Ambient Autonomy */}
       <AmbientAutonomyCard />
+
+      {/* Check-in schedule */}
+      <CheckInScheduleCard />
     </div>
   )
 }
@@ -863,6 +866,99 @@ function HealthRow({
         <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>{detail}</span>
       </div>
       {action && <div style={{ flexShrink: 0 }}>{action}</div>}
+    </div>
+  )
+}
+
+// ─── Check-in Schedule Card ──────────────────────────────────────────────────
+
+function CheckInScheduleCard(): React.ReactElement {
+  const api = window.electron
+  const toast = useToast()
+  const [enabled, setEnabled] = useState(false)
+  const [schedule, setSchedule] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    api.config.get().then((cfg) => {
+      setEnabled(cfg.checkin?.scheduleEnabled ?? false)
+      setSchedule(cfg.checkin?.schedule ?? '')
+    })
+  }, [])
+
+  async function handleToggleEnabled(next: boolean): Promise<void> {
+    setEnabled(next)
+    try {
+      await api.config.update({ checkin: { scheduleEnabled: next, schedule: schedule || undefined } } as any)
+      toast.success(next ? 'Scheduled check-ins enabled' : 'Scheduled check-ins disabled')
+    } catch (err: any) {
+      setEnabled(!next)
+      toast.error('Failed to update check-in schedule', { message: err?.message })
+    }
+  }
+
+  async function handleSaveSchedule(): Promise<void> {
+    setSaving(true)
+    try {
+      await api.config.update({ checkin: { scheduleEnabled: enabled, schedule: schedule || undefined } } as any)
+      toast.success('Check-in schedule saved')
+    } catch (err: any) {
+      toast.error('Failed to save schedule', { message: err?.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card__header">
+        <div>
+          <div className="card__title">Check-in Schedule</div>
+          <div className="card__subtitle">Automatically prompt for periodic 1:1 sessions</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 13 }}>Enable scheduled check-ins</span>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => handleToggleEnabled(e.target.checked)}
+            />
+            <span className="toggle__track" />
+          </label>
+        </div>
+
+        {enabled && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              Schedule (cron expression)
+            </label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                className="input"
+                style={{ flex: 1, fontSize: 13, fontFamily: 'var(--font-mono)' }}
+                value={schedule}
+                onChange={(e) => setSchedule(e.target.value)}
+                placeholder="0 9 * * 1"
+              />
+              <button
+                className="btn btn--primary"
+                style={{ fontSize: 12, padding: '5px 12px' }}
+                onClick={handleSaveSchedule}
+                disabled={saving}
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              e.g. <code>0 9 * * 1</code> = every Monday at 9 AM
+            </span>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

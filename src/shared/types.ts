@@ -175,6 +175,7 @@ export interface AppConfig {
     linear?: string
   }
   ambient?: AmbientConfig
+  checkin?: CheckInConfig
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -191,6 +192,9 @@ export const DEFAULT_CONFIG: AppConfig = {
     pollIntervalMs: 5 * 60 * 1000,
     decayHalfLifeDays: 7,
     confidenceFloor: 0.4
+  },
+  checkin: {
+    scheduleEnabled: false
   }
 }
 
@@ -373,6 +377,31 @@ export interface AmbientConfig {
   confidenceFloor: number
 }
 
+// ─── Check-ins ───────────────────────────────────────────────────────────────
+
+export type CheckInStatus = 'active' | 'extracting' | 'complete' | 'error'
+
+export interface CheckIn {
+  id: string
+  status: CheckInStatus
+  trigger: 'manual' | 'scheduled'
+  started_at: string
+  completed_at: string | null
+  briefing: string
+  extraction_summary: string | null
+}
+
+export interface CheckInConfig {
+  scheduleEnabled: boolean
+  schedule?: string
+}
+
+export interface CheckInExtractionSummary {
+  memoriesAdded: number
+  nodesUpdated: number
+  edgesAdded: number
+}
+
 export type MemoryType = 'fact' | 'pattern' | 'preference' | 'status'
 
 export interface Memory {
@@ -409,6 +438,8 @@ export type UsageSource =
   | 'routine_setup'
   | 'routine_chat'
   | 'plan_chat'
+  | 'checkin_chat'
+  | 'checkin_extract'
   | 'inference'
   | 'memory'
   | 'chat'
@@ -550,6 +581,16 @@ export interface IpcApi {
     getByModel(range: UsageRange): Promise<UsageBreakdownRow[]>
     getRecent(limit: number, range: UsageRange): Promise<UsageEvent[]>
   }
+  checkin: {
+    start(): Promise<CheckIn>
+    getActive(): Promise<CheckIn | null>
+    getAll(limit?: number): Promise<CheckIn[]>
+    getThread(checkinId: string): Promise<ChatMessage[]>
+    sendMessage(checkinId: string, message: string): Promise<void>
+    end(checkinId: string): Promise<void>
+    cancelStream(checkinId: string): Promise<void>
+    openInMainWindow(checkinId?: string): Promise<void>
+  }
   update: {
     checkNow(): Promise<void>
     install(): Promise<void>
@@ -570,6 +611,10 @@ export interface IpcApi {
       | 'ambient:tray-state'
       | 'ambient:digest-ready'
       | 'ambient:action-executed'
+      | 'checkin:started'
+      | 'checkin:message'
+      | 'checkin:status-changed'
+      | 'navigate:checkin'
       | 'update:available'
       | 'update:progress'
       | 'update:downloaded'

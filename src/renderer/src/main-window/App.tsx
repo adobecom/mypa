@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Zap, List, Settings as SettingsIcon, Network, BarChart3, LayoutList } from 'lucide-react'
+import { Zap, List, Settings as SettingsIcon, Network, BarChart3, LayoutList, MessageSquare } from 'lucide-react'
 import LogoMark from '../LogoMark'
 import AmbientBackground from '../AmbientBackground'
 import RoutinesManager from './components/RoutinesManager'
@@ -9,10 +9,11 @@ import OnboardingWizard from './components/OnboardingWizard'
 import MemoryGraph from './components/MemoryGraph'
 import UsageDashboard from './components/UsageDashboard'
 import PlanItemDetail from './components/PlanItemDetail'
+import CheckInPage from './components/CheckInPage'
 import { ToastProvider, useToast } from './toast/ToastProvider'
 import type { AppConfig, RoutineRun, Intent } from '@shared/types'
 
-type Page = 'routines' | 'logs' | 'settings' | 'memory' | 'usage' | 'plan'
+type Page = 'routines' | 'logs' | 'settings' | 'memory' | 'usage' | 'plan' | 'checkin'
 
 // ─── Background-event → toast bridge ─────────────────────────────────────────
 // Subscribes to routine:run-started/completed and ambient:action-executed and
@@ -122,6 +123,7 @@ function useUpdateToasts(): void {
 const NAV: { id: Page; icon: React.ReactNode; label: string }[] = [
   { id: 'routines', icon: <Zap size={14} strokeWidth={2} />, label: 'Routines' },
   { id: 'logs', icon: <List size={14} strokeWidth={2} />, label: 'Run Logs' },
+  { id: 'checkin', icon: <MessageSquare size={14} strokeWidth={2} />, label: 'Check-in' },
   { id: 'memory', icon: <Network size={14} strokeWidth={2} />, label: 'Memory' },
   { id: 'usage', icon: <BarChart3 size={14} strokeWidth={2} />, label: 'Usage' },
   { id: 'settings', icon: <SettingsIcon size={14} strokeWidth={2} />, label: 'Settings' }
@@ -135,6 +137,7 @@ function AppShell(): React.ReactElement {
   const [editRoutineId, setEditRoutineId] = useState<string | null>(null)
   const [activePlanItemId, setActivePlanItemId] = useState<string | null>(null)
   const [navigateRunId, setNavigateRunId] = useState<string | null>(null)
+  const [activeCheckinId, setActiveCheckinId] = useState<string | null>(null)
   const [config, setConfig] = useState<AppConfig | null>(null)
 
   useRunToasts(setPage)
@@ -157,10 +160,15 @@ function AppShell(): React.ReactElement {
       setNavigateRunId(id as string)
       setPage('logs')
     })
+    const offCheckin = window.electron.on('navigate:checkin', (id) => {
+      setActiveCheckinId((id as string | null) ?? null)
+      setPage('checkin')
+    })
     return () => {
       offRoutine()
       offPlanItem()
       offRunChat()
+      offCheckin()
     }
   }, [])
 
@@ -232,6 +240,12 @@ function AppShell(): React.ReactElement {
           {page === 'memory' && <MemoryGraph />}
           {page === 'usage' && <UsageDashboard />}
           {page === 'settings' && <Settings />}
+          {page === 'checkin' && (
+            <CheckInPage
+              activeCheckinId={activeCheckinId}
+              onCheckinHandled={() => setActiveCheckinId(null)}
+            />
+          )}
           {page === 'plan' && (
             <PlanItemDetail
               itemId={activePlanItemId}

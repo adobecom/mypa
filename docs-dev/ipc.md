@@ -192,6 +192,10 @@ Push channels (main → renderer):
 | `update:progress` | `{ percent: number }` | Download progress (0–100) |
 | `update:downloaded` | — | Download complete; ready to install |
 | `update:error` | `message: string` | Update check or download failed |
+| `checkin:started` | `CheckIn` | A new check-in session has been created |
+| `checkin:message` | `{ checkinId, chunk, done, error? }` | Streaming token from briefing or chat response |
+| `checkin:status-changed` | `CheckIn` | Session status changed (extracting → complete / error) |
+| `navigate:checkin` | `string \| null` | Open main window on the Check-in page and expand the given session |
 
 ## Key types (abbreviated)
 
@@ -211,8 +215,24 @@ type DigestSlot      = 'morning' | 'midday' | 'eod'
 type MemoryType      = 'fact' | 'pattern' | 'preference' | 'status'
 ```
 
+### `checkin`
+
+Manage PA check-in sessions and their chat threads.
+
+| Method | Signature | Description |
+|---|---|---|
+| `start` | `() → CheckIn` | Start a new check-in (returns existing active session if one is in progress) |
+| `getActive` | `() → CheckIn \| null` | Get the current active session, if any |
+| `getAll` | `(limit?) → CheckIn[]` | List all sessions, newest first |
+| `getThread` | `(checkinId) → ChatMessage[]` | Fetch full message thread for a session |
+| `sendMessage` | `(checkinId, message) → void` | Send a user message (streaming) |
+| `end` | `(checkinId) → void` | End the session and trigger async knowledge extraction |
+| `cancelStream` | `(checkinId) → void` | Cancel active streaming response |
+| `openInMainWindow` | `(checkinId?) → void` | Open main window on Check-in page, expanding the given session |
+
 ## Changelog
 
+- 2026-06-08 — added `checkin` namespace (`start`, `getActive`, `getAll`, `getThread`, `sendMessage`, `end`, `cancelStream`, `openInMainWindow`); new push channels `checkin:started`, `checkin:message`, `checkin:status-changed`, `navigate:checkin`; added `CheckInStatus`, `CheckIn`, `CheckInConfig`, `CheckInExtractionSummary` types; `AppConfig.checkin?: CheckInConfig`; `UsageSource` extended with `'checkin_chat'` and `'checkin_extract'`
 - 2026-06-08 — added `system.openExternal` method + `system:open-external` IPC handler (opens URL in default browser via `shell.openExternal`); added `plan:item-updated` push channel (broadcast to both windows when plan item status changes); both windows now have `will-navigate` + `setWindowOpenHandler` guards that redirect external URLs to the default browser
 - 2026-06-08 — added `plan.getItem`, `plan.openInMainWindow`; `routines.openRunInMainWindow`; new push channels `navigate:run-chat` and `navigate:plan-item`; `Intent` type gained `challenge_reason: string | null`
 - 2026-06-07 — added `update` namespace (`checkNow`, `install`); new push channels `update:available`, `update:progress`, `update:downloaded`, `update:error`

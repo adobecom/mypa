@@ -39,7 +39,13 @@ import { detectClaudeMcpServers } from './services/claude-import'
 import { executeRoutine, handleRunMessage } from './services/routines'
 import { createPlanDraft, confirmPlanDraft, updatePlanItemStatus, deletePlanItem, handlePlanMessage } from './services/plan'
 import { generateRoutineSetup, cancelStream } from './services/claude'
-import { refreshSchedules } from './services/cron'
+import { refreshSchedules, refreshCheckinSchedule } from './services/cron'
+import { startCheckIn, handleCheckInMessage, endCheckIn, cancelCheckinStream } from './services/checkin'
+import {
+  dbGetCheckIns,
+  dbGetActiveCheckIn,
+  dbGetCheckInThread
+} from './db/index'
 import {
   ambientGetIntents,
   ambientApproveIntent,
@@ -207,6 +213,10 @@ export function registerIpcHandlers(
       startAmbient(getWidgetWin)
     } else if (wasEnabled && !nowEnabled) {
       stopAmbient()
+    }
+    // Refresh check-in schedule if checkin config changed
+    if (partial.checkin !== undefined) {
+      refreshCheckinSchedule(getWidgetWin)
     }
     return updated
   })
@@ -469,6 +479,48 @@ export function registerIpcHandlers(
 
   ipcMain.handle('usage:get-recent', (_e, limit: number, range: UsageRange) => {
     return dbGetRecentUsage(limit, range)
+  })
+
+  // ─── Check-in ─────────────────────────────────────────────────────────────
+
+  ipcMain.handle('checkin:start', async () => {
+    return startCheckIn('manual', getWidgetWin())
+  })
+
+  ipcMain.handle('checkin:get-active', async () => {
+    return dbGetActiveCheckIn()
+  })
+
+  ipcMain.handle('checkin:get-all', async (_e, limit?: number) => {
+    return dbGetCheckIns(limit)
+  })
+
+  ipcMain.handle('checkin:get-thread', async (_e, checkinId: string) => {
+    return dbGetCheckInThread(checkinId)
+  })
+
+  ipcMain.handle('checkin:send-message', async (_e, checkinId: string, message: string) => {
+    await handleCheckInMessage(checkinId, message, getWidgetWin())
+  })
+
+  ipcMain.handle('checkin:end', async (_e, checkinId: string) => {
+    endCheckIn(checkinId).catch(console.error)
+  })
+
+  ipcMain.handle('checkin:cancel-stream', (_e, checkinId: string) => {
+    cancelCheckinStream(checkinId)
+  })
+
+  ipcMain.handle('checkin:open-in-main-window', async (_e, checkinId?: string) => {
+    const win = openMainWindow()
+    const send = (): void => win.webContents.send('navigate:checkin', checkinId ?? null)
+    const url = win.webContents.getURL()
+    const ready = url !== '' && url !== 'about:blank' && !win.webContents.isLoading()
+    if (ready) {
+      send()
+    } else {
+      win.webContents.once('did-finish-load', send)
+    }
   })
 
   // ─── Update ───────────────────────────────────────────────────────────────
