@@ -65,11 +65,19 @@ function CheckInDetail({ checkin, onCheckinUpdated }: CheckInDetailProps): React
     setChatError(null)
     setStreaming(true)
     setStreamContent('')
+    const optimisticId = Date.now().toString()
     setThread((prev) => [
       ...prev,
-      { id: Date.now().toString(), role: 'user', content: msg, timestamp: new Date().toISOString() }
+      { id: optimisticId, role: 'user', content: msg, timestamp: new Date().toISOString() }
     ])
-    await api.checkin.sendMessage(current.id, msg)
+    try {
+      await api.checkin.sendMessage(current.id, msg)
+    } catch (err: any) {
+      setStreaming(false)
+      setStreamContent('')
+      setChatError(err?.message ?? 'Failed to send message')
+      setThread((prev) => prev.filter((m) => m.id !== optimisticId))
+    }
   }
 
   const handleStop = async (): Promise<void> => {

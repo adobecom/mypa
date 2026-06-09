@@ -1136,7 +1136,9 @@ export function dbUpdateCheckIn(
     extraction_summary: string
   }>
 ): void {
-  const sets = Object.keys(fields).map((k) => `${k} = ?`).join(', ')
+  const keys = Object.keys(fields)
+  if (keys.length === 0) return
+  const sets = keys.map((k) => `${k} = ?`).join(', ')
   const vals = [...Object.values(fields), id]
   getDb().prepare(`UPDATE check_ins SET ${sets} WHERE id = ?`).run(...vals)
 }

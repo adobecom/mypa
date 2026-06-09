@@ -68,7 +68,6 @@ Speak in first person as ${persona}, directly to your manager.`
         segments[segments.length - 1] += chunk
       }
       broadcast('checkin:message', { checkinId, chunk, done: false })
-      win?.webContents.send('checkin:message', { checkinId, chunk, done: false })
     },
     (full) => { fullResponse = full },
     rawContext,
@@ -77,7 +76,6 @@ Speak in first person as ${persona}, directly to your manager.`
   )
 
   broadcast('checkin:message', { checkinId, chunk: '', done: true })
-  win?.webContents.send('checkin:message', { checkinId, chunk: '', done: true })
   return fullResponse
 }
 
@@ -130,7 +128,6 @@ export async function handleCheckInMessage(
           segments[segments.length - 1] += chunk
         }
         broadcast('checkin:message', { checkinId, chunk, done: false })
-        win?.webContents.send('checkin:message', { checkinId, chunk, done: false })
       },
       (full) => { fullResponse = full },
       undefined,
@@ -142,11 +139,9 @@ export async function handleCheckInMessage(
       if (seg.trim()) dbAddCheckInMessage(checkinId, 'assistant', seg)
     }
     broadcast('checkin:message', { checkinId, chunk: '', done: true })
-    win?.webContents.send('checkin:message', { checkinId, chunk: '', done: true })
   } catch (err: any) {
     const error = err?.message ?? 'Claude failed to respond'
     broadcast('checkin:message', { checkinId, chunk: '', done: true, error })
-    win?.webContents.send('checkin:message', { checkinId, chunk: '', done: true, error })
   }
 }
 
