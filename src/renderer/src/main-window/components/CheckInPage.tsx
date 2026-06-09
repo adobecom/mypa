@@ -219,18 +219,19 @@ export default function CheckInPage({ activeCheckinId, onCheckinHandled }: Props
   return (
     <div>
       <div className="page-header">
-        <div>
-          <div className="page-title">Check-in</div>
-          <div className="page-subtitle">Periodic 1:1 sessions to guide your PA's growth</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div className="page-title">Check-in</div>
+            <div className="page-subtitle">Periodic 1:1 sessions to guide your PA's growth</div>
+          </div>
+          <button
+            className="btn btn--primary"
+            onClick={handleStart}
+            disabled={hasActive || starting}
+          >
+            {starting ? 'Starting…' : 'Start check-in'}
+          </button>
         </div>
-        <button
-          className="btn btn--primary"
-          style={{ fontSize: 12, padding: '5px 14px' }}
-          onClick={handleStart}
-          disabled={hasActive || starting}
-        >
-          {starting ? 'Starting…' : 'Start check-in'}
-        </button>
       </div>
 
       {loading ? (
