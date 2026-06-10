@@ -231,6 +231,22 @@ export function dbCreatePlanItem(draft: PlanDraft): PlanItem {
   return dbGetPlanItem(id)!
 }
 
+// Creates a read-only done record for an intent the agent executed autonomously.
+// The record surfaces in the Queue's Done section as a durable trail of agent actions.
+export function dbCreateAmbientActionRecord(intent: Intent): PlanItem {
+  const id = uuidv4()
+  const created_at = new Date().toISOString()
+  const title = intent.target
+    ? `${intent.verb ?? 'act'} on ${intent.target}`
+    : `${intent.surface ?? 'agent'}:${intent.verb ?? 'action'}`
+  getDb()
+    .prepare(
+      'INSERT INTO plan_items (id, title, detail, status, timing, source, created_at, actions) VALUES (?,?,?,?,?,?,?,?)'
+    )
+    .run(id, title.slice(0, 200), intent.rationale ?? '', 'done', 'anytime', 'ambient_action', created_at, '[]')
+  return dbGetPlanItem(id)!
+}
+
 export function dbUpdatePlanItemStatus(id: string, status: PlanItemStatus): void {
   const current = dbGetPlanItem(id)
   if (!current) return
@@ -438,11 +454,17 @@ export function dbGetNodeById(id: string): GraphNode | null {
   return row ? deserializeNode(row) : null
 }
 
+// Hard cap prevents runaway accumulation on frequently-updated nodes. Decay
+// (via dbDecayNodes) still reduces weight over time; the cap just stops it
+// growing past a point where it dominates every context-packet query.
+const GRAPH_NODE_WEIGHT_CAP = 10.0
+const GRAPH_EDGE_WEIGHT_CAP = 10.0
+
 export function dbBumpNodeWeight(id: string, delta: number): void {
   const now = new Date().toISOString()
   getDb()
-    .prepare('UPDATE graph_nodes SET weight = weight + ?, last_seen = ? WHERE id = ?')
-    .run(delta, now, id)
+    .prepare('UPDATE graph_nodes SET weight = MIN(weight + ?, ?), last_seen = ? WHERE id = ?')
+    .run(delta, GRAPH_NODE_WEIGHT_CAP, now, id)
 }
 
 export function dbDecayNodes(halfLifeDays: number, asOfIso?: string): void {
@@ -488,10 +510,10 @@ export function dbUpsertEdge(srcId: string, dstId: string, rel: EdgeRel, weightD
       `INSERT INTO graph_edges (id, src_id, dst_id, rel, weight, attrs, first_seen, last_seen)
        VALUES (?,?,?,?,?,?,?,?)
        ON CONFLICT(src_id, dst_id, rel) DO UPDATE SET
-         weight = graph_edges.weight + ?,
+         weight = MIN(graph_edges.weight + ?, ?),
          last_seen = excluded.last_seen`
     )
-    .run(id, srcId, dstId, rel, weightDelta, '{}', now, now, weightDelta)
+    .run(id, srcId, dstId, rel, weightDelta, '{}', now, now, weightDelta, GRAPH_EDGE_WEIGHT_CAP)
   const row = getDb().prepare('SELECT * FROM graph_edges WHERE src_id = ? AND dst_id = ? AND rel = ?').get(srcId, dstId, rel) as any
   return deserializeEdge(row)
 }

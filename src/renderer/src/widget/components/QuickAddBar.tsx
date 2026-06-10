@@ -1,7 +1,7 @@
 import React, { useState, useRef, KeyboardEvent } from 'react'
 import { Sparkles, CornerDownLeft } from 'lucide-react'
 
-type Tab = 'routines' | 'plan'
+type Tab = 'queue' | 'routines'
 
 interface Props {
   tab: Tab
@@ -15,7 +15,7 @@ export default function QuickAddBar({ tab, onSubmit, loading, disabled }: Props)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const placeholder =
-    tab === 'plan'
+    tab === 'queue'
       ? 'What do you want to do? (e.g. review Alex\'s PR)'
       : 'What do you want to do?'
 

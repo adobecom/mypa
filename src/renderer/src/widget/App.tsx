@@ -1,16 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import TabStrip, { type Tab } from './components/TabStrip'
 import RoutinesFeed from './components/RoutinesFeed'
-import PlanList from './components/PlanList'
+import QueueView from './components/QueueView'
 import QuickAddBar from './components/QuickAddBar'
 import PlanReviewCard from './components/PlanReviewCard'
-import AmbientFeed from './components/AmbientFeed'
-import DigestView from './components/DigestView'
 import AmbientBackground from '../AmbientBackground'
 import type { PlanDraft, PlanItem, RoutineRun, AppConfig, Intent, TrayState } from '../../../../../shared/types'
 
 export default function App(): React.ReactElement {
-  const [tab, setTab] = useState<Tab>('routines')
+  const [tab, setTab] = useState<Tab>('queue')
   const [planItems, setPlanItems] = useState<PlanItem[]>([])
   const [runs, setRuns] = useState<RoutineRun[]>([])
   const [draft, setDraft] = useState<PlanDraft | null>(null)
@@ -53,12 +51,11 @@ export default function App(): React.ReactElement {
     const unsubIntentCreated = api.on('ambient:intent-created', (intent) => {
       const i = intent as Intent
       setIntents((prev) => [i, ...prev.filter((x) => x.id !== i.id)])
-      // Only switch to the ambient tab for pending actionable intents. Executed/dismissed
-      // intents also broadcast intent-created (via pushIntent in executeIntent) — ignore
-      // those so the user isn't bounced back to ambient after approving from another tab.
+      // Switch to Queue for pending actionable intents so the user sees the card.
+      // Terminal intents (executed/dismissed etc.) do not bounce the tab.
       const TERMINAL: Intent['status'][] = ['executed', 'dismissed', 'challenged', 'failed', 'expired']
       if (i.type === 'action' && !TERMINAL.includes(i.status)) {
-        setTab('ambient')
+        setTab('queue')
       }
     })
     const unsubIntentUpdated = api.on('ambient:intent-updated', (updated) => {
@@ -86,7 +83,7 @@ export default function App(): React.ReactElement {
       try {
         const d = await api.plan.createDraft(intent)
         setDraft(d)
-        setTab('plan')
+        setTab('queue')
       } catch (err: any) {
         console.error('Draft error:', err)
       } finally {
@@ -119,60 +116,55 @@ export default function App(): React.ReactElement {
     <div style={{ position: 'relative', width: 440, height: 580 }}>
       <AmbientBackground variant="widget" />
       <div className="widget" style={{ position: 'relative', zIndex: 1 }}>
-      <TabStrip
-        tab={tab}
-        onTabChange={setTab}
-        onOpenMain={() => api.system.openMainWindow()}
-        trayState={trayState}
-      />
+        <TabStrip
+          tab={tab}
+          onTabChange={setTab}
+          onOpenMain={() => api.system.openMainWindow()}
+          trayState={trayState}
+        />
 
-      {needsSetup && (
-        <div className="setup-banner">
-          <span className="setup-banner__text">Finish setup to get started</span>
-          <button className="setup-banner__btn" onClick={() => api.system.openMainWindow()}>
-            Set up →
-          </button>
+        {needsSetup && (
+          <div className="setup-banner">
+            <span className="setup-banner__text">Finish setup to get started</span>
+            <button className="setup-banner__btn" onClick={() => api.system.openMainWindow()}>
+              Set up →
+            </button>
+          </div>
+        )}
+
+        <div className="content">
+          {draft && tab === 'queue' && (
+            <PlanReviewCard
+              draft={draft}
+              onConfirm={handleConfirmDraft}
+              onDismiss={() => setDraft(null)}
+            />
+          )}
+
+          {tab === 'queue' && (
+            <QueueView
+              intents={intents}
+              onIntentsChange={setIntents}
+              items={planItems}
+              onStatusChange={handleStatusChange}
+              onItemsChange={setPlanItems}
+            />
+          )}
+
+          {tab === 'routines' && (
+            <RoutinesFeed
+              runs={runs}
+              onRunsChange={setRuns}
+            />
+          )}
         </div>
-      )}
 
-      <div className="content">
-        {draft && tab === 'plan' && (
-          <PlanReviewCard
-            draft={draft}
-            onConfirm={handleConfirmDraft}
-            onDismiss={() => setDraft(null)}
-          />
-        )}
-
-        {tab === 'routines' && (
-          <RoutinesFeed
-            runs={runs}
-            onRunsChange={setRuns}
-          />
-        )}
-
-        {tab === 'plan' && (
-          <PlanList
-            items={planItems}
-            onStatusChange={handleStatusChange}
-            onItemsChange={setPlanItems}
-          />
-        )}
-
-        {tab === 'ambient' && (
-          <>
-            <DigestView />
-            <AmbientFeed intents={intents} onIntentsChange={setIntents} />
-          </>
-        )}
-      </div>
-
-      <QuickAddBar
-        tab={tab}
-        onSubmit={handleQuickAdd}
-        loading={drafting}
-        disabled={!!needsSetup}
-      />
+        <QuickAddBar
+          tab={tab}
+          onSubmit={handleQuickAdd}
+          loading={drafting}
+          disabled={!!needsSetup}
+        />
       </div>
     </div>
   )

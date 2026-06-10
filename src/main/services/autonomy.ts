@@ -8,7 +8,7 @@ import {
   dbUpsertEdge,
   getDb
 } from '../db/index'
-import type { IntentObject, Tier } from '@shared/types'
+import type { IntentObject, IntentType, Tier } from '@shared/types'
 
 // ─── Action type key ──────────────────────────────────────────────────────────
 
@@ -58,6 +58,14 @@ export function resolveTier(obj: IntentObject): Tier {
 
 export function shouldAutoExecute(tier: Tier): boolean {
   return tier === 0
+}
+
+// Informational intents (flag/digest/suggestion) at tier 3 are "muted": suppressed
+// entirely so they never appear in any UI surface. For action intents, tier 3 means
+// "Locked" (surfaced as a read-only flag, never executed) — a distinct, different
+// semantic.
+export function isMuted(type: IntentType, tier: Tier): boolean {
+  return type !== 'action' && tier === 3
 }
 
 // ─── Trust accumulation ───────────────────────────────────────────────────────

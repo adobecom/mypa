@@ -3,7 +3,7 @@ import { Settings } from 'lucide-react'
 import LogoMark from '../../LogoMark'
 import type { TrayState } from '../../../../../../shared/types'
 
-export type Tab = 'routines' | 'plan' | 'ambient'
+export type Tab = 'queue' | 'routines'
 
 interface Props {
   tab: Tab
@@ -22,28 +22,22 @@ export default function TabStrip({ tab, onTabChange, onOpenMain, trayState }: Pr
 
       <div className="tab-strip__tabs">
         <button
-          className={`tab-btn${tab === 'routines' ? ' active' : ''}`}
-          onClick={() => onTabChange('routines')}
-        >
-          Routines
-        </button>
-        <button
-          className={`tab-btn${tab === 'plan' ? ' active' : ''}`}
-          onClick={() => onTabChange('plan')}
-        >
-          Plan
-        </button>
-        <button
-          className={`tab-btn${tab === 'ambient' ? ' active' : ''}`}
-          onClick={() => onTabChange('ambient')}
+          className={`tab-btn${tab === 'queue' ? ' active' : ''}`}
+          onClick={() => onTabChange('queue')}
           style={{ position: 'relative' }}
         >
-          Ambient
+          Queue
           {(trayState === 'needs-you' || trayState === 'has-something') && (
             <span
               className={`tab-btn__dot tab-btn__dot--${trayState === 'needs-you' ? 'accent' : 'green'}`}
             />
           )}
+        </button>
+        <button
+          className={`tab-btn${tab === 'routines' ? ' active' : ''}`}
+          onClick={() => onTabChange('routines')}
+        >
+          Routines
         </button>
       </div>
 

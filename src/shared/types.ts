@@ -2,7 +2,7 @@
 
 export type PlanItemStatus = 'pending' | 'in_progress' | 'done' | 'skipped'
 export type PlanItemTiming = 'now' | 'morning' | 'afternoon' | 'evening' | 'anytime'
-export type PlanItemSource = 'manual_input' | 'routine_suggestion'
+export type PlanItemSource = 'manual_input' | 'routine_suggestion' | 'ambient_action'
 
 export interface McpActionRef {
   server: string

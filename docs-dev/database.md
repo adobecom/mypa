@@ -327,6 +327,8 @@ Indexes: `idx_checkin_messages_checkin` (checkin_id, timestamp), `idx_check_ins_
 
 ## Changelog
 
+- 2026-06-09 — **graph weight cap:** `dbBumpNodeWeight` and `dbUpsertEdge` now apply a hard cap (`MIN(weight + delta, 10.0)`) to prevent unbounded accumulation on frequently-updated nodes/edges. Without the cap, nodes polled hundreds of times could reach weights in the hundreds (e.g. 409.567), overwhelming the decay schedule and dominating every context-packet query. The cap is expressed as `GRAPH_NODE_WEIGHT_CAP` / `GRAPH_EDGE_WEIGHT_CAP` constants in `db/index.ts`.
+- 2026-06-09 — `PlanItemSource` extended with `'ambient_action'`; new DB function `dbCreateAmbientActionRecord(intent: Intent): PlanItem` inserts a done plan item representing an agent-executed ambient action (status `'done'`, source `'ambient_action'`, timing `'anytime'`). No schema change — the `plan_items` table already supports these values.
 - 2026-06-08 — added `check_ins` and `checkin_messages` tables with indexes; new DB functions `dbCreateCheckIn`, `dbGetCheckIn`, `dbGetActiveCheckIn`, `dbGetCheckIns`, `dbUpdateCheckIn`, `dbAddCheckInMessage`, `dbGetCheckInThread`
 - 2026-06-07 — added `usage_events` table + indexes (`idx_usage_events_created`, `idx_usage_events_source`); new query functions `dbInsertUsage`, `dbGetUsageSummary`, `dbGetUsageByDay`, `dbGetUsageBySource`, `dbGetUsageByModel`, `dbGetRecentUsage` in `src/main/db/index.ts`
 - 2026-06-07 — added `dbGetAllMemories()` (all rows incl. superseded, ordered by `created_at`); used by the memory export feature; `dbUpsertPolicy` now accepts `consecutive_approvals` reset to fix the trust-accumulation streak bug
