@@ -24,11 +24,11 @@ async function getPipeline(): Promise<EmbeddingPipeline | null> {
 
   _pipelineLoading = true
   try {
-    const { pipeline, env } = await import('@xenova/transformers')
+    const { pipeline, env } = await import('@huggingface/transformers')
     env.cacheDir = join(app.getPath('home'), '.mypa', 'models')
     env.allowLocalModels = true
 
-    _pipeline = await pipeline('feature-extraction', MODEL_NAME, { quantized: true }) as unknown as EmbeddingPipeline
+    _pipeline = await pipeline('feature-extraction', MODEL_NAME, { dtype: 'q8' }) as unknown as EmbeddingPipeline
     console.log('[embeddings] pipeline ready')
     return _pipeline
   } catch (e) {

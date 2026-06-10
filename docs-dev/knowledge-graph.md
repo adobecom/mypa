@@ -114,7 +114,7 @@ Called from `ingestion.ts` for each unprocessed signal. Steps per signal:
 Runs on an hourly timer. Steps:
 
 1. Fetch the top-12 nodes by weight from `graph_nodes`.
-2. Embed each node's `label` using `embeddings.ts` (on-device, `@xenova/transformers`).
+2. Embed each node's `label` using `embeddings.ts` (on-device, `@huggingface/transformers` / transformers.js v3).
 3. Compute pairwise cosine similarity.
 4. For any pair with similarity ≥ **0.82**, upsert a `similar_to` edge.
 
