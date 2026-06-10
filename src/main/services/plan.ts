@@ -1,11 +1,10 @@
-import { broadcast } from '../windows'
+import { broadcast, updateBadgeCount } from '../windows'
 import {
   dbCreatePlanItem,
   dbUpdatePlanItemStatus,
   dbDeletePlanItem,
   dbAddPlanMessage,
   dbGetPlanThread,
-  dbGetBadgeCount,
   dbUpsertNode,
   dbBumpNodeWeight
 } from '../db/index'
@@ -76,7 +75,7 @@ export async function handlePlanMessage(
       if (seg.trim()) dbAddPlanMessage(itemId, 'assistant', seg)
     }
     broadcast('plan:item-message', { itemId, chunk: '', done: true })
-    broadcast('badge:updated', dbGetBadgeCount())
+    updateBadgeCount()
   } catch (err: any) {
     broadcast('plan:item-message', {
       itemId,

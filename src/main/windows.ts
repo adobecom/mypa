@@ -1,6 +1,7 @@
-import { BrowserWindow, screen, shell } from 'electron'
+import { app, BrowserWindow, screen, shell } from 'electron'
 import { join } from 'path'
 import { readConfig } from './services/config'
+import { dbGetBadgeCount } from './db'
 
 const WIDGET_WIDTH = 440
 const WIDGET_HEIGHT = 580
@@ -175,6 +176,18 @@ export function broadcast(channel: string, ...args: unknown[]): void {
       win.webContents.send(channel, ...args)
     }
   }
+}
+
+/**
+ * Recompute the pending count, set the macOS Dock badge, and notify renderers.
+ * Call this everywhere the badge count can change — it is the single source of truth.
+ * `app.setBadgeCount(0)` clears the Dock badge automatically; it is a no-op on
+ * non-macOS platforms, so no platform guard is needed.
+ */
+export function updateBadgeCount(): void {
+  const count = dbGetBadgeCount()
+  app.setBadgeCount(count)
+  broadcast('badge:updated', count)
 }
 
 export function openOrFocusMainWindow(): BrowserWindow {
