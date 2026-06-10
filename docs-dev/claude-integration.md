@@ -162,6 +162,19 @@ second person ("you"), never in the third person or by their handle.
 
 This clause is appended in: `generateRoutineDigest`, `streamChat`, `generatePlanDraft` (all in `claude.ts`), `inferIntent` (`inference.ts`), and `runMemorySummarization` (`memories.ts`). Returns `''` when owner is not configured, so prompts degrade gracefully.
 
+### Standing directives clause (`buildDirectivesClause`)
+
+When the user has hard memories (learned during check-ins with `enforcement = 'hard'`), every inference system prompt also receives a standing-directives block via `buildDirectivesClause()` (`config.ts`):
+
+```
+Standing rules you must always obey (set by the user in past check-ins):
+  - <rule 1>
+  - <rule 2>
+If a candidate observation or proposed action would violate any of the above, do not surface it — return the "nothing actionable" response instead.
+```
+
+This clause is appended in `inferIntent` (`inference.ts`) **after** `buildOwnerClause()`, so it appears in the trusted system-prompt section — never inside the `<context>` data block (which the model is explicitly told to treat as data, not instructions). Re-read at every call (not cached), so newly-added hard rules take effect on the next inference cycle. Returns `''` when there are no hard memories.
+
 ## Usage recording
 
 `src/main/services/usage.ts` provides the `recordUsage(source, model, cliResult)` function imported by `claude.ts`. It calls `dbInsertUsage()` and swallows all errors so telemetry never disrupts an AI call.
@@ -170,6 +183,7 @@ This clause is appended in: `generateRoutineDigest`, `streamChat`, `generatePlan
 
 ## Changelog
 
+- 2026-06-10 — **Standing directives clause:** added `buildDirectivesClause()` to `config.ts`; appended to the `inferIntent` system prompt alongside `buildOwnerClause()`; reads active hard memories via `dbGetActiveHardMemories()`. Hard memories are extracted from check-ins when the user states absolute rules; classification is done by the `checkin_extract` Claude call using a new `enforcement` field in the extraction JSON schema. Autonomous summarization (`memories.ts`) always defaults to `'soft'`. New `MemoryEnforcement` type in `src/shared/types.ts`.
 - 2026-06-09 — added `claudeEnv()` helper in `claude.ts`; both `runClaude` and `runClaudeStream` now pass `env: claudeEnv()` to `spawn`, injecting `ANTHROPIC_API_KEY` when `AppConfig.claude.apiKey` is set; if unset the process inherits the parent env (CLI's own auth)
 - 2026-06-07 — `runClaude` switched from `--output-format text` to `--output-format json`; added `source: UsageSource` param; both `runClaude` and `runClaudeStream` now call `recordUsage()` after each call; new `src/main/services/usage.ts` thin recorder
 - 2026-06-07 — added owner-identity clause (`buildOwnerClause`) injected into all system prompts so the model addresses the owner as "you" when `AppConfig.owner` is configured

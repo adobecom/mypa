@@ -921,13 +921,14 @@ export function dbCreateMemory(input: MemoryInput): Memory {
   getDb()
     .prepare(
       `INSERT INTO memories
-        (id, content, type, confidence, importance, surface, node_id, status, superseded_by, created_at, last_accessed)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+        (id, content, type, enforcement, confidence, importance, surface, node_id, status, superseded_by, created_at, last_accessed)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
     )
     .run(
       id,
       input.content,
       input.type,
+      input.enforcement ?? 'soft',
       input.confidence,
       input.importance,
       input.surface,
@@ -951,6 +952,20 @@ export function dbGetActiveMemories(limit = 10): Memory[] {
       "SELECT * FROM memories WHERE status = 'active' ORDER BY importance DESC, created_at DESC LIMIT ?"
     )
     .all(limit) as any[]
+  return rows.map(deserializeMemory)
+}
+
+/**
+ * Returns ALL active memories with enforcement='hard', ordered by importance.
+ * Hard memories are NOT subject to the context-packet cap; they are injected as
+ * trusted standing directives into inference system prompts.
+ */
+export function dbGetActiveHardMemories(): Memory[] {
+  const rows = getDb()
+    .prepare(
+      "SELECT * FROM memories WHERE status = 'active' AND enforcement = 'hard' ORDER BY importance DESC, created_at DESC"
+    )
+    .all() as any[]
   return rows.map(deserializeMemory)
 }
 
@@ -984,7 +999,10 @@ export function dbTouchMemoryAccessed(ids: string[]): void {
 }
 
 function deserializeMemory(row: any): Memory {
-  return { ...row }
+  return {
+    ...row,
+    enforcement: row.enforcement === 'hard' ? 'hard' : 'soft'
+  }
 }
 
 // ─── Fingerprint helper ───────────────────────────────────────────────────────

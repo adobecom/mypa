@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2 } from 'lucide-react'
-import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles } from '@shared/types'
+import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2, X } from 'lucide-react'
+import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles, ScopeConfig } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import ServerCatalogPicker from './ServerCatalogPicker'
 import { ScheduleBuilder } from './ScheduleBuilder'
@@ -642,6 +642,9 @@ export default function Settings(): React.ReactElement {
 
       {/* Check-in schedule */}
       <CheckInScheduleCard />
+
+      {/* Scope */}
+      <ScopeCard />
     </div>
   )
 }
@@ -1045,6 +1048,182 @@ function CheckInScheduleCard(): React.ReactElement {
             </button>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Scope Card ──────────────────────────────────────────────────────────────
+
+function ScopeCard(): React.ReactElement {
+  const api = window.electron
+  const toast = useToast()
+
+  // Single state object so every save always writes the complete, consistent scope —
+  // no stale-closure cross-contamination between org and project edits.
+  const [scope, setScope] = useState<{ orgs: string[]; projects: string[] }>({ orgs: [], projects: [] })
+  const [newGithubOrg, setNewGithubOrg] = useState('')
+  const [newJiraProject, setNewJiraProject] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    api.config.get().then((cfg) => {
+      setScope({
+        orgs: cfg.scope?.allowedGithubOrgs ?? [],
+        projects: cfg.scope?.allowedJiraProjects ?? []
+      })
+    })
+  }, [])
+
+  async function save(next: { orgs: string[]; projects: string[] }, prev: { orgs: string[]; projects: string[] }): Promise<void> {
+    setSaving(true)
+    try {
+      await api.config.update({ scope: { allowedGithubOrgs: next.orgs, allowedJiraProjects: next.projects } } as any)
+      toast.success('Scope settings saved')
+    } catch (err: any) {
+      setScope(prev)
+      toast.error('Failed to save scope settings', { message: err?.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function addGithubOrg(): void {
+    const val = newGithubOrg.trim()
+    if (!val || scope.orgs.includes(val)) return
+    const next = { ...scope, orgs: [...scope.orgs, val] }
+    setScope(next)
+    setNewGithubOrg('')
+    save(next, scope)
+  }
+
+  function removeGithubOrg(org: string): void {
+    const next = { ...scope, orgs: scope.orgs.filter((o) => o !== org) }
+    setScope(next)
+    save(next, scope)
+  }
+
+  function addJiraProject(): void {
+    const val = newJiraProject.trim().toUpperCase()
+    if (!val || scope.projects.includes(val)) return
+    const next = { ...scope, projects: [...scope.projects, val] }
+    setScope(next)
+    setNewJiraProject('')
+    save(next, scope)
+  }
+
+  function removeJiraProject(key: string): void {
+    const next = { ...scope, projects: scope.projects.filter((k) => k !== key) }
+    setScope(next)
+    save(next, scope)
+  }
+
+  return (
+    <div className="card">
+      <div className="card__header">
+        <div>
+          <div className="card__title">Scope</div>
+          <div className="card__subtitle">
+            Limit mypa to signals from specific GitHub orgs and Jira projects.
+            When a list is non-empty, only items from those sources are surfaced.
+          </div>
+        </div>
+      </div>
+
+      {/* GitHub orgs */}
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>
+          GitHub orgs
+        </div>
+        {scope.orgs.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+            {scope.orgs.map((org) => (
+              <span
+                key={org}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '3px 8px', borderRadius: 4, fontSize: 12,
+                  background: 'var(--bg-base)', border: '1px solid var(--border-muted)'
+                }}
+              >
+                {org}
+                <button
+                  onClick={() => removeGithubOrg(org)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}
+                  disabled={saving}
+                >
+                  <X size={11} color="var(--text-muted)" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {scope.orgs.length === 0 && (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+            No restriction — all GitHub activity is surfaced.
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input
+            className="input"
+            style={{ flex: 1, fontSize: 12 }}
+            placeholder="e.g. adobecom"
+            value={newGithubOrg}
+            onChange={(e) => setNewGithubOrg(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') addGithubOrg() }}
+          />
+          <button className="btn btn--ghost" style={{ fontSize: 12 }} onClick={addGithubOrg} disabled={!newGithubOrg.trim() || saving}>
+            Add
+          </button>
+        </div>
+      </div>
+
+      {/* Jira projects */}
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>
+          Jira projects
+        </div>
+        {scope.projects.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+            {scope.projects.map((key) => (
+              <span
+                key={key}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '3px 8px', borderRadius: 4, fontSize: 12,
+                  background: 'var(--bg-base)', border: '1px solid var(--border-muted)'
+                }}
+              >
+                {key}
+                <button
+                  onClick={() => removeJiraProject(key)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}
+                  disabled={saving}
+                >
+                  <X size={11} color="var(--text-muted)" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {scope.projects.length === 0 && (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+            No restriction — all Jira activity is surfaced.
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input
+            className="input"
+            style={{ flex: 1, fontSize: 12 }}
+            placeholder="e.g. PROJ"
+            value={newJiraProject}
+            onChange={(e) => setNewJiraProject(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') addJiraProject() }}
+          />
+          <button className="btn btn--ghost" style={{ fontSize: 12 }} onClick={addJiraProject} disabled={!newJiraProject.trim() || saving}>
+            Add
+          </button>
+        </div>
       </div>
     </div>
   )

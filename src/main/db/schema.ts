@@ -255,6 +255,8 @@ export function initSchema(db: Database.Database): void {
   // SQLite throws if the column already exists; that's expected and safe to ignore.
   const tryExec = (sql: string): void => { try { db.exec(sql) } catch { /* already exists */ } }
   tryExec('ALTER TABLE autonomy_policy ADD COLUMN consecutive_approvals INTEGER NOT NULL DEFAULT 0')
+  // Hard/soft enforcement classification on memories (added 2026-06-10)
+  tryExec("ALTER TABLE memories ADD COLUMN enforcement TEXT NOT NULL DEFAULT 'soft'")
   // Embedding columns on signals — nullable so old rows remain valid immediately
   tryExec('ALTER TABLE signals ADD COLUMN embedding BLOB')
   tryExec('ALTER TABLE signals ADD COLUMN embedding_model TEXT')

@@ -17,8 +17,10 @@ import {
   dbAddIntentMessage,
   dbGetIntentThread,
   dbReproposeIntent,
+  dbGetNodeById,
 } from '../db/index'
 import { readConfig } from './config'
+import { violatesScope } from './scope'
 import { callTool } from './mcp'
 import { startIngestion, stopIngestion, pollOnce } from './ingestion'
 import { ingestSignalIntoGraph, assembleContextPacket, startDecayTimer, stopDecayTimer } from './memory-graph'
@@ -159,6 +161,14 @@ export async function runAmbientCycle(
     // dropped here — they never reach the DB, the graph, or any UI surface.
     if (isMuted(obj.type, tier)) {
       console.log(`[ambient] ${obj.type} muted by policy — skipping`)
+      continue
+    }
+
+    // Scope enforcement — drop intents whose containers are outside the configured
+    // allowlists (e.g. allowedGithubOrgs). Conservative: if no container info is
+    // available for a focus node, the intent is allowed through.
+    if (violatesScope(obj, packet.focusNodes)) {
+      console.log(`[ambient] intent dropped — out of scope (${obj.proposed_action.surface}: ${obj.proposed_action.target})`)
       continue
     }
 
@@ -352,6 +362,15 @@ export async function routeIntent(
   // dropped here — they never reach the DB, the graph, or any UI surface.
   if (isMuted(obj.type, tier)) {
     console.log(`[ambient] ${obj.type} muted by policy — skipping`)
+    return
+  }
+
+  // Scope enforcement — resolve focus node IDs to nodes for the scope check.
+  const focusNodesForScope = focusNodeIds
+    .map((id) => dbGetNodeById(id))
+    .filter((n): n is NonNullable<typeof n> => n !== null)
+  if (violatesScope(obj, focusNodesForScope)) {
+    console.log(`[ambient] routeIntent dropped — out of scope (${obj.proposed_action.surface}: ${obj.proposed_action.target})`)
     return
   }
 
