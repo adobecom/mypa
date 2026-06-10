@@ -648,7 +648,12 @@ export default function Settings(): React.ReactElement {
 
 // ─── Ambient Autonomy Card ───────────────────────────────────────────────────
 
-const INTENT_TYPES: IntentType[] = ['action', 'suggestion', 'flag', 'digest']
+// 'suggestion' is excluded: inference no longer emits it (kept in the type for
+// backward-compat with stored intents only). flag/digest use a binary Show/Mute
+// control because the 4-tier scale has no meaning for informational intents.
+const ACTION_TYPES: IntentType[] = ['action']
+const INTENT_TYPES: IntentType[] = ['action', 'flag', 'digest']
+
 const TIER_LABELS: Record<number, string> = { 0: 'Silent', 1: 'Notify', 2: 'Approve', 3: 'Locked' }
 const TIER_HINTS: Record<number, string> = {
   0: 'Acts automatically without telling you',
@@ -656,6 +661,14 @@ const TIER_HINTS: Record<number, string> = {
   2: 'Always asks before doing anything',
   3: 'Never acts — you must initiate'
 }
+
+// Show/Mute labels and hints for informational intent types (flag/digest).
+// Show → tier 1 (surface to Activity), Mute → tier 3 (suppress entirely).
+const SHOW_MUTE_LABEL = (muted: boolean): string => (muted ? 'Mute' : 'Show')
+const SHOW_MUTE_HINT = (muted: boolean): string =>
+  muted
+    ? 'Suppressed — won\'t appear anywhere'
+    : 'Surfaced quietly in Activity. Never acts or interrupts.'
 
 function AmbientAutonomyCard(): React.ReactElement {
   const api = window.electron
@@ -693,7 +706,10 @@ function AmbientAutonomyCard(): React.ReactElement {
       await api.ambient.setTier(type, tier)
       const updated = await api.ambient.getPolicy()
       setPolicies(updated as AutonomyPolicy[])
-      toast.success(`Trust tier updated to "${TIER_LABELS[tier]}"`)
+      const label = ACTION_TYPES.includes(type)
+        ? TIER_LABELS[tier]
+        : SHOW_MUTE_LABEL(tier >= 3)
+      toast.success(`${type} intents set to "${label}"`)
     } catch (err: any) {
       toast.error('Failed to update trust tier', { message: err?.message })
     }
@@ -766,35 +782,67 @@ function AmbientAutonomyCard(): React.ReactElement {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14, opacity: enabled ? 1 : 0.4, pointerEvents: enabled ? 'auto' : 'none', transition: 'opacity 200ms' }}>
         {INTENT_TYPES.map((type) => {
           const currentTier = getTierForType(type)
+          const isAction = ACTION_TYPES.includes(type)
+          const muted = !isAction && currentTier >= 3
+
           return (
             <div key={type}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                 <span style={{ fontSize: 13, textTransform: 'capitalize' }}>{type}s</span>
-                {/* Segmented tier control */}
-                <div style={{ display: 'flex', background: 'var(--bg-elevated)', borderRadius: 8, padding: 2, gap: 2 }}>
-                  {([0, 1, 2, 3] as Tier[]).map((tier) => (
-                    <button
-                      key={tier}
-                      onClick={() => handleSetTier(type, tier)}
-                      style={{
-                        padding: '3px 8px',
-                        borderRadius: 6,
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: 11,
-                        fontFamily: 'var(--font-sans)',
-                        fontWeight: currentTier === tier ? 600 : 400,
-                        background: currentTier === tier ? 'var(--bg-overlay)' : 'transparent',
-                        color: currentTier === tier ? 'var(--text-primary)' : 'var(--text-muted)',
-                        transition: 'background var(--transition), color var(--transition)'
-                      }}
-                    >
-                      {TIER_LABELS[tier]}
-                    </button>
-                  ))}
-                </div>
+
+                {isAction ? (
+                  /* 4-tier segmented control for action intents */
+                  <div style={{ display: 'flex', background: 'var(--bg-elevated)', borderRadius: 8, padding: 2, gap: 2 }}>
+                    {([0, 1, 2, 3] as Tier[]).map((tier) => (
+                      <button
+                        key={tier}
+                        onClick={() => handleSetTier(type, tier)}
+                        style={{
+                          padding: '3px 8px',
+                          borderRadius: 6,
+                          border: 'none',
+                          cursor: 'pointer',
+                          fontSize: 11,
+                          fontFamily: 'var(--font-sans)',
+                          fontWeight: currentTier === tier ? 600 : 400,
+                          background: currentTier === tier ? 'var(--bg-overlay)' : 'transparent',
+                          color: currentTier === tier ? 'var(--text-primary)' : 'var(--text-muted)',
+                          transition: 'background var(--transition), color var(--transition)'
+                        }}
+                      >
+                        {TIER_LABELS[tier]}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  /* Binary Show/Mute control for informational intents (flag/digest) */
+                  <div style={{ display: 'flex', background: 'var(--bg-elevated)', borderRadius: 8, padding: 2, gap: 2 }}>
+                    {([false, true] as boolean[]).map((wantMute) => (
+                      <button
+                        key={String(wantMute)}
+                        onClick={() => handleSetTier(type, wantMute ? 3 : 1)}
+                        style={{
+                          padding: '3px 8px',
+                          borderRadius: 6,
+                          border: 'none',
+                          cursor: 'pointer',
+                          fontSize: 11,
+                          fontFamily: 'var(--font-sans)',
+                          fontWeight: muted === wantMute ? 600 : 400,
+                          background: muted === wantMute ? 'var(--bg-overlay)' : 'transparent',
+                          color: muted === wantMute ? 'var(--text-primary)' : 'var(--text-muted)',
+                          transition: 'background var(--transition), color var(--transition)'
+                        }}
+                      >
+                        {SHOW_MUTE_LABEL(wantMute)}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{TIER_HINTS[currentTier]}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                {isAction ? TIER_HINTS[currentTier] : SHOW_MUTE_HINT(muted)}
+              </div>
             </div>
           )
         })}

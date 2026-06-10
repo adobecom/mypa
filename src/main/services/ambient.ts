@@ -27,6 +27,7 @@ import { runMemorySummarization } from './memories'
 import {
   resolveTier,
   shouldAutoExecute,
+  isMuted,
   actionTypeOf,
   recordApproval,
   recordChallenge,
@@ -151,6 +152,14 @@ export async function runAmbientCycle(
     if (!obj) continue
 
     const tier = resolveTier(obj)
+
+    // Informational intents (flag/digest/suggestion) muted by the user's policy are
+    // dropped here — they never reach the DB, the graph, or any UI surface.
+    if (isMuted(obj.type, tier)) {
+      console.log(`[ambient] ${obj.type} muted by policy — skipping`)
+      continue
+    }
+
     const intent = dbCreateIntent(obj, hit.kind as TriggerKind, tier, packet as unknown as Record<string, unknown>)
 
     // Mirror the intent into the knowledge graph so it appears alongside the
@@ -336,6 +345,14 @@ export async function routeIntent(
   win: BrowserWindow | null
 ): Promise<void> {
   const tier = resolveTier(obj)
+
+  // Informational intents (flag/digest/suggestion) muted by the user's policy are
+  // dropped here — they never reach the DB, the graph, or any UI surface.
+  if (isMuted(obj.type, tier)) {
+    console.log(`[ambient] ${obj.type} muted by policy — skipping`)
+    return
+  }
+
   const intent = dbCreateIntent(obj, triggerKind, tier, contextPacket)
 
   try {
