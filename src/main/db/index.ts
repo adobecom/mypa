@@ -1,7 +1,7 @@
 import BetterSqlite3 from 'better-sqlite3'
 import { join } from 'path'
 import { app } from 'electron'
-import { mkdirSync } from 'fs'
+import { mkdirSync, unlinkSync } from 'fs'
 import { initSchema } from './schema'
 import { v4 as uuidv4 } from 'uuid'
 import type {
@@ -54,6 +54,22 @@ export function initDb(): void {
   const dbPath = join(dataDir, 'data.db')
   _db = new BetterSqlite3(dbPath)
   initSchema(_db)
+}
+
+/**
+ * Closes the database handle and deletes data.db (plus WAL sidecars).
+ * After this call, initDb() will recreate a fresh database on next startup.
+ * Call just before app.relaunch() so there are no open file handles.
+ */
+export function resetDatabase(): void {
+  try { _db?.close() } catch { /* ignore */ }
+  _db = null
+
+  const dataDir = join(app.getPath('home'), '.mypa')
+  const dbPath = join(dataDir, 'data.db')
+  for (const p of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    try { unlinkSync(p) } catch { /* file may not exist — that's fine */ }
+  }
 }
 
 // ─── Routines ────────────────────────────────────────────────────────────────

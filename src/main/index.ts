@@ -1,4 +1,5 @@
 import { app, BrowserWindow, nativeImage } from 'electron'
+import { fixPath } from './services/path-fix'
 import { handleOAuthCallback } from './services/oauth'
 import { readFileSync } from 'fs'
 import { initDb, dbRunMaintenance } from './db/index'
@@ -30,6 +31,10 @@ app.on('activate', () => {
 })
 
 async function main(): Promise<void> {
+  // Augment PATH so packaged GUI builds can find claude, npx, etc.
+  // Must run before any child-process spawning (MCP, claude CLI, which-checks).
+  fixPath()
+
   await app.whenReady()
 
   // Register custom protocol for OAuth callbacks

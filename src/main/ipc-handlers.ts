@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, dialog, shell } from 'electron'
+import { ipcMain, BrowserWindow, dialog, shell, app } from 'electron'
 import { execFileSync } from 'child_process'
 import { writeFileSync } from 'fs'
 import {
@@ -32,19 +32,20 @@ import {
   dbGetUsageByModel,
   dbGetRecentUsage
 } from './db/index'
-import { readConfig, updateConfig, clearClaudeApiKey } from './services/config'
-import { testServer, getServerStatus, connectAllServers, resolveOwnerHandles } from './services/mcp'
+import { readConfig, updateConfig, clearClaudeApiKey, resetConfig } from './services/config'
+import { testServer, getServerStatus, connectAllServers, disconnectAllServers, resolveOwnerHandles } from './services/mcp'
 import { startDeviceFlow, pollDeviceFlow, startPkceFlow } from './services/oauth'
 import { detectClaudeMcpServers } from './services/claude-import'
 import { executeRoutine, handleRunMessage } from './services/routines'
 import { createPlanDraft, confirmPlanDraft, updatePlanItemStatus, deletePlanItem, handlePlanMessage } from './services/plan'
 import { generateRoutineSetup, cancelStream } from './services/claude'
-import { refreshSchedules, refreshCheckinSchedule } from './services/cron'
+import { refreshSchedules, refreshCheckinSchedule, stopScheduler } from './services/cron'
 import { startCheckIn, handleCheckInMessage, endCheckIn, cancelCheckinStream } from './services/checkin'
 import {
   dbGetCheckIns,
   dbGetActiveCheckIn,
-  dbGetCheckInThread
+  dbGetCheckInThread,
+  resetDatabase
 } from './db/index'
 import {
   ambientGetIntents,
@@ -366,6 +367,19 @@ export function registerIpcHandlers(
     if (typeof url === 'string' && (url.startsWith('https://') || url.startsWith('http://'))) {
       await shell.openExternal(url)
     }
+  })
+
+  ipcMain.handle('system:factory-reset', async () => {
+    // Tear down background services before wiping data
+    try { stopAmbient() } catch { /* ignore */ }
+    try { stopScheduler() } catch { /* ignore */ }
+    try { await disconnectAllServers() } catch { /* ignore */ }
+    // Wipe persistent state
+    resetDatabase()
+    resetConfig()
+    // Relaunch into a fresh onboarding session
+    app.relaunch()
+    app.exit(0)
   })
 
   // ─── Ambient ───────────────────────────────────────────────────────────────

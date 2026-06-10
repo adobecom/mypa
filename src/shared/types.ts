@@ -580,6 +580,7 @@ export interface IpcApi {
     getBadgeCount(): Promise<number>
     getWindowType(): 'widget' | 'main-window'
     openExternal(url: string): Promise<void>
+    factoryReset(): Promise<void>
   }
   ambient: {
     getIntents(): Promise<Intent[]>
