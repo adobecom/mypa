@@ -11,7 +11,7 @@ import CheckInPage from './components/CheckInPage'
 import InsightsPage from './components/InsightsPage'
 import RoutinesPage from './components/RoutinesPage'
 import { ToastProvider, useToast } from './toast/ToastProvider'
-import type { AppConfig, RoutineRun, Intent } from '@shared/types'
+import type { AppConfig, RoutineRun, Intent, PlanItem } from '@shared/types'
 
 type Page = 'routines' | 'settings' | 'memory' | 'usage' | 'plan' | 'checkin' | 'insights'
 
@@ -140,12 +140,46 @@ function AppShell(): React.ReactElement {
   const [navigateRunId, setNavigateRunId] = useState<string | null>(null)
   const [activeCheckinId, setActiveCheckinId] = useState<string | null>(null)
   const [config, setConfig] = useState<AppConfig | null>(null)
+  // Per-page unread counts for sidebar indicators
+  const [insightsBadge, setInsightsBadge] = useState(0)
+  const [routinesBadge, setRoutinesBadge] = useState(0)
 
   useRunToasts(setPage, setRoutinesTab)
   useUpdateToasts()
 
   useEffect(() => {
     window.electron.config.get().then(setConfig)
+  }, [])
+
+  // Compute sidebar badge counts from live data
+  useEffect(() => {
+    async function refreshBadges(): Promise<void> {
+      try {
+        const [intents, planItems, runs] = await Promise.all([
+          window.electron.ambient.getIntents(),
+          window.electron.plan.getAll(),
+          window.electron.routines.getAllRuns(100)
+        ])
+        const pendingActions = (intents as Intent[]).filter((i) => i.type === 'action')
+        const activePlans = (planItems as PlanItem[]).filter(
+          (i) => i.status === 'pending' || i.status === 'in_progress'
+        )
+        const pendingRuns = (runs as RoutineRun[]).filter((r) => r.status === 'pending_response')
+        setInsightsBadge(pendingActions.length + activePlans.length)
+        setRoutinesBadge(pendingRuns.length)
+      } catch {
+        // Non-fatal — badges degrade silently
+      }
+    }
+
+    refreshBadges()
+    const subs = [
+      window.electron.on('badge:updated', () => { void refreshBadges() }),
+      window.electron.on('ambient:intent-created', () => { void refreshBadges() }),
+      window.electron.on('ambient:intent-updated', () => { void refreshBadges() }),
+      window.electron.on('plan:item-updated', () => { void refreshBadges() }),
+    ]
+    return () => subs.forEach((unsub) => unsub())
   }, [])
 
   useEffect(() => {
@@ -205,19 +239,28 @@ function AppShell(): React.ReactElement {
           </div>
 
           <nav className="sidebar__nav">
-            {NAV.filter((item) => !NAV_HIDDEN.has(item.id)).map((item) => (
-              <button
-                key={item.id}
-                className={`nav-item${page === item.id ? ' active' : ''}`}
-                onClick={() => {
-                  setPage(item.id)
-                  if (item.id === 'routines') setRoutinesTab('routines')
-                }}
-              >
-                <span className="nav-item__icon">{item.icon}</span>
-                {item.label}
-              </button>
-            ))}
+            {NAV.filter((item) => !NAV_HIDDEN.has(item.id)).map((item) => {
+              const badge =
+                item.id === 'insights' ? insightsBadge
+                : item.id === 'routines' ? routinesBadge
+                : 0
+              return (
+                <button
+                  key={item.id}
+                  className={`nav-item${page === item.id ? ' active' : ''}`}
+                  onClick={() => {
+                    setPage(item.id)
+                    if (item.id === 'routines') setRoutinesTab('routines')
+                  }}
+                >
+                  <span className="nav-item__icon">{item.icon}</span>
+                  {item.label}
+                  {badge > 0 && (
+                    <span className="nav-item__badge">{badge}</span>
+                  )}
+                </button>
+              )
+            })}
             {page === 'plan' && (
               <button className="nav-item active" disabled>
                 <span className="nav-item__icon"><LayoutList size={14} strokeWidth={2} /></span>

@@ -1,5 +1,6 @@
 import React, { useState, useRef, KeyboardEvent } from 'react'
 import { Sparkles, CornerDownLeft } from 'lucide-react'
+import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 
 type Tab = 'queue' | 'routines'
 
@@ -12,7 +13,7 @@ interface Props {
 
 export default function QuickAddBar({ tab, onSubmit, loading, disabled }: Props): React.ReactElement {
   const [value, setValue] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useAutoGrowTextarea(value)
 
   const placeholder =
     tab === 'queue'
@@ -25,7 +26,7 @@ export default function QuickAddBar({ tab, onSubmit, loading, disabled }: Props)
     setValue('')
   }
 
-  const handleKey = (e: KeyboardEvent<HTMLInputElement>) => {
+  const handleKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSubmit()
@@ -35,10 +36,10 @@ export default function QuickAddBar({ tab, onSubmit, loading, disabled }: Props)
   return (
     <div className="quick-add-bar">
       <span className="quick-add-bar__icon"><Sparkles size={14} strokeWidth={2} /></span>
-      <input
-        ref={inputRef}
+      <textarea
+        ref={textareaRef}
         className="quick-add-bar__input"
-        type="text"
+        rows={1}
         placeholder={disabled ? 'Loading…' : placeholder}
         value={value}
         onChange={(e) => setValue(e.target.value)}

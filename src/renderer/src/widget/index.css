@@ -648,12 +648,13 @@ body {
   border-radius: var(--radius-sm);
   padding: 6px 8px;
   font-size: 12px;
+  line-height: 1.4;
   color: var(--text-primary);
   font-family: var(--font-sans);
   resize: none;
+  /* min-height = 1 row; hook controls actual height + overflow */
   min-height: 32px;
-  max-height: 80px;
-  overflow-y: auto;
+  overflow-y: hidden;
   transition: border-color var(--transition), box-shadow var(--transition);
 }
 
@@ -703,11 +704,12 @@ body {
 /* ─── Quick Add Bar ─────────────────────────────────────────────────────────── */
 
 .quick-add-bar {
-  height: 56px;
+  /* Remove fixed height so bar grows with the textarea; cap handled by hook (4 rows) */
+  min-height: 56px;
   border-top: 1px solid var(--border-muted);
   display: flex;
-  align-items: center;
-  padding: 0 14px;
+  align-items: flex-end;
+  padding: 12px 14px;
   gap: 10px;
   flex-shrink: 0;
   background: rgba(10, 12, 22, 0.50);
@@ -729,8 +731,12 @@ body {
   border: none;
   outline: none;
   font-size: 13px;
+  line-height: 1.4;
   color: var(--text-primary);
   font-family: var(--font-sans);
+  resize: none;
+  /* hook controls height + overflow */
+  overflow: hidden;
 }
 
 .quick-add-bar__input::placeholder { color: var(--text-muted); }

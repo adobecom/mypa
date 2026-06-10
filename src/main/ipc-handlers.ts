@@ -52,6 +52,8 @@ import {
   ambientApproveIntent,
   ambientDismissIntent,
   ambientChallengeIntent,
+  ambientSuggestIntent,
+  ambientGetIntentThread,
   ambientGetDigest,
   ambientComputeTrayState,
   ambientGetPolicy,
@@ -403,6 +405,22 @@ export function registerIpcHandlers(
     refreshAmbientTray()
     updateBadgeCount()
     return intent
+  })
+
+  ipcMain.handle('ambient:suggest', async (_e, id: string, message: string) => {
+    const result = await ambientSuggestIntent(id, message)
+    if (result) {
+      broadcast('ambient:intent-updated', result.intent)
+      // Also broadcast the assistant reply for any subscribed ChatThread views
+      broadcast('ambient:intent-message', { intentId: id, message: result.assistantMessage })
+    }
+    refreshAmbientTray()
+    updateBadgeCount()
+    return result
+  })
+
+  ipcMain.handle('ambient:get-intent-thread', async (_e, id: string) => {
+    return ambientGetIntentThread(id)
   })
 
   ipcMain.handle('ambient:get-digest', async (_e, slot?: DigestSlot) => {

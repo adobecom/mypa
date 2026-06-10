@@ -1,43 +1,46 @@
 import React, { useState, useEffect } from 'react'
-import { Eye, History, Radar } from 'lucide-react'
+import { Eye, History, Radar, Inbox } from 'lucide-react'
 import IntentCard from '../../widget/components/IntentCard'
 import DigestView from '../../widget/components/DigestView'
+import QueueView from '../../widget/components/QueueView'
 import Tabs from '@renderer/components/Tabs'
 import type { TabItem } from '@renderer/components/Tabs'
-import type { Intent } from '@shared/types'
+import type { Intent, PlanItem } from '@shared/types'
 
-type Section = 'observations' | 'history'
+type Section = 'queue' | 'observations' | 'history'
 
 const TERMINAL_STATUSES: Intent['status'][] = ['executed', 'dismissed', 'challenged', 'failed', 'expired']
 
 export default function InsightsPage(): React.ReactElement {
-  const [section, setSection] = useState<Section>('observations')
+  const [section, setSection] = useState<Section>('queue')
   const [intents, setIntents] = useState<Intent[]>([])
+  const [items, setItems] = useState<PlanItem[]>([])
   const [loading, setLoading] = useState(true)
 
   const api = window.electron
 
+  // ── Initial data fetch ────────────────────────────────────────────────────
   useEffect(() => {
     setLoading(true)
-    api.ambient.getAllIntents(200)
-      .then((items) => {
-        const fetched = items as Intent[]
-        // Merge rather than replace: push-event items that arrived while the fetch
-        // was in-flight would be overwritten if we called setIntents(fetched) directly.
-        // Keep any prev items not in the snapshot — they're newer than the DB query window.
+    Promise.all([
+      api.ambient.getAllIntents(200),
+      api.plan.getAll()
+    ])
+      .then(([fetchedIntents, fetchedItems]) => {
         setIntents((prev) => {
-          const byId = new Map(fetched.map((i) => [i.id, i]))
+          const byId = new Map((fetchedIntents as Intent[]).map((i) => [i.id, i]))
           for (const p of prev) {
             if (!byId.has(p.id)) byId.set(p.id, p)
           }
           return Array.from(byId.values())
         })
+        setItems(fetchedItems as PlanItem[])
       })
       .catch(console.error)
       .finally(() => setLoading(false))
   }, [])
 
-  // Live-update: pick up new intents and status changes from the backend
+  // ── Live updates ──────────────────────────────────────────────────────────
   useEffect(() => {
     const offCreated = api.on('ambient:intent-created', (intent) => {
       const i = intent as Intent
@@ -47,17 +50,42 @@ export default function InsightsPage(): React.ReactElement {
       const u = updated as Partial<Intent> & { id: string }
       setIntents((prev) => prev.map((i) => (i.id === u.id ? { ...i, ...u } : i)))
     })
+    const offItemUpdated = api.on('plan:item-updated', (item) => {
+      const p = item as PlanItem
+      setItems((prev) => prev.map((i) => (i.id === p.id ? p : i)))
+    })
+    // Re-fetch plan items when the badge changes (e.g. new item created)
+    const offBadge = api.on('badge:updated', () => {
+      api.plan.getAll().then((list) => setItems(list as PlanItem[])).catch(console.error)
+    })
     return () => {
       offCreated()
       offUpdated()
+      offItemUpdated()
+      offBadge()
     }
   }, [])
 
+  // ── Intent change handler (approve/dismiss/challenge from QueueView/IntentCard)
   function handleIntentChange(updated: Intent): void {
     setIntents((prev) => prev.map((i) => (i.id === updated.id ? updated : i)))
   }
 
-  // Partition intents by type for each section
+  function handleIntentsChange(updated: Intent[]): void {
+    setIntents(updated)
+  }
+
+  function handleStatusChange(id: string, status: PlanItem['status']): void {
+    api.plan.updateStatus(id, status).catch(console.error)
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, status } : i)))
+  }
+
+  function handleItemsChange(updated: PlanItem[]): void {
+    setItems(updated)
+  }
+
+  // ── Partition intents ─────────────────────────────────────────────────────
+  const actionIntents = intents.filter((i) => i.type === 'action')
   const observations = intents.filter(
     (i) => (i.type === 'suggestion' || i.type === 'flag') && !TERMINAL_STATUSES.includes(i.status)
   )
@@ -66,7 +94,13 @@ export default function InsightsPage(): React.ReactElement {
   )
   const history = intents.filter((i) => TERMINAL_STATUSES.includes(i.status))
 
+  // Queue badge: pending action intents + active plan items
+  const pendingActionIntents = actionIntents.filter((i) => !TERMINAL_STATUSES.includes(i.status))
+  const activePlanItems = items.filter((i) => i.status === 'pending' || i.status === 'in_progress')
+  const queueCount = pendingActionIntents.length + activePlanItems.length
+
   const TABS: TabItem[] = [
+    { id: 'queue', label: 'Queue', icon: <Inbox size={13} strokeWidth={2} />, count: queueCount },
     { id: 'observations', label: 'Observations', icon: <Eye size={13} strokeWidth={2} />, count: observations.length },
     { id: 'history', label: 'History', icon: <History size={13} strokeWidth={2} />, count: history.length },
   ]
@@ -75,7 +109,7 @@ export default function InsightsPage(): React.ReactElement {
     <div>
       <div className="page-header">
         <h1 className="page-title">Insights</h1>
-        <p className="page-subtitle">Your daily digest, live observations, and a full history of what the agent has surfaced.</p>
+        <p className="page-subtitle">Your daily digest, live observations, active tasks, and a full history of what the agent has surfaced.</p>
       </div>
 
       {/* Always-on daily digest */}
@@ -89,7 +123,7 @@ export default function InsightsPage(): React.ReactElement {
         </>
       )}
 
-      {/* Observations / History tabs */}
+      {/* Tabs: Queue / Observations / History */}
       <div style={{ marginTop: 20 }}>
         <Tabs
           items={TABS}
@@ -100,6 +134,16 @@ export default function InsightsPage(): React.ReactElement {
 
       {loading && (
         <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: 16 }}>Loading…</div>
+      )}
+
+      {!loading && section === 'queue' && (
+        <QueueView
+          intents={actionIntents}
+          onIntentsChange={handleIntentsChange}
+          items={items}
+          onStatusChange={handleStatusChange}
+          onItemsChange={handleItemsChange}
+        />
       )}
 
       {!loading && section === 'observations' && (

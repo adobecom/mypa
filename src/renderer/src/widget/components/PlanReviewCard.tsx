@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Sparkles, X } from 'lucide-react'
 import type { PlanDraft, PlanItemTiming } from '../../../../../../shared/types'
+import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 
 const TIMINGS: { value: PlanItemTiming; label: string }[] = [
   { value: 'now', label: 'Now' },
@@ -21,6 +22,7 @@ export default function PlanReviewCard({ draft, onConfirm, onDismiss }: Props): 
   const [detail, setDetail] = useState(draft.detail)
   const [timing, setTiming] = useState<PlanItemTiming>(draft.timing)
   const [saving, setSaving] = useState(false)
+  const detailRef = useAutoGrowTextarea(detail)
 
   const handleConfirm = async () => {
     if (!title.trim()) return
@@ -58,8 +60,9 @@ export default function PlanReviewCard({ draft, onConfirm, onDismiss }: Props): 
           <div className="review-field">
             <div className="review-field__label">Detail</div>
             <textarea
+              ref={detailRef}
               className="review-field__input"
-              rows={2}
+              rows={1}
               value={detail}
               onChange={(e) => setDetail(e.target.value)}
               placeholder="Additional context (optional)"

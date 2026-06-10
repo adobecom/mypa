@@ -14,13 +14,16 @@ import {
   dbUpsertNode,
   dbBumpNodeWeight,
   dbUpsertEdge,
+  dbAddIntentMessage,
+  dbGetIntentThread,
+  dbReproposeIntent,
 } from '../db/index'
 import { readConfig } from './config'
 import { callTool } from './mcp'
 import { startIngestion, stopIngestion, pollOnce } from './ingestion'
 import { ingestSignalIntoGraph, assembleContextPacket, startDecayTimer, stopDecayTimer } from './memory-graph'
 import { evalEventTriggers, evalTime, coalesceHits } from './triggers'
-import { inferIntent } from './inference'
+import { inferIntent, reproposeIntent } from './inference'
 import { enqueueEmbeddings, enqueueBackfill } from './embeddings'
 import { runMemorySummarization } from './memories'
 import {
@@ -37,7 +40,7 @@ import {
 } from './autonomy'
 import { setTrayState } from '../tray'
 import { broadcast, updateBadgeCount } from '../windows'
-import type { Signal, Intent, IntentObject, TriggerKind, TrayState, DigestSlot, AmbientDigest, Tier } from '@shared/types'
+import type { Signal, Intent, IntentObject, TriggerKind, TrayState, DigestSlot, AmbientDigest, Tier, ChatMessage } from '@shared/types'
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
@@ -457,6 +460,64 @@ export async function ambientChallengeIntent(id: string, reason: string): Promis
   const win = getWidgetWin?.() ?? null
   refreshTray(win)
   return dbGetIntent(id)!
+}
+
+export function ambientGetIntentThread(id: string): ChatMessage[] {
+  return dbGetIntentThread(id)
+}
+
+/**
+ * Handle one round of the multi-round Suggest loop.
+ *
+ * Persists the user message, calls `reproposeIntent` (which may make
+ * read-only MCP tool calls), persists the assistant reply, updates the
+ * intent's proposal fields in-place, then broadcasts updates.
+ *
+ * Returns the updated Intent plus the assistant message, or null on error.
+ */
+export async function ambientSuggestIntent(
+  id: string,
+  userMessage: string
+): Promise<{ intent: Intent; assistantMessage: string } | null> {
+  const intent = dbGetIntent(id)
+  if (!intent) throw new Error(`Intent ${id} not found`)
+
+  const thread = dbGetIntentThread(id)
+
+  // Persist the user's message immediately
+  dbAddIntentMessage(id, 'user', userMessage)
+
+  let assistantMessage = 'I reconsidered the proposal.'
+  try {
+    const result = await reproposeIntent(intent, thread, userMessage)
+    if (result) {
+      assistantMessage = result.message
+      // Update the intent's proposal in-place (status stays non-terminal)
+      dbReproposeIntent(id, {
+        verb: result.intent.proposed_action.verb,
+        target: result.intent.proposed_action.target,
+        payload: result.intent.proposed_action.payload,
+        rationale: result.intent.rationale,
+        confidence: result.intent.confidence,
+        reversibility: result.intent.reversibility,
+        required_approval: result.intent.required_approval
+      })
+    }
+  } catch (e) {
+    console.error('[ambient] reproposeIntent error:', e)
+    assistantMessage = 'Sorry, I ran into an error reconsidering this. Try again or use Challenge/Dismiss.'
+  }
+
+  dbAddIntentMessage(id, 'assistant', assistantMessage)
+
+  const updated = dbGetIntent(id)!
+  const win = getWidgetWin?.() ?? null
+  pushIntent(updated, win)
+  refreshTray(win)
+  updateBadgeCount()
+  broadcast('ambient:intent-updated', updated)
+
+  return { intent: updated, assistantMessage }
 }
 
 /**

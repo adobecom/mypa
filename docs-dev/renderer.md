@@ -51,13 +51,25 @@ Data flow: `window.electron.plan.getAll()` on mount; push event `plan:item-messa
 |---|---|
 | `DigestView` | Renders the latest `AmbientDigest` — three sections: did / watching / decisions |
 | `AmbientFeed` | Scrollable list of pending/surfaced intents |
-| `IntentCard` | Single intent — rationale, proposed action, confidence badge, Approve / Dismiss / Challenge controls |
+| `IntentCard` | Single intent — rationale, proposed action, confidence badge, Approve / Dismiss / Challenge / Suggest controls; Suggest opens an embedded `ChatThread` for multi-round re-proposal |
 
-Data flow: `window.electron.ambient.getIntents()` + `getDigest()` on mount; push events `ambient:intent-created`, `ambient:intent-updated`, `ambient:tray-state`, `ambient:digest-ready`.
+Data flow: `window.electron.ambient.getIntents()` + `getDigest()` on mount; push events `ambient:intent-created`, `ambient:intent-updated`, `ambient:intent-message`, `ambient:tray-state`, `ambient:digest-ready`.
 
 ### QuickAddBar
 
-Free-text input at the bottom of the widget. Calls `window.electron.plan.createDraft(intent)` → shows `PlanReviewCard` for confirmation → `window.electron.plan.confirm(draft)` to persist.
+Free-text `<textarea>` at the bottom of the widget (converted from `<input type="text">`). Auto-grows 1–4 rows via `useAutoGrowTextarea`. Calls `window.electron.plan.createDraft(intent)` → shows `PlanReviewCard` for confirmation → `window.electron.plan.confirm(draft)` to persist. Enter submits; Shift+Enter inserts a newline.
+
+### Shared hooks
+
+`src/renderer/src/hooks/useAutoGrowTextarea(value, maxRows = 4)` — ref-based textarea auto-grow hook. On every `value` change: resets `height='auto'`, reads `scrollHeight`, clamps to `maxRows` lines (computed from `lineHeight` + padding), sets `overflow-y: auto` when content overflows the cap, `hidden` otherwise. Applied to: `ChatThread` chat input, `IntentCard` draft and challenge textareas, `PlanReviewCard` detail textarea, and `QuickAddBar`.
+
+### Sidebar unread badges
+
+`main-window/App.tsx` computes per-page unread counts on mount and via push events (`ambient:intent-created`, `ambient:intent-updated`, `plan:item-updated`, `badge:updated`):
+- **Insights** — pending action intents + active (non-done/skipped) plan items.
+- **Routines** — `pending_response` routine runs.
+
+Each nav item renders a `.nav-item__badge` count pill (CSS in `index.css`) when its count > 0. Badges clear in real-time as the user acts.
 
 ---
 
@@ -125,16 +137,18 @@ Styles in `src/renderer/src/main-window/index.css` (`.toast*` block), using exis
 
 `InsightsPage` surfaces the agent's ambient intelligence in a structured layout:
 
-1. **Daily Digest (always on):** `DigestView` sits at the top of the page, always visible, with its morning / midday / end-of-day slot selector. Any non-terminal `digest`-type intents are listed directly below it under "Recent digests".
-2. **Observations / History tab strip:** below the digest, a two-tab `<Tabs>` strip lets the user browse active observations (suggestions and flags not yet resolved) and the full history of terminal intents (executed, dismissed, challenged, failed, expired).
+1. **Queue tab (first):** reuses the widget's `QueueView` component to render the full actionable queue — pending `action`-type intents ("Needs you") and active plan items — with working Approve / Dismiss / Challenge / Suggest actions. A count badge on the Queue tab reflects `pendingActionIntents + activePlanItems`. Plan items are fetched via `plan.getAll()` and kept live via `plan:item-updated` and `badge:updated` push events.
+2. **Daily Digest (always on in Observations):** `DigestView` sits at the top of the Observations tab, always visible, with its morning / midday / end-of-day slot selector. Any non-terminal `digest`-type intents are listed directly below it under "Recent digests".
+3. **History tab:** full history of terminal intents (executed, dismissed, challenged, failed, expired).
 
 | Component | Description |
 |---|---|
-| `InsightsPage` | Outer shell: page header ("Insights"), always-on `DigestView`, optional recent-digests list, Observations/History `<Tabs>` |
+| `InsightsPage` | Outer shell: page header ("Insights"), Queue / Observations / History `<Tabs>` strip |
+| `QueueView` | Shared widget+main component: "Needs you" action intents + active plan items + Done section; supports all four intent actions including Suggest |
 | `DigestView` | Self-contained: fetches and renders the `AmbientDigest` for the selected slot; has its own slot selector and re-fetches on `ambient:digest-ready` |
-| `IntentCard` | Single intent card with Approve / Dismiss / Challenge actions; shared with widget |
+| `IntentCard` | Single intent card with Approve / Dismiss / Challenge / Suggest actions; shared with widget |
 
-Data flow: `window.electron.ambient.getAllIntents(200)` on mount; `ambient:intent-created` and `ambient:intent-updated` push events for live updates; `ambient:digest-ready` handled inside `DigestView`.
+Data flow: `window.electron.ambient.getAllIntents(200)` + `window.electron.plan.getAll()` on mount; `ambient:intent-created`, `ambient:intent-updated`, `plan:item-updated`, `badge:updated` push events for live updates; `ambient:digest-ready` handled inside `DigestView`.
 
 #### Plan item detail
 
@@ -215,6 +229,11 @@ Located in `src/renderer/src/` (shared between widget and main window):
 
 ## Changelog
 
+- 2026-06-10 — **Widget↔main parity, auto-grow inputs, status dot alignment, Suggest re-proposal:**
+  - **Status dot alignment:** fixed `margin-top` on `.routine-card__dot` (components.css), `.run-log-row__status-dot` (index.css), and `StatusDot` inline style in `CheckInPage.tsx` so the 8px dot centers on the first title line at all title lengths.
+  - **Auto-grow textareas:** new `src/renderer/src/hooks/useAutoGrowTextarea.ts` hook applied to `ChatThread`, `IntentCard` (draft + challenge), `PlanReviewCard` (detail), and `QuickAddBar` (converted from `<input>` to `<textarea>`). All grow from 1 row to a 4-row cap then scroll; shrink back on clear/send.
+  - **Main-window parity:** `InsightsPage` gains a **Queue** tab (first tab, count badge) that reuses `QueueView` with `plan.getAll()` + `ambient.getIntents()`; all four actions (Approve/Dismiss/Challenge/Suggest) work in the main window. `App.tsx` computes per-page unread counts and shows `.nav-item__badge` pills on Insights and Routines sidebar items; badges update live via push events.
+  - **Suggest re-proposal:** `IntentCard` gains a Suggest button that opens an embedded `ChatThread` (loaded via `ambient.getIntentThread`, sent via `ambient.suggest`); intent stays non-terminal across multiple Suggest rounds; `ambient:intent-message` push event drives live thread updates.
 - 2026-06-09 — **Ambient Autonomy Show/Mute for informational intents:** `AmbientAutonomyCard` in `Settings.tsx` now shows the full 4-tier control only for `action` intents; `flag` and `digest` rows get a binary **Show / Mute** segmented control instead (Show → tier 1, Mute → tier 3). The dead `suggestion` row is removed (inference no longer emits that type). Muting suppresses informational intents in the backend before they are stored. Toast message updated to reflect Show/Mute labels for informational types.
 - 2026-06-09 — **Phase C tab collapse (Queue + Routines):** widget collapsed from three tabs (`Routines | Plan | Ambient`) to two (`Queue | Routines`). New `QueueView.tsx` merges pending actionable intents ("Needs you" section) and active plan items (grouped by timing) into a single scrollable list; done/skipped plan items (including agent-executed `ambient_action` records) appear in a "Done" section. `TabStrip.tsx` updated: `Tab` type is now `'queue' | 'routines'`; activity dot moved to the Queue tab. `QuickAddBar` tab type updated to match; draft review card shows on the Queue tab. Widget default tab changed from `'routines'` to `'queue'`; push event `ambient:intent-created` now switches to the Queue tab instead of the old Ambient tab.
 - 2026-06-09 — **Insights page + merged Routines/Run Logs:** renamed "Activity" nav tab to **Insights** (`InsightsPage.tsx`); daily `DigestView` is now always-on at the top of the page (with digest-type intents in a "Recent digests" section below it) instead of being hidden in a tab; two-tab strip below: Observations / History. Merged the separate "Run Logs" nav entry into the **Routines** page: new `RoutinesPage.tsx` wrapper owns the page header and a Routines / Run Logs `<Tabs>` strip; `RoutinesManager` and `RunLogs` are rendered as children with their own redundant page-header title/subtitle removed. Created reusable `components/Tabs.tsx` (replaces inline-styled tab bars) with `.tabs`/`.tab`/`.tab--active`/`.tab__count`/`.tab__count--active` CSS classes added to `components.css`. Updated `App.tsx`: `Page` union removes `'logs'` and renames `'activity'` → `'insights'`; `routinesTab` state propagated through `RoutinesPage`; `navigate:run-chat` and "View logs" toast action land on the Run Logs sub-tab; `navigate:edit-routine` lands on the Routines sub-tab.

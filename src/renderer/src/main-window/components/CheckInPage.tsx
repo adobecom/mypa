@@ -300,6 +300,8 @@ function StatusDot({ status }: { status: CheckIn['status'] }): React.ReactElemen
     <div style={{
       width: 7, height: 7, borderRadius: '50%',
       background: color, flexShrink: 0,
+      /* Center against 12px font · lh ~1.4 ≈ 16.8px: (16.8−7)/2 ≈ 5px */
+      marginTop: 5,
       animation: status === 'active' ? 'pulse 2s ease-in-out infinite' : undefined
     }} />
   )
