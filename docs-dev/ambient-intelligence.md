@@ -165,6 +165,20 @@ The safety floor still applies: irreversible or `required_approval` intents can 
 | **Approve** | Execute the intent; increment `approvals` + `consecutive_approvals`; potentially promote tier |
 | **Dismiss** | Mark intent dismissed; increment `dismissals`; reset consecutive streak |
 | **Challenge** | Mark intent challenged with a reason; increment `challenges`; reset streak; potentially demote tier |
+| **Suggest** | Open a multi-round re-proposal conversation; keeps the intent non-terminal so the user can iterate before finally approving, dismissing, or challenging |
+
+### Suggest — multi-round re-proposal
+
+The Suggest action allows the user to steer mypa's thinking before committing. It does not end the intent; the user can Suggest as many times as desired, then Approve/Dismiss/Challenge as normal.
+
+**Flow:**
+1. User opens Suggest on an actionable intent card; an embedded `ChatThread` appears.
+2. Each user message is persisted to `intent_threads` and sent to `inference.reproposeIntent()`.
+3. `reproposeIntent` injects the original `context_packet`, the current proposal, and the full conversation history into a system prompt, then calls `runClaudeWithMcp`.
+4. `runClaudeWithMcp` wires the Claude CLI to all connected MCP servers with a **read-only allowlist** (tools whose names start with `get`/`list`/`search`/`read`/`fetch`/`view`/`find`/`show`/`describe`/`query`/`lookup`/`check`). This lets Claude look up extra context (e.g. current PR CI status, open comments) but never mutate anything — write tools are never pre-approved during Suggest.
+5. Claude returns a `{ message, proposed_action }` JSON envelope; the assistant reply is persisted to `intent_threads`, and the intent's proposal fields (`verb`/`target`/`payload`/`rationale`/`confidence`/`reversibility`/`required_approval`) are updated in-place via `dbReproposeIntent`.
+6. Intent status remains `surfaced`; no tier changes. `ambient:intent-updated` and `ambient:intent-message` are broadcast to both windows.
+7. The user can repeat from step 2 indefinitely, then choose a terminal action.
 
 ---
 
@@ -211,6 +225,8 @@ See [ipc.md](ipc.md) for full signatures. Quick reference:
 | `approve(id)` | Approve and (if tier allows) execute |
 | `dismiss(id)` | Dismiss |
 | `challenge(id, reason)` | Challenge with reason |
+| `suggest(id, message)` | Send a Suggest message; returns updated `{intent, assistantMessage}` |
+| `getIntentThread(id)` | Load the `ChatMessage[]` thread for an intent |
 | `getDigest(slot?)` | Latest digest for a slot |
 | `getTrayState()` | Current tray state |
 | `getPolicy()` | All autonomy policies |
@@ -221,6 +237,8 @@ See [ipc.md](ipc.md) for full signatures. Quick reference:
 
 ## Changelog
 
+- 2026-06-10 — **Hard-rule enforcement and scope filter:** two enforcement layers added. (1) *Directive injection* — `config.ts` exports `buildDirectivesClause()`, which reads all active hard memories from the DB (`dbGetActiveHardMemories()`) and returns a trusted standing-directives block that is appended to inference system prompts (alongside `buildOwnerClause()`); hard memories are never rendered as advisory `<context>` data. (2) *Deterministic scope filter* — new `src/main/services/scope.ts` exports `violatesScope(obj, focusNodes): boolean`; it resolves each focus node's `part_of` container edges, extracts the org/project/channel key, and drops the intent if a configured allowlist for that surface exists and the container is not on it. Applied at both ambient chokepoints: `runAmbientCycle` (before `dbCreateIntent`) and `routeIntent` (same position). Conservative: when no container edges exist, the intent passes through. `AppConfig.scope` holds the allowlists (`allowedGithubOrgs`, `allowedJiraProjects`, `allowedSlackChannels`); managed via the new Scope card in Settings.
+- 2026-06-10 — **Suggest multi-round re-proposal:** added Suggest as a fourth non-terminal user action on actionable intents. New `intent_threads` table persists the conversation. `inference.reproposeIntent` builds a re-proposal prompt from the original `context_packet`, current proposal, and conversation history, then calls `runClaudeWithMcp` — which wires the Claude CLI to connected MCP servers with a read-only tool allowlist (name-prefix filter) so Claude can look up extra context without ever mutating data. The assistant reply and updated `IntentObject` fields are stored; the intent stays `surfaced` for further Suggest rounds. `ambient:intent-message` push channel added; `ambient.suggest` / `ambient.getIntentThread` IPC methods added. The Suggest thread is rendered in `IntentCard` via the shared `ChatThread` component in both the widget and main-window Insights page.
 - 2026-06-09 — **informational intent muting:** added `isMuted(type, tier)` predicate to `autonomy.ts`; informational intents (`flag`/`digest`/`suggestion`) whose resolved tier is 3 are now dropped before `dbCreateIntent` in both `runAmbientCycle` and `routeIntent` — they produce no DB row, no graph node, and no action-log entry. This is the backend effect of the user setting an informational type to "Mute" in the Ambient Autonomy card. `action`-type intents at tier 3 remain unaffected (still surfaced as Locked flags). The `autonomy_policy` table stores the mute as `tier=3` for the intent type key, reusing the existing `ambient:set-tier` IPC channel with no schema changes.
 - 2026-06-09 — **intent graduation to plan (Phase C):** on successful `executeIntent`, `ambient.ts` now calls `dbCreateAmbientActionRecord(intent)` to create a `PlanItem(status:'done', source:'ambient_action')` as a durable record of what the agent did. The widget's Queue "Done" section naturally includes these records alongside user-completed tasks. Badge count is refreshed via `updateBadgeCount()` after creation so the widget refreshes its plan list. Failures in the graduation step are non-fatal — the intent's own `executed` status is unaffected.
 - 2026-06-09 — **macOS Dock badge:** `windows.updateBadgeCount()` now calls `app.setBadgeCount(n)` so the Dock icon shows a numeric red badge equal to `pendingRuns + pendingItems + pendingIntents`. Distinct from the tray red dot (which requires a tier ≥ 2 approval-required action intent): Dock = total pending count, tray = explicit user action required. Badge is set on startup and updated on every count-changing event.

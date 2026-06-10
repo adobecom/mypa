@@ -1,7 +1,9 @@
-import React, { useState } from 'react'
-import { GitBranch, SquareKanban, MessageSquare, ChevronDown } from 'lucide-react'
-import type { Intent } from '../../../../../../shared/types'
+import React, { useState, useEffect } from 'react'
+import { GitBranch, SquareKanban, MessageSquare, ChevronDown, Lightbulb } from 'lucide-react'
+import type { Intent, ChatMessage } from '../../../../../../shared/types'
 import MarkdownText from '@renderer/components/MarkdownText'
+import ChatThread from './ChatThread'
+import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 
 interface Props {
   intent: Intent
@@ -97,6 +99,10 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
   const [challengeReason, setChallengeReason] = useState('')
   const [loading, setLoading] = useState(false)
   const [challengeConfirmed, setChallengeConfirmed] = useState(false)
+  const [suggesting, setSuggesting] = useState(false)
+  const [suggestThread, setSuggestThread] = useState<ChatMessage[]>([])
+  const [suggestStreaming, setSuggestStreaming] = useState(false)
+  const [suggestError, setSuggestError] = useState<string | null>(null)
 
   const api = window.electron
   const isTerminal = TERMINAL_STATUSES.includes(intent.status)
@@ -111,6 +117,8 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
   const [draftText, setDraftText] = useState<string>(
     payloadDraftKey ? String((intent.payload ?? {})[payloadDraftKey]) : ''
   )
+  const draftRef = useAutoGrowTextarea(draftText)
+  const challengeRef = useAutoGrowTextarea(challengeReason)
 
   const cardClass = [
     'routine-card',
@@ -167,6 +175,58 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
       console.error('challenge error:', e)
     } finally {
       setLoading(false)
+    }
+  }
+
+  // ── Suggest thread ────────────────────────────────────────────────────────
+
+  // Load existing thread when the Suggest panel opens for the first time
+  useEffect(() => {
+    if (!suggesting || suggestThread.length > 0) return
+    api.ambient.getIntentThread(intent.id)
+      .then((msgs) => setSuggestThread(msgs as ChatMessage[]))
+      .catch(console.error)
+  }, [suggesting])
+
+  // Subscribe to assistant replies streamed through the broadcast channel
+  useEffect(() => {
+    const off = api.on('ambient:intent-message', (payload) => {
+      const p = payload as { intentId: string; message: string }
+      if (p.intentId !== intent.id) return
+      setSuggestStreaming(false)
+      setSuggestThread((prev) => [
+        ...prev,
+        { id: Date.now().toString(), role: 'assistant' as const, content: p.message, timestamp: new Date().toISOString() }
+      ])
+    })
+    return off
+  }, [intent.id])
+
+  async function handleSuggest(message: string): Promise<void> {
+    setSuggestError(null)
+    setSuggestStreaming(true)
+    // Optimistically show user message
+    const optimisticId = Date.now().toString()
+    setSuggestThread((prev) => [
+      ...prev,
+      { id: optimisticId, role: 'user' as const, content: message, timestamp: new Date().toISOString() }
+    ])
+    try {
+      const result = await api.ambient.suggest(intent.id, message)
+      if (result) {
+        onIntentChange(result.intent as Intent)
+        // Update draft text to the new proposal if it has a payload body
+        const newPayload = (result.intent as Intent).payload ?? {}
+        const newDraftKey = ['body', 'text', 'comment', 'message'].find(
+          (k) => typeof newPayload[k] === 'string'
+        )
+        if (newDraftKey) {
+          setDraftText(String(newPayload[newDraftKey]))
+        }
+      }
+    } catch (e: any) {
+      setSuggestError(e?.message ?? 'Failed to get a re-proposal.')
+      setSuggestStreaming(false)
     }
   }
 
@@ -261,12 +321,13 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
               </div>
               {payloadText !== null && !isTerminal && (
                 <textarea
+                  ref={draftRef}
                   className="intent-detail__draft"
                   value={draftText}
                   onChange={(e) => setDraftText(e.target.value)}
-                  rows={4}
+                  rows={1}
                   placeholder="Edit draft before sending…"
-                  style={{ width: '100%', resize: 'vertical', marginTop: 6, boxSizing: 'border-box' }}
+                  style={{ width: '100%', resize: 'none', marginTop: 6, boxSizing: 'border-box' }}
                 />
               )}
               {payloadText !== null && isTerminal && (
@@ -356,15 +417,41 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
         </div>
       )}
 
+      {/* ── Suggest thread panel ── */}
+      {suggesting && !isTerminal && (
+        <div className="routine-card__body" style={{ paddingTop: 4 }}>
+          <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', marginBottom: 6 }}>
+            Suggest improvements
+          </div>
+          <ChatThread
+            messages={suggestThread}
+            streaming={suggestStreaming}
+            onSend={handleSuggest}
+            error={suggestError}
+            sendDisabled={suggestStreaming}
+          />
+          <div style={{ marginTop: 6, display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn btn--ghost"
+              onClick={() => setSuggesting(false)}
+              style={{ fontSize: 11 }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── Challenge input ── */}
       {challenging && !isTerminal && (
         <div className="routine-card__body" style={{ paddingTop: 4 }}>
           <textarea
+            ref={challengeRef}
             className="review-field__input"
             placeholder="Why isn't this right? This teaches the agent."
             value={challengeReason}
             onChange={(e) => setChallengeReason(e.target.value)}
-            rows={2}
+            rows={1}
             autoFocus
             style={{ width: '100%', resize: 'none', marginBottom: 6 }}
           />
@@ -389,7 +476,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
       )}
 
       {/* ── Action footer ── */}
-      {!isTerminal && !challenging && (
+      {!isTerminal && !challenging && !suggesting && (
         <div className="routine-card__body" style={{ paddingTop: 10, display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
           {isObservation ? (
             <>
@@ -419,6 +506,16 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
                 style={{ fontSize: 11 }}
               >
                 Dismiss
+              </button>
+              <button
+                className="btn btn--ghost"
+                onClick={(e) => { e.stopPropagation(); setSuggesting(true); setExpanded(true) }}
+                disabled={loading}
+                style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+                title="Ask mypa to rethink this proposal"
+              >
+                <Lightbulb size={11} />
+                Suggest
               </button>
               <button
                 className="btn btn--danger"

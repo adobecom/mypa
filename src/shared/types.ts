@@ -158,6 +158,22 @@ export interface OwnerIdentity {
 export type ResolvedHandle = { value: string; needsReview: boolean }
 export type ResolvedOwnerHandles = Partial<Record<'github' | 'slack' | 'jira' | 'linear' | 'notion', ResolvedHandle>>
 
+/**
+ * Scope config — defines which external containers (GitHub orgs, Jira projects,
+ * Slack channels) mypa is allowed to surface. When a list is provided for a
+ * surface and a signal's container is NOT on that list, intents derived from that
+ * signal are dropped before reaching the DB, graph, or UI.
+ * An absent or empty list for a surface means "no restriction".
+ */
+export interface ScopeConfig {
+  /** GitHub org names to allow (e.g. ['adobecom', 'adobe']). Case-insensitive. */
+  allowedGithubOrgs?: string[]
+  /** Jira project keys to allow (e.g. ['PROJ', 'MYAPP']). Case-insensitive. */
+  allowedJiraProjects?: string[]
+  /** Slack channel IDs or names to allow (e.g. ['C123ABC']). */
+  allowedSlackChannels?: string[]
+}
+
 export interface AppConfig {
   claude: ClaudeConfig
   mcp_servers: McpServerConfig[]
@@ -177,6 +193,7 @@ export interface AppConfig {
   }
   ambient?: AmbientConfig
   checkin?: CheckInConfig
+  scope?: ScopeConfig
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -405,10 +422,19 @@ export interface CheckInExtractionSummary {
 
 export type MemoryType = 'fact' | 'pattern' | 'preference' | 'status'
 
+/**
+ * 'hard' — a standing rule extracted from a check-in that the assistant must
+ *           always honor. Hard memories are injected into the trusted system-prompt
+ *           directive block, not the advisory context section.
+ * 'soft' — a preference or guidance; rendered as "Known facts" context (default).
+ */
+export type MemoryEnforcement = 'hard' | 'soft'
+
 export interface Memory {
   id: string
   content: string
   type: MemoryType
+  enforcement: MemoryEnforcement
   confidence: number
   importance: number
   surface: string
@@ -561,6 +587,10 @@ export interface IpcApi {
     approve(id: string, payload?: Record<string, unknown>): Promise<Intent>
     dismiss(id: string): Promise<void>
     challenge(id: string, reason: string): Promise<Intent>
+    /** Multi-round Suggest: send a message and receive a re-proposal. */
+    suggest(id: string, message: string): Promise<{ intent: Intent; assistantMessage: string } | null>
+    /** Retrieve the Suggest conversation thread for an intent. */
+    getIntentThread(id: string): Promise<ChatMessage[]>
     getDigest(slot?: DigestSlot): Promise<AmbientDigest>
     getTrayState(): Promise<TrayState>
     getPolicy(): Promise<AutonomyPolicy[]>
@@ -614,6 +644,7 @@ export interface IpcApi {
       | 'navigate:plan-item'
       | 'ambient:intent-created'
       | 'ambient:intent-updated'
+      | 'ambient:intent-message'
       | 'ambient:tray-state'
       | 'ambient:digest-ready'
       | 'ambient:action-executed'

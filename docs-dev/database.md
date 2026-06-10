@@ -142,6 +142,18 @@ Proposed actions derived from signal analysis.
 | `resolved_at` | TEXT | Nullable |
 | `error` | TEXT | Nullable |
 
+#### `intent_threads`
+
+Conversation messages for a multi-round Suggest session on an intent. Mirrors the `plan_item_threads` pattern.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | TEXT PK | UUID |
+| `intent_id` | TEXT FK → `intents` | CASCADE DELETE |
+| `role` | TEXT | `'user'` or `'assistant'` |
+| `content` | TEXT | Message body |
+| `timestamp` | TEXT | ISO 8601 |
+
 #### `action_log`
 
 Audit log of intent lifecycle events.
@@ -235,6 +247,7 @@ Extracted facts, patterns, preferences, and statuses tied to graph nodes.
 | `importance` | REAL | 0–1 (used for retrieval ranking) |
 | `surface` | TEXT | Origin surface |
 | `node_id` | TEXT FK → `graph_nodes` | SET NULL on delete |
+| `enforcement` | TEXT | `hard \| soft` (default `soft`) — `hard` memories are trusted system-prompt directives; `soft` are advisory context |
 | `status` | TEXT | `active \| superseded` |
 | `superseded_by` | TEXT | ID of the replacing memory |
 | `created_at` | TEXT | |
@@ -267,6 +280,7 @@ All indexes use `CREATE INDEX IF NOT EXISTS`.
 | `idx_routine_runs_routine_id` | `routine_runs` | `routine_id` | Fetch runs by routine |
 | `idx_routine_run_threads_run_id` | `routine_run_threads` | `run_id` | Fetch thread for a run |
 | `idx_plan_item_threads_item_id` | `plan_item_threads` | `item_id` | Fetch thread for an item |
+| `idx_intent_threads_intent_id` | `intent_threads` | `intent_id` | Fetch thread for an intent |
 | `idx_plan_items_status` | `plan_items` | `status` | Filter by status |
 | `idx_signals_unprocessed` | `signals` | `processed, observed_at` | Find unprocessed signals for ingestion |
 | `idx_signals_surface` | `signals` | `surface, occurred_at` | Surface-scoped queries |
@@ -327,6 +341,8 @@ Indexes: `idx_checkin_messages_checkin` (checkin_id, timestamp), `idx_check_ins_
 
 ## Changelog
 
+- 2026-06-10 — **Hard/soft memory enforcement:** added `enforcement TEXT NOT NULL DEFAULT 'soft'` column to `memories` (additive `ALTER TABLE` migration). New DB helper `dbGetActiveHardMemories()` returns all active hard memories (no cap), used by `buildDirectivesClause()` in `config.ts` to inject them as trusted standing directives into inference system prompts. New `MemoryEnforcement` and `ScopeConfig` types in `src/shared/types.ts`. New `src/main/services/scope.ts` with `violatesScope(obj, focusNodes)` deterministic filter applied at both ambient chokepoints (`runAmbientCycle` and `routeIntent`). `AppConfig` extended with `scope?: ScopeConfig`.
+- 2026-06-10 — **Suggest re-proposal thread:** added `intent_threads` table (mirrors `plan_item_threads` with `intent_id FK → intents CASCADE DELETE`) and `idx_intent_threads_intent_id` index. New query helpers in `db/index.ts`: `dbAddIntentMessage(intentId, role, content)`, `dbGetIntentThread(intentId) → ChatMessage[]`, and `dbReproposeIntent(id, { verb, target, payload, rationale, confidence, reversibility, required_approval })` — updates proposal fields in-place without touching `status`, keeping the intent actionable across multiple Suggest rounds.
 - 2026-06-09 — **graph weight cap:** `dbBumpNodeWeight` and `dbUpsertEdge` now apply a hard cap (`MIN(weight + delta, 10.0)`) to prevent unbounded accumulation on frequently-updated nodes/edges. Without the cap, nodes polled hundreds of times could reach weights in the hundreds (e.g. 409.567), overwhelming the decay schedule and dominating every context-packet query. The cap is expressed as `GRAPH_NODE_WEIGHT_CAP` / `GRAPH_EDGE_WEIGHT_CAP` constants in `db/index.ts`.
 - 2026-06-09 — `PlanItemSource` extended with `'ambient_action'`; new DB function `dbCreateAmbientActionRecord(intent: Intent): PlanItem` inserts a done plan item representing an agent-executed ambient action (status `'done'`, source `'ambient_action'`, timing `'anytime'`). No schema change — the `plan_items` table already supports these values.
 - 2026-06-08 — added `check_ins` and `checkin_messages` tables with indexes; new DB functions `dbCreateCheckIn`, `dbGetCheckIn`, `dbGetActiveCheckIn`, `dbGetCheckIns`, `dbUpdateCheckIn`, `dbAddCheckInMessage`, `dbGetCheckInThread`

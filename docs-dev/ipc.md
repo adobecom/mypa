@@ -109,6 +109,8 @@ Ambient intelligence — intents, digests, policy, tray state.
 | `approve` | `(id, payload?) → Intent` | Approve an intent, optionally passing a user-edited payload (for draft-and-confirm). Persists the edited payload before executing. |
 | `dismiss` | `(id) → void` | Dismiss an intent |
 | `challenge` | `(id, reason) → Intent` | Challenge an intent with a reason; adjusts trust policy |
+| `suggest` | `(id, message) → { intent: Intent; assistantMessage: string } \| null` | Multi-round Suggest: send user feedback, receive a re-proposed intent and a conversational reply. Intent stays non-terminal; can be called repeatedly. |
+| `getIntentThread` | `(id) → ChatMessage[]` | Fetch the Suggest conversation thread for an intent. |
 | `getDigest` | `(slot?) → AmbientDigest` | Fetch the latest digest for a slot (`morning \| midday \| eod`) |
 | `getTrayState` | `() → TrayState` | Current tray state: `idle \| has-something \| needs-you` (driven only by `action`-type intents) |
 | `getPolicy` | `() → AutonomyPolicy[]` | All per-action-type trust policies |
@@ -155,6 +157,7 @@ Subscribed with `window.electron.on(channel, listener)`. Returns an unsubscribe 
 | `ambient:tray-state` | `TrayState` | Tray icon state changed | widget only |
 | `ambient:digest-ready` | `AmbientDigest` | A new digest was generated | widget only |
 | `ambient:action-executed` | `Intent` | A tier-0 intent was auto-executed (success only) | **widget + main** |
+| `ambient:intent-message` | `{ intentId: string; message: string }` | Assistant reply after a Suggest round (non-streaming; fires once when re-proposal completes) | **widget + main** |
 
 **`routine:run-started` and `routine:run-completed` are broadcast to both windows** via `broadcast()` in `src/main/windows.ts`. The main window uses them to drive in-app toast notifications. The widget uses them to update its inline run card. All other events remain window-specific.
 

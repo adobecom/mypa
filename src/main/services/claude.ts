@@ -1,8 +1,11 @@
 import { execSync, spawn } from 'child_process'
-import { existsSync } from 'fs'
+import { existsSync, writeFileSync, unlinkSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import cron from 'node-cron'
 import { readConfig, buildOwnerClause } from './config'
 import { recordUsage } from './usage'
+import { getServerStatus } from './mcp'
 import type { PlanDraft, PlanItemTiming, ChatMessage, McpServerStatus, RoutineAction, RoutineSetupDraft, UsageSource } from '@shared/types'
 
 
@@ -383,6 +386,132 @@ Cron rules:
         : 'Summarize the most important items that need my attention.\nBe concise. Highlight anything urgent or time-sensitive.\nPropose 2-3 specific follow-up actions I can take.',
     cron: validatedCron
   }
+}
+
+// ─── MCP-enabled one-shot call (for Suggest re-proposal) ─────────────────────
+
+/**
+ * Prefixes for tool names considered safe for read-only access during Suggest.
+ * Only tools whose names start with one of these are included in the allowlist.
+ * Write-capable tools (create/post/send/delete/etc.) are excluded at this layer
+ * in addition to the VERB_TO_TOOL allowlist that guards actual execution.
+ */
+const READ_ONLY_PREFIXES = [
+  'get', 'list', 'search', 'read', 'fetch', 'view', 'find',
+  'show', 'describe', 'query', 'lookup', 'check'
+]
+
+function isReadOnlyTool(toolName: string): boolean {
+  const lower = toolName.toLowerCase()
+  return READ_ONLY_PREFIXES.some((p) => lower.startsWith(p))
+}
+
+/**
+ * Run a one-shot Claude call with the configured MCP servers wired in.
+ * Only read-only tools are pre-approved; write tools are never included.
+ *
+ * The MCP config is written to a temp file, passed via --mcp-config, and
+ * cleaned up after the call regardless of outcome.
+ *
+ * Returns the raw text output (may be a JSON envelope if the caller used
+ * a structured response prompt).
+ */
+export async function runClaudeWithMcp(
+  systemPrompt: string,
+  userPrompt: string,
+  source: UsageSource = 'suggest'
+): Promise<string> {
+  const cfg = readConfig()
+  const model = cfg.claude.model ?? ''
+
+  // Build MCP config for the CLI: only servers that are configured
+  const mcpConfig: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> = {}
+  const allowedTools: string[] = []
+
+  for (const srv of cfg.mcp_servers) {
+    if (!srv.command) continue
+    const safeName = srv.name.replace(/[^a-zA-Z0-9_-]/g, '_')
+    mcpConfig[safeName] = {
+      command: srv.command,
+      ...(srv.args && srv.args.length > 0 ? { args: srv.args } : {}),
+      ...(srv.env && Object.keys(srv.env).length > 0 ? { env: srv.env } : {})
+    }
+    // Include only read-only tool names from this server's known tool list.
+    // If the server isn't tracked by mcp.ts yet (e.g. not started), we don't know
+    // its tools — skip allowedTools for that server (Claude CLI will refuse unknown tools).
+    // Tool names that are NOT read-only are simply not listed, so the model can't call them.
+  }
+
+  // Get read-only tools from the currently connected servers
+  for (const status of getServerStatus()) {
+    if (!status.connected) continue
+    const safeName = status.name.replace(/[^a-zA-Z0-9_-]/g, '_')
+    for (const tool of status.tools) {
+      if (isReadOnlyTool(tool.name)) {
+        allowedTools.push(`mcp__${safeName}__${tool.name}`)
+      }
+    }
+  }
+
+  if (Object.keys(mcpConfig).length === 0) {
+    // No MCP servers configured — fall back to plain runClaude
+    return runClaude(systemPrompt, userPrompt, source)
+  }
+
+  // Write temp MCP config file
+  const mcpConfigPath = join(tmpdir(), `mypa-mcp-${Date.now()}.json`)
+  try {
+    writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: mcpConfig }, null, 2))
+  } catch {
+    return runClaude(systemPrompt, userPrompt, source)
+  }
+
+  const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
+  const args = [
+    '-p', fullPrompt,
+    '--output-format', 'json',
+    '--mcp-config', mcpConfigPath,
+    ...modelArgs(cfg.claude.model)
+  ]
+  if (allowedTools.length > 0) {
+    args.push('--allowedTools', allowedTools.join(','))
+  }
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn(getClaude(), args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: claudeEnv(cfg.claude.apiKey)
+    })
+    let stdout = ''
+    let stderr = ''
+    const timer = setTimeout(() => { proc.kill(); reject(new Error('Claude (MCP) timed out')) }, 180_000)
+    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString() })
+    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
+    proc.on('close', (code) => {
+      clearTimeout(timer)
+      try { unlinkSync(mcpConfigPath) } catch { /* best-effort cleanup */ }
+      if (code !== 0) {
+        reject(new Error(`Claude (MCP) failed: ${stderr || stdout}`))
+        return
+      }
+      try {
+        const parsed = JSON.parse(stdout.trim())
+        recordUsage(source, model, parsed)
+        if (parsed.is_error) {
+          reject(new Error(String(parsed.result ?? parsed.error ?? 'Claude returned an error')))
+          return
+        }
+        resolve(typeof parsed.result === 'string' ? parsed.result : stdout.trim())
+      } catch {
+        resolve(stdout.trim())
+      }
+    })
+    proc.on('error', (err) => {
+      try { unlinkSync(mcpConfigPath) } catch { /* best-effort cleanup */ }
+      clearTimeout(timer)
+      reject(err)
+    })
+  })
 }
 
 // ─── Streaming chat ───────────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ Spawns the `claude` CLI for all AI work. See [claude-integration.md](claude-inte
 | Export | Description |
 |---|---|
 | `runClaude(systemPrompt, userPrompt, source?)` | One-shot JSON completion (120 s timeout); records usage |
+| `runClaudeWithMcp(systemPrompt, userPrompt, source?)` | One-shot with live MCP access; writes a temp `--mcp-config` file from connected servers, passes a read-only `--allowedTools` allowlist (tools whose names start with `get`/`list`/`search`/`read`/`fetch`/`view`/`find`/`show`/`describe`/`query`/`lookup`/`check`), then falls back to `runClaude` if no servers are connected |
 | `streamChat(history, userMessage, onChunk, onDone, rawContext?, streamId?, source?)` | Streaming multi-turn chat; records usage on completion |
 | `cancelStream(streamId)` | Kill an active stream by ID; returns `true` if found |
 | `generatePlanDraft(intent)` | Parse free-text intent → `PlanDraft` |
@@ -151,6 +152,8 @@ Runs the recurring background poll cycle (default every 5 minutes). Reads config
 | Export | Description |
 |---|---|
 | `routeIntent(obj, triggerKind, contextPacket, focusNodeIds, win)` | Route an already-inferred `IntentObject` through the full tier/DB/graph/notify pipeline. Used by `routines.ts` to feed routine-generated action candidates into the same queue as ambient intents. |
+| `ambientSuggestIntent(id, userMessage)` | Multi-round re-proposal: persists user message → calls `reproposeIntent` (with live read-only MCP access) → persists assistant reply → updates proposal fields via `dbReproposeIntent` → broadcasts `ambient:intent-updated` and `ambient:intent-message`. Returns `{intent, assistantMessage}` or null on error. |
+| `ambientGetIntentThread(id)` | Returns the `ChatMessage[]` thread for an intent from `intent_threads`. |
 
 ---
 
@@ -186,6 +189,7 @@ Takes a `ContextPacket` (assembled by `memory-graph.ts`) and produces scored `In
 |---|---|
 | `inferIntent(hit, packet?)` | Single-intent inference from a `TriggerHit`; returns one `IntentObject` or null |
 | `inferRoutineIntents(name, rawOutput, maxIntents?)` | Multi-intent inference over routine MCP output; returns up to `maxIntents` (default 3) `IntentObject`s as a JSON array parsed from one Claude call |
+| `reproposeIntent(intent, thread, userMessage)` | Re-proposal with live read-only MCP: injects the original `context_packet`, the current proposal, and the full conversation history into a prompt, calls `runClaudeWithMcp`, and returns `{ message: string, intent: IntentObject }` parsed from a JSON envelope |
 | `parseIntentObject(text)` | Parse + validate a raw JSON string into an `IntentObject`; clamps unknown verbs to `'none'` |
 
 ---
@@ -286,6 +290,7 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 
 ## Changelog
 
+- 2026-06-10 — **Suggest multi-round re-proposal:** `claude.ts` — added `runClaudeWithMcp(systemPrompt, userPrompt, source?)`: builds a temp `--mcp-config` JSON from connected MCP servers, computes a read-only `--allowedTools` allowlist (name-prefix filter: get/list/search/read/fetch/view/find/show/describe/query/lookup/check), spawns the Claude CLI with MCP wired in, and falls back to `runClaude` when no servers are live; write tools are never pre-approved. `inference.ts` — added `reproposeIntent(intent, thread, userMessage)`: constructs a re-proposal prompt from the original `context_packet`, the current proposal, and the conversation history; calls `runClaudeWithMcp`; returns a `{ message, intent }` JSON envelope parsed via `parseIntentObject`. `ambient.ts` — added `ambientSuggestIntent(id, userMessage)` (persist user message → re-propose → persist assistant reply → update proposal fields → broadcast) and `ambientGetIntentThread(id)` (returns thread from `intent_threads`).
 - 2026-06-09 — `autonomy.ts`: added `isMuted(type, tier)` export (informational intent at tier 3 = muted/suppressed); `IntentType` added to imports. `ambient.ts`: both `runAmbientCycle` and `routeIntent` now call `isMuted` after `resolveTier` and skip intent creation entirely when true — muted informational intents leave no DB row, graph node, or log entry.
 - 2026-06-09 — `windows.ts`: added `updateBadgeCount()` — single helper that calls `app.setBadgeCount(n)` (macOS Dock numeric badge) and `broadcast('badge:updated', n)`; replaces six scattered inline emit sites in `ipc-handlers.ts`, `routines.ts`, `plan.ts`, and `ambient.ts`; also fixes `ambient:challenge` which previously refreshed the tray but never decremented the badge; called once on startup in `index.ts` to reflect any already-pending items. `dbGetBadgeCount` imports removed from `routines.ts`, `plan.ts`, and `ambient.ts` — the helper owns that call.
 - 2026-06-09 — `plan.ts`, `routines.ts`: removed `widgetWin` param from `handlePlanMessage` and `handleRunMessage`; both now broadcast `plan:user-message` / `routine:user-message` (with the saved `ChatMessage`) immediately after the DB write, before streaming; `badge:updated` changed from widget-only send to `broadcast()` in both services

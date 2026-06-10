@@ -174,6 +174,7 @@ interface RawExtractionOutput {
   memories?: Array<{
     content: string
     type?: string
+    enforcement?: string
     confidence?: number
     importance?: number
     supersedes_content?: string | null
@@ -222,6 +223,7 @@ Extract knowledge updates as JSON:
     {
       "content": "one concise sentence stating the fact, pattern, or preference",
       "type": "fact" | "pattern" | "preference" | "status",
+      "enforcement": "hard" | "soft",
       "confidence": <0.0-1.0>,
       "importance": <0.0-1.0>,
       "supersedes_content": "<verbatim content of existing memory to replace, or null>"
@@ -241,7 +243,8 @@ Rules:
 - supersedes_content must be the verbatim content of an existing memory from the list above; use null for new facts.
 - weight_adjustments: positive delta = more important, negative = less. Clamp between -3 and 3.
 - new_edges: only use node keys visible in the transcript.
-- Maximum: 10 memories, 5 weight_adjustments, 5 new_edges.`
+- Maximum: 10 memories, 5 weight_adjustments, 5 new_edges.
+- enforcement: set "hard" ONLY for rules/boundaries the manager stated in absolute terms (e.g. "only surface X", "never do Y", "always include Z"). Set "soft" for preferences, guidance, and advisory instructions. Default to "soft" when in doubt — hard should be rare.`
 
   const raw = await runClaude(systemPrompt, userPrompt, 'checkin_extract')
 
@@ -265,6 +268,7 @@ Rules:
     const input: MemoryInput = {
       content: m.content.trim(),
       type: validMemoryTypes.has(m.type ?? '') ? (m.type as any) : 'fact',
+      enforcement: m.enforcement === 'hard' ? 'hard' : 'soft',
       confidence: clamp(m.confidence ?? 0.7, 0, 1),
       importance: clamp(m.importance ?? 0.6, 0, 1),
       surface: '',

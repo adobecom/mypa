@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, KeyboardEvent } from 'react'
 import { Sparkles, ArrowUp, Square } from 'lucide-react'
 import type { ChatMessage } from '../../../../../../shared/types'
 import MarkdownText from '@renderer/components/MarkdownText'
+import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 
 interface Props {
   messages: ChatMessage[]
@@ -24,6 +25,7 @@ export default function ChatThread({
 }: Props): React.ReactElement {
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
+  const inputRef = useAutoGrowTextarea(input)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -89,6 +91,7 @@ export default function ChatThread({
 
       <div className="chat-input-row">
         <textarea
+          ref={inputRef}
           className="chat-input"
           rows={1}
           placeholder="Reply to Claude…"

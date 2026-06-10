@@ -57,6 +57,15 @@ export function initSchema(db: Database.Database): void {
       FOREIGN KEY (item_id) REFERENCES plan_items(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS intent_threads (
+      id         TEXT PRIMARY KEY,
+      intent_id  TEXT NOT NULL,
+      role       TEXT NOT NULL,
+      content    TEXT NOT NULL,
+      timestamp  TEXT NOT NULL,
+      FOREIGN KEY (intent_id) REFERENCES intents(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS plan_item_history (
       id         TEXT PRIMARY KEY,
       item_id    TEXT NOT NULL,
@@ -69,6 +78,7 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_routine_runs_routine_id ON routine_runs(routine_id);
     CREATE INDEX IF NOT EXISTS idx_routine_run_threads_run_id ON routine_run_threads(run_id);
     CREATE INDEX IF NOT EXISTS idx_plan_item_threads_item_id ON plan_item_threads(item_id);
+    CREATE INDEX IF NOT EXISTS idx_intent_threads_intent_id ON intent_threads(intent_id);
     CREATE INDEX IF NOT EXISTS idx_plan_items_status ON plan_items(status);
 
     -- ─── Ambient Intelligence ─────────────────────────────────────────────────
@@ -245,6 +255,8 @@ export function initSchema(db: Database.Database): void {
   // SQLite throws if the column already exists; that's expected and safe to ignore.
   const tryExec = (sql: string): void => { try { db.exec(sql) } catch { /* already exists */ } }
   tryExec('ALTER TABLE autonomy_policy ADD COLUMN consecutive_approvals INTEGER NOT NULL DEFAULT 0')
+  // Hard/soft enforcement classification on memories (added 2026-06-10)
+  tryExec("ALTER TABLE memories ADD COLUMN enforcement TEXT NOT NULL DEFAULT 'soft'")
   // Embedding columns on signals — nullable so old rows remain valid immediately
   tryExec('ALTER TABLE signals ADD COLUMN embedding BLOB')
   tryExec('ALTER TABLE signals ADD COLUMN embedding_model TEXT')

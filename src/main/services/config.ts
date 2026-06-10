@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
 import { safeStorage } from 'electron'
 import type { AppConfig } from '@shared/types'
 import { DEFAULT_CONFIG } from '@shared/types'
+import { dbGetActiveHardMemories } from '../db'
 
 const CONFIG_DIR = join(homedir(), '.mypa')
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json')
@@ -171,6 +172,27 @@ export function buildOwnerClause(): string {
     : ''
 
   return `\n\nThe person you assist is ${name}.${handlePart} When activity references any of those handles, that is ${name} themselves — address them in the second person ("you"), never in the third person or by their handle.`
+}
+
+/**
+ * Builds a trusted standing-directives block appended to system prompts so the
+ * model treats hard rules (extracted from check-ins) as inviolable instructions,
+ * not advisory context. Returns '' when there are no hard memories.
+ *
+ * Unlike buildOwnerClause(), this is NOT cached — it is re-read at call time so
+ * newly-added rules take effect on the very next inference cycle.
+ */
+export function buildDirectivesClause(): string {
+  let rules: string[]
+  try {
+    rules = dbGetActiveHardMemories().map((m) => m.content)
+  } catch {
+    return ''
+  }
+  if (rules.length === 0) return ''
+
+  const bulletList = rules.map((r) => `  - ${r}`).join('\n')
+  return `\n\nStanding rules you must always obey (set by the user in past check-ins):\n${bulletList}\nIf a candidate observation or proposed action would violate any of the above, do not surface it — return the "nothing actionable" response instead.`
 }
 
 function deepMerge(base: any, override: any): any {

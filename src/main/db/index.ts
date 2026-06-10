@@ -176,6 +176,50 @@ export function dbGetRunThread(runId: string): ChatMessage[] {
   return rows.map((r) => ({ id: r.id, role: r.role, content: r.content, timestamp: r.timestamp }))
 }
 
+// ─── Intent threads (Suggest) ─────────────────────────────────────────────────
+
+export function dbAddIntentMessage(intentId: string, role: string, content: string): ChatMessage {
+  const id = uuidv4()
+  const timestamp = new Date().toISOString()
+  getDb()
+    .prepare('INSERT INTO intent_threads (id, intent_id, role, content, timestamp) VALUES (?,?,?,?,?)')
+    .run(id, intentId, role, content, timestamp)
+  return { id, role: role as any, content, timestamp }
+}
+
+export function dbGetIntentThread(intentId: string): ChatMessage[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM intent_threads WHERE intent_id = ? ORDER BY timestamp ASC')
+    .all(intentId) as any[]
+  return rows.map((r) => ({ id: r.id, role: r.role, content: r.content, timestamp: r.timestamp }))
+}
+
+/**
+ * Update the proposal fields on an intent in-place without changing its status.
+ * Used by the Suggest loop after each re-proposal round.
+ */
+export function dbReproposeIntent(
+  id: string,
+  update: {
+    verb?: string
+    target?: string
+    payload?: Record<string, unknown>
+    rationale?: string
+    confidence?: number
+    reversibility?: string
+    required_approval?: boolean
+  }
+): void {
+  const db = getDb()
+  if (update.verb !== undefined) db.prepare('UPDATE intents SET verb = ? WHERE id = ?').run(update.verb, id)
+  if (update.target !== undefined) db.prepare('UPDATE intents SET target = ? WHERE id = ?').run(update.target, id)
+  if (update.payload !== undefined) db.prepare('UPDATE intents SET payload = ? WHERE id = ?').run(JSON.stringify(update.payload), id)
+  if (update.rationale !== undefined) db.prepare('UPDATE intents SET rationale = ? WHERE id = ?').run(update.rationale, id)
+  if (update.confidence !== undefined) db.prepare('UPDATE intents SET confidence = ? WHERE id = ?').run(update.confidence, id)
+  if (update.reversibility !== undefined) db.prepare('UPDATE intents SET reversibility = ? WHERE id = ?').run(update.reversibility, id)
+  if (update.required_approval !== undefined) db.prepare('UPDATE intents SET required_approval = ? WHERE id = ?').run(update.required_approval ? 1 : 0, id)
+}
+
 export function dbAddPlanMessage(itemId: string, role: string, content: string): ChatMessage {
   const id = uuidv4()
   const timestamp = new Date().toISOString()
@@ -877,13 +921,14 @@ export function dbCreateMemory(input: MemoryInput): Memory {
   getDb()
     .prepare(
       `INSERT INTO memories
-        (id, content, type, confidence, importance, surface, node_id, status, superseded_by, created_at, last_accessed)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+        (id, content, type, enforcement, confidence, importance, surface, node_id, status, superseded_by, created_at, last_accessed)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
     )
     .run(
       id,
       input.content,
       input.type,
+      input.enforcement ?? 'soft',
       input.confidence,
       input.importance,
       input.surface,
@@ -907,6 +952,20 @@ export function dbGetActiveMemories(limit = 10): Memory[] {
       "SELECT * FROM memories WHERE status = 'active' ORDER BY importance DESC, created_at DESC LIMIT ?"
     )
     .all(limit) as any[]
+  return rows.map(deserializeMemory)
+}
+
+/**
+ * Returns ALL active memories with enforcement='hard', ordered by importance.
+ * Hard memories are NOT subject to the context-packet cap; they are injected as
+ * trusted standing directives into inference system prompts.
+ */
+export function dbGetActiveHardMemories(): Memory[] {
+  const rows = getDb()
+    .prepare(
+      "SELECT * FROM memories WHERE status = 'active' AND enforcement = 'hard' ORDER BY importance DESC, created_at DESC"
+    )
+    .all() as any[]
   return rows.map(deserializeMemory)
 }
 
@@ -940,7 +999,10 @@ export function dbTouchMemoryAccessed(ids: string[]): void {
 }
 
 function deserializeMemory(row: any): Memory {
-  return { ...row }
+  return {
+    ...row,
+    enforcement: row.enforcement === 'hard' ? 'hard' : 'soft'
+  }
 }
 
 // ─── Fingerprint helper ───────────────────────────────────────────────────────

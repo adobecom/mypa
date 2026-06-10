@@ -154,7 +154,9 @@ export async function runMemorySummarization(): Promise<void> {
 
     const toSupersede = await findSuperseded(content, candidates, node_id)
 
-    const input: MemoryInput = { content, type, confidence, importance, surface, node_id }
+    // Autonomous summarization never mints hard rules — that requires an explicit
+    // manager statement in a check-in. Default enforcement is always 'soft' here.
+    const input: MemoryInput = { content, type, enforcement: 'soft', confidence, importance, surface, node_id }
     const created_memory = dbCreateMemory(input)
     created++
 

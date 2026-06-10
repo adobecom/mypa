@@ -257,6 +257,27 @@ html, body, #root {
 
 .nav-item__icon { font-size: 15px; display: flex; align-items: center; }
 
+.nav-item__badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.nav-item.active .nav-item__badge {
+  background: var(--accent-hover);
+}
+
 /* ─── Main Content ──────────────────────────────────────────────────────────── */
 
 .main-content {
@@ -473,7 +494,8 @@ html, body, #root {
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
-  margin-top: 3px;
+  /* Center against 12px font · lh ~1.4 ≈ 16.8px: (16.8−8)/2 ≈ 4px */
+  margin-top: 4px;
 }
 
 .run-log-row__status-dot--resolved         { background: var(--green); box-shadow: 0 0 6px rgba(74, 222, 158, 0.5); }
