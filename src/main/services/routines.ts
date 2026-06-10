@@ -5,7 +5,6 @@ import {
   dbAddRunMessage,
   dbGetRunThread,
   dbGetRun,
-  dbGetBadgeCount,
   dbUpsertNode,
   dbBumpNodeWeight
 } from '../db/index'
@@ -13,7 +12,7 @@ import { callTool } from './mcp'
 import { generateRoutineDigest, streamChat } from './claude'
 import { inferRoutineIntents } from './inference'
 import { routeIntent } from './ambient'
-import { broadcast } from '../windows'
+import { broadcast, updateBadgeCount } from '../windows'
 import type { Routine, RunStatus } from '@shared/types'
 
 export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow | null): Promise<void> {
@@ -76,7 +75,7 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
 
     const updatedRun = dbGetRun(run.id)
     broadcast('routine:run-completed', updatedRun)
-    broadcast('badge:updated', dbGetBadgeCount())
+    updateBadgeCount()
 
     // Step 4: Infer action candidates and route them through the intent pipeline.
     // Runs after the completion signal so a slow or failing inference never delays

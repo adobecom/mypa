@@ -13,7 +13,8 @@ import {
   toggleWidget,
   openOrFocusMainWindow,
   getWidgetWindow,
-  setQuitting
+  setQuitting,
+  updateBadgeCount
 } from './windows'
 import { initUpdater, checkForUpdatesNow, installUpdate } from './services/updater'
 
@@ -98,8 +99,9 @@ async function main(): Promise<void> {
     setInterval(() => dbRunMaintenance(), 24 * 60 * 60 * 1000)
   }, 60_000)
 
-  // Set initial tray state
+  // Set initial tray state and Dock badge
   setTrayState(ambientComputeTrayState())
+  updateBadgeCount()
 
   // Prevent app from quitting when last window closes — stay in tray
   app.on('before-quit', () => {

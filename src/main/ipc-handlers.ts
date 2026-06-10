@@ -67,7 +67,7 @@ import { setTrayState } from './tray'
 import { checkForUpdatesNow, installUpdate } from './services/updater'
 import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, McpServerConfig, SetupHealth, DigestSlot, Tier, UsageRange } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
-import { broadcast } from './windows'
+import { broadcast, updateBadgeCount } from './windows'
 
 export function registerIpcHandlers(
   getWidgetWin: () => BrowserWindow | null,
@@ -173,7 +173,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle('routines:update-run-status', async (_e, runId: string, status: RunStatus) => {
     dbUpdateRun(runId, { status })
-    getWidgetWin()?.webContents.send('badge:updated', dbGetBadgeCount())
+    updateBadgeCount()
   })
 
   ipcMain.handle('routines:generate-setup', async (_e, intent: string) => {
@@ -385,7 +385,7 @@ export function registerIpcHandlers(
     // broadcast updated intent so both windows reflect the new status
     broadcast('ambient:intent-updated', intent)
     refreshAmbientTray()
-    getWidgetWin()?.webContents.send('badge:updated', dbGetBadgeCount())
+    updateBadgeCount()
     return intent
   })
 
@@ -394,13 +394,14 @@ export function registerIpcHandlers(
     // broadcast to all windows so Activity page reflects dismissals too
     broadcast('ambient:intent-updated', intent)
     refreshAmbientTray()
-    getWidgetWin()?.webContents.send('badge:updated', dbGetBadgeCount())
+    updateBadgeCount()
   })
 
   ipcMain.handle('ambient:challenge', async (_e, id: string, reason: string) => {
     const intent = await ambientChallengeIntent(id, reason)
     broadcast('ambient:intent-updated', intent)
     refreshAmbientTray()
+    updateBadgeCount()
     return intent
   })
 
