@@ -139,7 +139,7 @@ Used as the OAuth redirect URI (`mypa://oauth/callback`). The main process handl
 
 ### Native module unpacking
 
-`better-sqlite3` and `onnxruntime-node` (used by `@xenova/transformers`) are excluded from the ASAR archive:
+`better-sqlite3` and `onnxruntime-node` (used by `@huggingface/transformers`) are excluded from the ASAR archive:
 ```json
 "asarUnpack": ["**/node_modules/better-sqlite3/**", "**/node_modules/onnxruntime-node/**"]
 ```

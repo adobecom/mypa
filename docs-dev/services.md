@@ -196,7 +196,7 @@ Takes a `ContextPacket` (assembled by `memory-graph.ts`) and produces scored `In
 
 ## `embeddings.ts` — Local embeddings
 
-Generates text embeddings using [`@xenova/transformers`](https://github.com/xenova/transformers.js) entirely on-device (no network call). Used by `memory-graph.ts` to build semantic similarity edges.
+Generates text embeddings using [`@huggingface/transformers`](https://huggingface.co/docs/transformers.js) (transformers.js v3) entirely on-device (no network call). Used by `memory-graph.ts` to build semantic similarity edges. The model is loaded quantized (`dtype: 'q8'`) from the HuggingFace hub and cached at `~/.mypa/models`.
 
 **Key exports:**
 
@@ -302,4 +302,5 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 - 2026-06-07 — `routines.ts`: `routine:run-started` and `routine:run-completed` now sent via `broadcast()` (both widget + main windows) instead of widget-only `webContents.send`; `ambient.ts`: emits new `ambient:action-executed` broadcast after a tier-0 intent auto-executes successfully; added `broadcast()` helper to `windows.ts`
 - 2026-06-07 — added `getOwnerHandles()` and `buildOwnerClause()` to `config.ts`; added `resolveOwnerHandles()` to `mcp.ts`; owner clause injected into all AI system prompts; owner nodes tagged `you (handle)` in `renderPacketForPrompt`
 - 2026-06-07 — added `memory-export.ts` service; fixed `autonomy.ts` two-level tier resolution + streak reset; hardened `generateRoutineDigest` to never throw (returns graceful default)
+- 2026-06-10 — `embeddings.ts`: migrated from deprecated `@xenova/transformers` (v2) to `@huggingface/transformers` (v3, transformers.js successor); `quantized: true` option replaced with `dtype: 'q8'` (v3 API); clears the critical `protobufjs` CVE (GHSA-xq3m-2v4x-88gg and 7 others) pulled in via the old onnxruntime-web transitive dep. Build toolchain upgraded: vite 5→7, electron-vite 2→5, @vitejs/plugin-react 4→5, electron-builder 25→26, @electron/rebuild 3→4, uuid 10→11 (plus overrides). Electron stays at 33.x (better-sqlite3 v8 API incompatible with electron 39.8.5+ — known upstream issue; CVE debt tracked separately).
 - 2026-06-06 — initial documentation; reflects services as of commit d8a8774
