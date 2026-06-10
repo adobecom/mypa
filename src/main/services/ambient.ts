@@ -8,7 +8,6 @@ import {
   dbUpdateIntentStatus,
   dbSetIntentChallengeReason,
   dbUpdateIntentPayload,
-  dbGetBadgeCount,
   dbAppendActionLog,
   dbGetAllPolicies,
   dbUpsertNode,
@@ -35,7 +34,7 @@ import {
   resetTrust as resetTrustPolicy
 } from './autonomy'
 import { setTrayState } from '../tray'
-import { broadcast } from '../windows'
+import { broadcast, updateBadgeCount } from '../windows'
 import type { Signal, Intent, IntentObject, TriggerKind, TrayState, DigestSlot, AmbientDigest, Tier } from '@shared/types'
 
 // ─── Module state ─────────────────────────────────────────────────────────────
@@ -231,7 +230,7 @@ async function handleIntent(intent: Intent, win: BrowserWindow | null): Promise<
     notif.on('click', () => win?.show())
     notif.show()
 
-    win?.webContents.send('badge:updated', dbGetBadgeCount())
+    updateBadgeCount()
   }
 
   refreshTray(win)
