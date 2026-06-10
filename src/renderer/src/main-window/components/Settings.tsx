@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2, X } from 'lucide-react'
-import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles, ScopeConfig } from '@shared/types'
+import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import ServerCatalogPicker from './ServerCatalogPicker'
 import { ScheduleBuilder } from './ScheduleBuilder'
@@ -645,6 +645,9 @@ export default function Settings(): React.ReactElement {
 
       {/* Scope */}
       <ScopeCard />
+
+      {/* Danger Zone */}
+      <DangerZoneCard />
     </div>
   )
 }
@@ -1131,10 +1134,8 @@ function ScopeCard(): React.ReactElement {
       </div>
 
       {/* GitHub orgs */}
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>
-          GitHub orgs
-        </div>
+      <div className="form-group">
+        <label className="form-label">GitHub orgs</label>
         {scope.orgs.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
             {scope.orgs.map((org) => (
@@ -1143,7 +1144,7 @@ function ScopeCard(): React.ReactElement {
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 4,
                   padding: '3px 8px', borderRadius: 4, fontSize: 12,
-                  background: 'var(--bg-base)', border: '1px solid var(--border-muted)'
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border-muted)'
                 }}
               >
                 {org}
@@ -1159,13 +1160,13 @@ function ScopeCard(): React.ReactElement {
           </div>
         )}
         {scope.orgs.length === 0 && (
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+          <div className="form-hint" style={{ marginBottom: 8 }}>
             No restriction — all GitHub activity is surfaced.
           </div>
         )}
         <div style={{ display: 'flex', gap: 6 }}>
           <input
-            className="input"
+            className="form-input"
             style={{ flex: 1, fontSize: 12 }}
             placeholder="e.g. adobecom"
             value={newGithubOrg}
@@ -1179,10 +1180,8 @@ function ScopeCard(): React.ReactElement {
       </div>
 
       {/* Jira projects */}
-      <div>
-        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>
-          Jira projects
-        </div>
+      <div className="form-group">
+        <label className="form-label">Jira projects</label>
         {scope.projects.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
             {scope.projects.map((key) => (
@@ -1191,7 +1190,7 @@ function ScopeCard(): React.ReactElement {
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 4,
                   padding: '3px 8px', borderRadius: 4, fontSize: 12,
-                  background: 'var(--bg-base)', border: '1px solid var(--border-muted)'
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border-muted)'
                 }}
               >
                 {key}
@@ -1207,13 +1206,13 @@ function ScopeCard(): React.ReactElement {
           </div>
         )}
         {scope.projects.length === 0 && (
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+          <div className="form-hint" style={{ marginBottom: 8 }}>
             No restriction — all Jira activity is surfaced.
           </div>
         )}
         <div style={{ display: 'flex', gap: 6 }}>
           <input
-            className="input"
+            className="form-input"
             style={{ flex: 1, fontSize: 12 }}
             placeholder="e.g. PROJ"
             value={newJiraProject}
@@ -1224,6 +1223,83 @@ function ScopeCard(): React.ReactElement {
             Add
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Danger Zone Card ────────────────────────────────────────────────────────
+
+function DangerZoneCard(): React.ReactElement {
+  const api = window.electron
+  const toast = useToast()
+  const [confirm, setConfirm] = useState(false)
+  const [resetting, setResetting] = useState(false)
+
+  async function handleFactoryReset(): Promise<void> {
+    setResetting(true)
+    try {
+      await api.system.factoryReset()
+      // App relaunches immediately — this line is rarely reached
+    } catch (err: any) {
+      setResetting(false)
+      setConfirm(false)
+      toast.error('Factory reset failed', { message: err?.message })
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card__header">
+        <div>
+          <div className="card__title" style={{ color: 'var(--text-danger)' }}>
+            <AlertTriangle size={14} style={{ display: 'inline', marginRight: 6, verticalAlign: 'text-bottom' }} />
+            Danger Zone
+          </div>
+          <div className="card__subtitle">
+            Irreversible actions — proceed with caution.
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', marginBottom: 2 }}>
+            Factory reset
+          </div>
+          <div className="form-hint">
+            Erases all routines, memories, signals, MCP/OAuth setup, and preferences, then relaunches the app.
+          </div>
+        </div>
+        {confirm ? (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Are you sure?</span>
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => setConfirm(false)}
+              style={{ padding: '3px 8px', fontSize: 11 }}
+              disabled={resetting}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn btn--danger btn--sm"
+              onClick={handleFactoryReset}
+              disabled={resetting}
+              style={{ padding: '3px 8px', fontSize: 11 }}
+            >
+              {resetting ? 'Resetting…' : 'Reset everything'}
+            </button>
+          </div>
+        ) : (
+          <button
+            className="btn btn--danger btn--sm"
+            onClick={() => setConfirm(true)}
+            style={{ flexShrink: 0 }}
+          >
+            Factory reset
+          </button>
+        )}
       </div>
     </div>
   )

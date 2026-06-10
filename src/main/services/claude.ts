@@ -13,7 +13,7 @@ function findClaude(): string {
   try {
     return execSync('which claude', { shell: true }).toString().trim()
   } catch {
-    for (const p of ['/usr/local/bin/claude', `${process.env.HOME}/.local/bin/claude`]) {
+    for (const p of ['/usr/local/bin/claude', '/opt/homebrew/bin/claude', `${process.env.HOME}/.local/bin/claude`]) {
       if (existsSync(p)) return p
     }
     throw new Error('claude CLI not found — is Claude Code installed?')

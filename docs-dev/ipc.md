@@ -97,6 +97,7 @@ OS-level and window utilities.
 | `getBadgeCount` | `() → number` | Current unread badge count |
 | `getWindowType` | `() → 'widget' \| 'main-window'` | Which window is calling — useful for shared components |
 | `openExternal` | `(url: string) → void` | Open a URL in the OS default browser via `shell.openExternal` |
+| `factoryReset` | `() → void` | Wipe `~/.mypa/config.json` and `~/.mypa/data.db`, then relaunch the app into onboarding |
 
 ### `ambient`
 
@@ -244,6 +245,7 @@ Manage PA check-in sessions and their chat threads.
 - 2026-06-09 — added `plan:user-message` and `routine:user-message` push channels (broadcast to both windows immediately after user message is saved to DB, before streaming begins); changed `badge:updated` to broadcast to both windows (was widget-only); removed unused `widgetWin` parameter from `handlePlanMessage` and `handleRunMessage` services
 - 2026-06-09 — added `config.getClaudeKey` and `config.setClaudeKey` channels; `config.get` now strips `claude.apiKey` before returning to the renderer (raw key never transmitted); `ClaudeConfig` gained `apiKey?: string` (encrypted at rest via `safeStorage`)
 - 2026-06-08 — added `checkin` namespace (`start`, `getActive`, `getAll`, `getThread`, `sendMessage`, `end`, `cancelStream`, `openInMainWindow`); new push channels `checkin:started`, `checkin:message`, `checkin:status-changed`, `navigate:checkin`; added `CheckInStatus`, `CheckIn`, `CheckInConfig`, `CheckInExtractionSummary` types; `AppConfig.checkin?: CheckInConfig`; `UsageSource` extended with `'checkin_chat'` and `'checkin_extract'`
+- 2026-06-10 — added `system.factoryReset` channel; wipes config.json + data.db then relaunches via `app.relaunch()+app.exit(0)`; surfaced in Settings → Danger Zone card
 - 2026-06-08 — added `system.openExternal` method + `system:open-external` IPC handler (opens URL in default browser via `shell.openExternal`); added `plan:item-updated` push channel (broadcast to both windows when plan item status changes); both windows now have `will-navigate` + `setWindowOpenHandler` guards that redirect external URLs to the default browser
 - 2026-06-08 — added `plan.getItem`, `plan.openInMainWindow`; `routines.openRunInMainWindow`; new push channels `navigate:run-chat` and `navigate:plan-item`; `Intent` type gained `challenge_reason: string | null`
 - 2026-06-07 — added `update` namespace (`checkNow`, `install`); new push channels `update:available`, `update:progress`, `update:downloaded`, `update:error`

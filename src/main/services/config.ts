@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { homedir } from 'os'
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from 'fs'
 import { safeStorage } from 'electron'
 import type { AppConfig } from '@shared/types'
 import { DEFAULT_CONFIG } from '@shared/types'
@@ -127,6 +127,15 @@ export function clearClaudeApiKey(): AppConfig {
   delete updated.claude.apiKey
   writeConfig(updated)
   return updated
+}
+
+/** Deletes config.json so the next readConfig() re-seeds DEFAULT_CONFIG. */
+export function resetConfig(): void {
+  try {
+    if (existsSync(CONFIG_PATH)) unlinkSync(CONFIG_PATH)
+  } catch {
+    // Best-effort; if deletion fails the file will be overwritten on relaunch
+  }
 }
 
 export function updateConfig(partial: Partial<AppConfig>): AppConfig {

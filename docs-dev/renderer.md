@@ -229,6 +229,7 @@ Located in `src/renderer/src/` (shared between widget and main window):
 
 ## Changelog
 
+- 2026-06-10 — **Scope card restyle + Danger Zone card:** `Settings.tsx` — `ScopeCard` now uses `.form-group`, `.form-label`, `.form-hint`, and `.form-input` classes (was broken: `className="input"` referenced an undefined CSS class; inline styles now replaced with shared design tokens). Removed unused `ScopeConfig` type import. Added `DangerZoneCard` component at the bottom of the Settings page with a two-step confirm-before-destroy factory reset button (`btn--danger`); calls `window.electron.system.factoryReset()`.
 - 2026-06-10 — **Widget↔main parity, auto-grow inputs, status dot alignment, Suggest re-proposal:**
   - **Status dot alignment:** fixed `margin-top` on `.routine-card__dot` (components.css), `.run-log-row__status-dot` (index.css), and `StatusDot` inline style in `CheckInPage.tsx` so the 8px dot centers on the first title line at all title lengths.
   - **Auto-grow textareas:** new `src/renderer/src/hooks/useAutoGrowTextarea.ts` hook applied to `ChatThread`, `IntentCard` (draft + challenge), `PlanReviewCard` (detail), and `QuickAddBar` (converted from `<input>` to `<textarea>`). All grow from 1 row to a 4-row cap then scroll; shrink back on clear/send.
