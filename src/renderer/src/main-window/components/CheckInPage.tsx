@@ -136,6 +136,7 @@ function CheckInDetail({ checkin, onCheckinUpdated }: CheckInDetailProps): React
             <strong>{extractionSummary.memoriesAdded}</strong> {extractionSummary.memoriesAdded === 1 ? 'memory' : 'memories'} added
             {extractionSummary.nodesUpdated > 0 && <> · <strong>{extractionSummary.nodesUpdated}</strong> nodes updated</>}
             {extractionSummary.edgesAdded > 0 && <> · <strong>{extractionSummary.edgesAdded}</strong> edges added</>}
+            {extractionSummary.scopeUpdated > 0 && <> · scope updated (+<strong>{extractionSummary.scopeUpdated}</strong>)</>}
           </span>
         </div>
       )}
@@ -321,5 +322,6 @@ function summaryLine(raw: string | null): string {
   if (s.memoriesAdded > 0) parts.push(`${s.memoriesAdded} ${s.memoriesAdded === 1 ? 'memory' : 'memories'} added`)
   if (s.nodesUpdated > 0) parts.push(`${s.nodesUpdated} nodes updated`)
   if (s.edgesAdded > 0) parts.push(`${s.edgesAdded} edges added`)
+  if (s.scopeUpdated > 0) parts.push(`scope +${s.scopeUpdated}`)
   return parts.join(' · ') || 'Complete'
 }

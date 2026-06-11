@@ -16,8 +16,9 @@ import {
 } from '../db/index'
 import { streamChat, runClaude, cancelStream as cancelClaudeStream } from './claude'
 import { assembleContextPacket, renderPacketForPrompt } from './memory-graph'
-import { readConfig } from './config'
+import { readConfig, updateConfig } from './config'
 import { broadcast } from '../windows'
+import { SCOPE_SURFACES, scopeSurfaceFor } from '@shared/scope-surfaces'
 import type { CheckIn, CheckInExtractionSummary, MemoryInput, NodeType, EdgeRel } from '@shared/types'
 
 // ─── Briefing generation ──────────────────────────────────────────────────────
@@ -191,11 +192,19 @@ interface RawExtractionOutput {
     dst_key: string
     rel: string
   }>
+  /**
+   * Absolute container-level focus restrictions extracted from the check-in.
+   * Only populated when the manager states an explicit, unconditional constraint.
+   */
+  scope_rules?: Array<{
+    surface?: string
+    identifiers?: string[]
+  }>
 }
 
 async function extractAndApplyKnowledge(checkinId: string): Promise<CheckInExtractionSummary> {
   const thread = dbGetCheckInThread(checkinId)
-  if (thread.length === 0) return { memoriesAdded: 0, nodesUpdated: 0, edgesAdded: 0 }
+  if (thread.length === 0) return { memoriesAdded: 0, nodesUpdated: 0, edgesAdded: 0, scopeUpdated: 0 }
 
   const transcript = thread
     .map((m) => `[${m.role}]: ${m.content}`)
@@ -234,6 +243,9 @@ Extract knowledge updates as JSON:
   ],
   "new_edges": [
     { "src_type": "<NodeType>", "src_key": "<key>", "dst_type": "<NodeType>", "dst_key": "<key>", "rel": "<EdgeRel>" }
+  ],
+  "scope_rules": [
+    { "surface": "${SCOPE_SURFACES.map((s) => s.surface).join('" | "')}", "identifiers": ["<identifier>"] }
   ]
 }
 
@@ -244,22 +256,23 @@ Rules:
 - weight_adjustments: positive delta = more important, negative = less. Clamp between -3 and 3.
 - new_edges: only use node keys visible in the transcript.
 - Maximum: 10 memories, 5 weight_adjustments, 5 new_edges.
-- enforcement: set "hard" ONLY for rules/boundaries the manager stated in absolute terms (e.g. "only surface X", "never do Y", "always include Z"). Set "soft" for preferences, guidance, and advisory instructions. Default to "soft" when in doubt — hard should be rare.`
+- enforcement: set "hard" ONLY for rules/boundaries the manager stated in absolute terms (e.g. "only surface X", "never do Y", "always include Z"). Set "soft" for preferences, guidance, and advisory instructions. Default to "soft" when in doubt — hard should be rare.
+- scope_rules: ONLY when the manager states an absolute, unconditional restriction naming specific containers to focus on — e.g. "only surface work in the adobecom GitHub org", "just the WEB and PLAT Jira projects", "only the #eng-frontend Slack channel". surface must be one of: ${SCOPE_SURFACES.map((s) => `"${s.surface}" (${s.label.toLowerCase()})`).join(', ')}. identifiers are the org names / project keys / channel ids. Leave scope_rules empty when no such absolute restriction was stated — do NOT infer from casual org or project mentions.`
 
   const raw = await runClaude(systemPrompt, userPrompt, 'checkin_extract')
 
   const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '')
   const jsonMatch = cleaned.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) return { memoriesAdded: 0, nodesUpdated: 0, edgesAdded: 0 }
+  if (!jsonMatch) return { memoriesAdded: 0, nodesUpdated: 0, edgesAdded: 0, scopeUpdated: 0 }
 
   let parsed: RawExtractionOutput
   try {
     parsed = JSON.parse(jsonMatch[0])
   } catch {
-    return { memoriesAdded: 0, nodesUpdated: 0, edgesAdded: 0 }
+    return { memoriesAdded: 0, nodesUpdated: 0, edgesAdded: 0, scopeUpdated: 0 }
   }
 
-  const summary: CheckInExtractionSummary = { memoriesAdded: 0, nodesUpdated: 0, edgesAdded: 0 }
+  const summary: CheckInExtractionSummary = { memoriesAdded: 0, nodesUpdated: 0, edgesAdded: 0, scopeUpdated: 0 }
   const validMemoryTypes = new Set(['fact', 'pattern', 'preference', 'status'])
 
   for (const m of parsed.memories ?? []) {
@@ -302,6 +315,41 @@ Rules:
       summary.edgesAdded++
     } catch {
       // invalid rel or self-loop — skip
+    }
+  }
+
+  // Derive scope allowlists from any absolute container restrictions the manager stated.
+  // Union semantics: newly mentioned identifiers are added; nothing is removed.
+  // deepMerge replaces arrays, so we compute the merged map here and write it all at once.
+  if ((parsed.scope_rules ?? []).length > 0) {
+    const currentAllowed: Record<string, string[]> = readConfig().scope?.allowed ?? {}
+    const updatedAllowed: Record<string, string[]> = { ...currentAllowed }
+    let totalAdded = 0
+
+    for (const rule of parsed.scope_rules ?? []) {
+      if (!rule.surface || !Array.isArray(rule.identifiers) || rule.identifiers.length === 0) continue
+      const spec = scopeSurfaceFor(rule.surface)
+      if (!spec) continue // unknown surface — skip
+
+      const existing = (updatedAllowed[rule.surface] ?? []).map((s) => s.toLowerCase())
+      const incoming: string[] = rule.identifiers
+        .map((id: string) => {
+          const trimmed = id.trim()
+          // Uppercase Jira project keys to match the established convention.
+          return rule.surface === 'jira' ? trimmed.toUpperCase() : trimmed
+        })
+        .filter(Boolean)
+
+      const toAdd = incoming.filter((id) => !existing.includes(id.toLowerCase()))
+      if (toAdd.length > 0) {
+        updatedAllowed[rule.surface] = [...(updatedAllowed[rule.surface] ?? []), ...toAdd]
+        totalAdded += toAdd.length
+      }
+    }
+
+    if (totalAdded > 0) {
+      updateConfig({ scope: { allowed: updatedAllowed } })
+      summary.scopeUpdated = totalAdded
     }
   }
 

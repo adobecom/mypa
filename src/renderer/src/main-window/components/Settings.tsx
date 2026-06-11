@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2, X } from 'lucide-react'
+import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2 } from 'lucide-react'
 import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
+import { SCOPE_SURFACES } from '@shared/scope-surfaces'
 import ServerCatalogPicker from './ServerCatalogPicker'
 import { ScheduleBuilder } from './ScheduleBuilder'
 import { useToast } from '../toast/ToastProvider'
@@ -1058,68 +1059,26 @@ function CheckInScheduleCard(): React.ReactElement {
 
 // ─── Scope Card ──────────────────────────────────────────────────────────────
 
+/**
+ * Read-only view of the auto-derived scope allowlists.
+ * Scope values are populated from check-in conversations — the user says which
+ * orgs, projects, or channels to focus on during a 1:1 and they appear here.
+ * Only surfaces whose MCP integration is currently configured are shown.
+ */
 function ScopeCard(): React.ReactElement {
   const api = window.electron
-  const toast = useToast()
-
-  // Single state object so every save always writes the complete, consistent scope —
-  // no stale-closure cross-contamination between org and project edits.
-  const [scope, setScope] = useState<{ orgs: string[]; projects: string[] }>({ orgs: [], projects: [] })
-  const [newGithubOrg, setNewGithubOrg] = useState('')
-  const [newJiraProject, setNewJiraProject] = useState('')
-  const [saving, setSaving] = useState(false)
+  const [allowed, setAllowed] = useState<Record<string, string[]>>({})
+  const [enabledIntegrationIds, setEnabledIntegrationIds] = useState<string[]>([])
 
   useEffect(() => {
     api.config.get().then((cfg) => {
-      setScope({
-        orgs: cfg.scope?.allowedGithubOrgs ?? [],
-        projects: cfg.scope?.allowedJiraProjects ?? []
-      })
+      setAllowed(cfg.scope?.allowed ?? {})
+      setEnabledIntegrationIds((cfg.mcp_servers ?? []).map((s) => s.name))
     })
   }, [])
 
-  async function save(next: { orgs: string[]; projects: string[] }, prev: { orgs: string[]; projects: string[] }): Promise<void> {
-    setSaving(true)
-    try {
-      await api.config.update({ scope: { allowedGithubOrgs: next.orgs, allowedJiraProjects: next.projects } } as any)
-      toast.success('Scope settings saved')
-    } catch (err: any) {
-      setScope(prev)
-      toast.error('Failed to save scope settings', { message: err?.message })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  function addGithubOrg(): void {
-    const val = newGithubOrg.trim()
-    if (!val || scope.orgs.includes(val)) return
-    const next = { ...scope, orgs: [...scope.orgs, val] }
-    setScope(next)
-    setNewGithubOrg('')
-    save(next, scope)
-  }
-
-  function removeGithubOrg(org: string): void {
-    const next = { ...scope, orgs: scope.orgs.filter((o) => o !== org) }
-    setScope(next)
-    save(next, scope)
-  }
-
-  function addJiraProject(): void {
-    const val = newJiraProject.trim().toUpperCase()
-    if (!val || scope.projects.includes(val)) return
-    const next = { ...scope, projects: [...scope.projects, val] }
-    setScope(next)
-    setNewJiraProject('')
-    save(next, scope)
-  }
-
-  function removeJiraProject(key: string): void {
-    const next = { ...scope, projects: scope.projects.filter((k) => k !== key) }
-    setScope(next)
-    save(next, scope)
-  }
+  // Only show sections for scope-capable surfaces that the user has connected.
+  const enabledSurfaces = SCOPE_SURFACES.filter((s) => enabledIntegrationIds.includes(s.integrationId))
 
   return (
     <div className="card">
@@ -1127,103 +1086,47 @@ function ScopeCard(): React.ReactElement {
         <div>
           <div className="card__title">Scope</div>
           <div className="card__subtitle">
-            Limit mypa to signals from specific GitHub orgs and Jira projects.
-            When a list is non-empty, only items from those sources are surfaced.
+            Derived automatically from your check-ins. Tell mypa which orgs, projects, or channels
+            to focus on during a 1:1 and they will appear here.
           </div>
         </div>
       </div>
 
-      {/* GitHub orgs */}
-      <div className="form-group">
-        <label className="form-label">GitHub orgs</label>
-        {scope.orgs.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-            {scope.orgs.map((org) => (
-              <span
-                key={org}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  padding: '3px 8px', borderRadius: 4, fontSize: 12,
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border-muted)'
-                }}
-              >
-                {org}
-                <button
-                  onClick={() => removeGithubOrg(org)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}
-                  disabled={saving}
-                >
-                  <X size={11} color="var(--text-muted)" />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        {scope.orgs.length === 0 && (
-          <div className="form-hint" style={{ marginBottom: 8 }}>
-            No restriction — all GitHub activity is surfaced.
-          </div>
-        )}
-        <div style={{ display: 'flex', gap: 6 }}>
-          <input
-            className="form-input"
-            style={{ flex: 1, fontSize: 12 }}
-            placeholder="e.g. adobecom"
-            value={newGithubOrg}
-            onChange={(e) => setNewGithubOrg(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') addGithubOrg() }}
-          />
-          <button className="btn btn--ghost" style={{ fontSize: 12 }} onClick={addGithubOrg} disabled={!newGithubOrg.trim() || saving}>
-            Add
-          </button>
+      {enabledSurfaces.length === 0 ? (
+        <div className="form-hint">
+          No scope-capable integrations connected. Connect GitHub, Jira, or Slack to enable scope filtering.
         </div>
-      </div>
-
-      {/* Jira projects */}
-      <div className="form-group">
-        <label className="form-label">Jira projects</label>
-        {scope.projects.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-            {scope.projects.map((key) => (
-              <span
-                key={key}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  padding: '3px 8px', borderRadius: 4, fontSize: 12,
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border-muted)'
-                }}
-              >
-                {key}
-                <button
-                  onClick={() => removeJiraProject(key)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}
-                  disabled={saving}
-                >
-                  <X size={11} color="var(--text-muted)" />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        {scope.projects.length === 0 && (
-          <div className="form-hint" style={{ marginBottom: 8 }}>
-            No restriction — all Jira activity is surfaced.
-          </div>
-        )}
-        <div style={{ display: 'flex', gap: 6 }}>
-          <input
-            className="form-input"
-            style={{ flex: 1, fontSize: 12 }}
-            placeholder="e.g. PROJ"
-            value={newJiraProject}
-            onChange={(e) => setNewJiraProject(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') addJiraProject() }}
-          />
-          <button className="btn btn--ghost" style={{ fontSize: 12 }} onClick={addJiraProject} disabled={!newJiraProject.trim() || saving}>
-            Add
-          </button>
-        </div>
-      </div>
+      ) : (
+        enabledSurfaces.map((spec) => {
+          const identifiers = allowed[spec.surface] ?? []
+          return (
+            <div key={spec.surface} className="form-group">
+              <label className="form-label">{spec.label}</label>
+              {identifiers.length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {identifiers.map((id) => (
+                    <span
+                      key={id}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center',
+                        padding: '3px 8px', borderRadius: 4, fontSize: 12,
+                        background: 'var(--bg-elevated)', border: '1px solid var(--border-muted)'
+                      }}
+                    >
+                      {id}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div className="form-hint">
+                  No restriction — all {spec.label.toLowerCase()} are surfaced. Mention the{' '}
+                  {spec.itemNoun}s to focus on in a check-in.
+                </div>
+              )}
+            </div>
+          )
+        })
+      )}
     </div>
   )
 }

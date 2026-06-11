@@ -1,19 +1,25 @@
 /**
  * Scope enforcement — deterministic filter for the ambient pipeline.
  *
- * When the user has configured allowed containers (GitHub orgs, Jira projects,
- * Slack channels), any intent whose focus nodes trace back to an out-of-scope
- * container is dropped before it ever reaches the DB, graph, or UI.
+ * When the user has configured allowed containers for a surface (derived
+ * automatically from check-in conversations), any intent whose focus nodes
+ * trace back to an out-of-scope container is dropped before it ever reaches
+ * the DB, graph, or UI.
  *
  * The filter is conservative by design:
  *   - If no scope is configured for a surface, nothing is blocked.
  *   - If focus nodes have no container edges (e.g. repo info was missing),
  *     the intent is ALLOWED through — we can't prove it's out of scope.
+ *   - If the surface has no registered ScopeSurfaceSpec, nothing is blocked.
  *   - Comparison is always case-insensitive.
+ *
+ * Scope identifiers are stored in ScopeConfig.allowed keyed by surface string,
+ * and are populated by check-in extraction (checkin.ts) — not by manual input.
  */
 
 import { readConfig } from './config'
 import { dbGetEdgesFrom, dbGetNodeById } from '../db/index'
+import { scopeSurfaceFor } from '@shared/scope-surfaces'
 import type { IntentObject, GraphNode } from '@shared/types'
 
 /**
@@ -22,14 +28,13 @@ import type { IntentObject, GraphNode } from '@shared/types'
  *
  * Returns false (let it through) when:
  *   - No scope config is set for the relevant surface.
+ *   - The surface is not in the SCOPE_SURFACES registry.
  *   - The intent has no focus nodes (time digest, etc.).
  *   - None of the focus nodes have container edges (container info unavailable).
  *   - At least one container IS on the allowlist.
  *
  * @param obj         The inferred IntentObject.
- * @param focusNodes  The graph nodes in scope for this intent. Pass
- *                    ContextPacket.focusNodes from the ambient cycle, or look
- *                    up nodes by ID when only IDs are available.
+ * @param focusNodes  The graph nodes in scope for this intent.
  */
 export function violatesScope(obj: IntentObject, focusNodes: GraphNode[]): boolean {
   const scope = readConfig().scope
@@ -37,14 +42,18 @@ export function violatesScope(obj: IntentObject, focusNodes: GraphNode[]): boole
 
   const surface = obj.proposed_action.surface
 
-  // Pick the relevant allowlist for this surface.
-  let allowList: string[] | undefined
-  if (surface === 'github') allowList = scope.allowedGithubOrgs
-  else if (surface === 'jira') allowList = scope.allowedJiraProjects
-  else if (surface === 'slack') allowList = scope.allowedSlackChannels
+  // Normalize: support the legacy allowedGithubOrgs / allowedJiraProjects / allowedSlackChannels
+  // shape so any config written before the surface-keyed migration still works.
+  const allowed = normalizeScopeAllowed(scope)
+
+  const allowList = allowed[surface]
 
   // No restriction configured for this surface — always pass.
   if (!allowList || allowList.length === 0) return false
+
+  // No spec registered for this surface — don't block.
+  const spec = scopeSurfaceFor(surface)
+  if (!spec) return false
 
   const normalizedList = allowList.map((s) => s.toLowerCase())
 
@@ -68,30 +77,34 @@ export function violatesScope(obj: IntentObject, focusNodes: GraphNode[]): boole
   // → let the intent through rather than silently dropping it.
   if (resolvedContainerKeys.length === 0) return false
 
-  // Extract the scope identifier from the container key and check the allowlist.
-  // Key formats:
-  //   GitHub:  github:repo:<owner>/<repo>  → check <owner>
-  //   Jira:    jira:project:<KEY>           → check <KEY>
-  //   Slack:   slack:channel:<id>           → check <id>
+  // Use the registry spec to extract a comparable identifier from each container key.
   const isAllowed = resolvedContainerKeys.some((key) => {
-    if (surface === 'github') {
-      // key = "github:repo:owner/repo" → owner = key.split(':')[2]?.split('/')[0]
-      const repoPath = key.split(':')[2] ?? ''
-      const org = repoPath.split('/')[0] ?? ''
-      return normalizedList.includes(org)
-    }
-    if (surface === 'jira') {
-      // key = "jira:project:PROJ" → projectKey = key.split(':')[2]
-      const projectKey = key.split(':')[2] ?? ''
-      return normalizedList.includes(projectKey)
-    }
-    if (surface === 'slack') {
-      // key = "slack:channel:<id>" → channelId = key.split(':')[2]
-      const channelId = key.split(':')[2] ?? ''
-      return normalizedList.includes(channelId)
-    }
-    return true // unknown surface — don't block
+    const identifier = spec.parseIdentifier(key).toLowerCase()
+    return identifier !== '' && normalizedList.includes(identifier)
   })
 
   return !isAllowed
+}
+
+/**
+ * Normalizes a ScopeConfig to the surface-keyed `allowed` map shape, folding in
+ * any legacy per-surface named fields written by earlier app versions.
+ */
+function normalizeScopeAllowed(scope: { allowed?: Record<string, string[]> }): Record<string, string[]> {
+  // In the current schema scope only has `allowed`. Cast to `any` to safely
+  // read any legacy fields that may still be present in a user's config.json.
+  const legacy = scope as any
+  const base: Record<string, string[]> = { ...(scope.allowed ?? {}) }
+
+  if (Array.isArray(legacy.allowedGithubOrgs) && legacy.allowedGithubOrgs.length > 0) {
+    base.github = [...new Set([...(base.github ?? []), ...legacy.allowedGithubOrgs])]
+  }
+  if (Array.isArray(legacy.allowedJiraProjects) && legacy.allowedJiraProjects.length > 0) {
+    base.jira = [...new Set([...(base.jira ?? []), ...legacy.allowedJiraProjects])]
+  }
+  if (Array.isArray(legacy.allowedSlackChannels) && legacy.allowedSlackChannels.length > 0) {
+    base.slack = [...new Set([...(base.slack ?? []), ...legacy.allowedSlackChannels])]
+  }
+
+  return base
 }
