@@ -2,10 +2,11 @@ import {
   dbCountSignalsSince,
   dbGetDependencyEdges,
   dbGetTopNodesByWeight,
-  dbGetNode
+  dbGetNode,
+  dbGetDirectedSignals
 } from '../db/index'
 import { getStaleCandidates, kindToNodeType } from './memory-graph'
-import { readConfig } from './config'
+import { getOwnerHandles } from './config'
 import type { Signal, TriggerKind } from '@shared/types'
 
 export interface TriggerHit {
@@ -59,23 +60,125 @@ export function evalSpike(newSignals: Signal[]): TriggerHit[] {
 }
 
 // ─── Staleness trigger ────────────────────────────────────────────────────────
-// Fires when high-weight nodes have gone quiet longer than expected.
+// Fires when high-weight nodes OWNED BY the user have gone quiet longer than expected.
+// Only nodes the user is assigned to or review-requested on are considered — pure
+// spectator nodes (involved only) are excluded to avoid nagging about others' work.
 
 const STALENESS_MIN_WEIGHT = 3.0
 
-export function evalStaleness(): TriggerHit[] {
+export function evalStaleAndMine(): TriggerHit[] {
   const stale = getStaleCandidates(STALENESS_MIN_WEIGHT)
   if (stale.length === 0) return []
+
+  // Restrict to nodes the user is responsible for by cross-referencing directed signals
+  const directedSignals = dbGetDirectedSignals()
+  const ownedNodeIds = new Set<string>()
+  for (const sig of directedSignals) {
+    if (sig.relation === 'assigned' || sig.relation === 'review_requested') {
+      const key = `${sig.surface}:${sig.kind}:${sig.external_id}`
+      const node = dbGetNode(kindToNodeType(sig.kind), key)
+      if (node) ownedNodeIds.add(node.id)
+    }
+  }
+
+  const mine = stale.filter((n) => ownedNodeIds.has(n.id))
+  if (mine.length === 0) return []
+
   return [
     {
       kind: 'staleness',
-      focusNodeIds: stale.slice(0, 3).map((n) => n.id),
-      reason: `${stale.length} active item(s) went quiet for 48+ hours: ${stale
+      focusNodeIds: mine.slice(0, 3).map((n) => n.id),
+      reason: `${mine.length} item(s) you own went quiet for 48+ hours: ${mine
         .slice(0, 2)
         .map((n) => n.label)
         .join(', ')}`
     }
   ]
+}
+
+// Keep the old name as an alias used by the synthesis heartbeat path for backward compat
+export const evalStaleness = evalStaleAndMine
+
+// ─── Waiting-on-me trigger ────────────────────────────────────────────────────
+// Fires when signals are structurally directed at the owner:
+//   - review_requested: always directed
+//   - assigned: owner is the assignee
+//   - mentioned / dm / thread_reply: latest actor is a non-owner
+// REQUEST_PATTERNS is kept as a secondary booster for the `mentioned` relation when
+// the directed flag may be ambiguous (no latest actor available).
+
+const REQUEST_PATTERNS = [
+  /\?/,
+  /\bcan (you|we|i)\b/i,
+  /\bshould (you|we|i)\b/i,
+  /\bplease\b/i,
+  /\blgtm\b/i,
+  /\breview\b/i,
+  /\bapprove\b/i,
+  /\bdefer\b/i,
+  /\bmove to\b/i,
+  /\bnext (sprint|release|milestone)\b/i,
+  /\bwhat do you think\b/i,
+  /\bis it (ok|okay)\b/i,
+]
+
+function buildWaitingHit(signal: Signal): TriggerHit | null {
+  const nodeKey = `${signal.surface}:${signal.kind}:${signal.external_id}`
+  const node = dbGetNode(kindToNodeType(signal.kind), nodeKey)
+
+  const who = signal.last_actor || signal.actor || 'someone'
+  let reason: string
+  if (signal.relation === 'review_requested') {
+    reason = `${who} requested your review on: ${signal.title.slice(0, 80)}`
+  } else if (signal.relation === 'assigned') {
+    reason = `Item assigned to you has activity from ${who}: ${signal.title.slice(0, 80)}`
+  } else {
+    reason = `${who} needs your attention on: ${signal.title.slice(0, 80)}`
+  }
+
+  return {
+    kind: 'waiting',
+    focusNodeIds: node ? [node.id] : [],
+    reason
+  }
+}
+
+/**
+ * Fires for newly-polled signals that are structurally directed at the owner.
+ * Used in the hot path (onNewSignals) alongside evalDependency and evalSpike.
+ */
+export function evalWaitingOnMe(newSignals: Signal[]): TriggerHit[] {
+  const hits: TriggerHit[] = []
+  for (const sig of newSignals) {
+    const structural = sig.directed && sig.relation !== null &&
+      ['review_requested', 'assigned', 'dm', 'thread_reply'].includes(sig.relation)
+
+    // For `mentioned` with no `directed` flag, fall back to REQUEST_PATTERNS as a booster
+    const boosted = !sig.directed && sig.relation === 'mentioned' &&
+      REQUEST_PATTERNS.some((p) => p.test(`${sig.title} ${sig.body}`))
+
+    if (!structural && !boosted) continue
+
+    const hit = buildWaitingHit(sig)
+    if (hit) hits.push(hit)
+    if (hits.length >= 3) break // cap per cycle; coalesceHits merges same-node duplicates
+  }
+  return hits
+}
+
+/**
+ * Heartbeat variant — queries persisted directed signals to re-surface items
+ * that are still waiting on the owner even during quiet periods (no new arrivals).
+ */
+export function evalWaitingOnMeFromGraph(): TriggerHit[] {
+  const directed = dbGetDirectedSignals()
+  const hits: TriggerHit[] = []
+  for (const sig of directed) {
+    const hit = buildWaitingHit(sig)
+    if (hit) hits.push(hit)
+    if (hits.length >= 5) break
+  }
+  return hits
 }
 
 // ─── Dependency trigger ───────────────────────────────────────────────────────
@@ -153,68 +256,19 @@ export function evalTime(slot: 'morning' | 'midday' | 'eod'): TriggerHit[] {
   ]
 }
 
-// ─── Directed-at-me trigger ───────────────────────────────────────────────────
-// Fires when a single inbound signal from a non-owner actor contains language
-// that looks like a question or request directed at the user.
-
-const REQUEST_PATTERNS = [
-  /\?/,
-  /\bcan (you|we|i)\b/i,
-  /\bshould (you|we|i)\b/i,
-  /\bplease\b/i,
-  /\blgtm\b/i,
-  /\breview\b/i,
-  /\bapprove\b/i,
-  /\bdefer\b/i,
-  /\bmove to\b/i,
-  /\bnext (sprint|release|milestone)\b/i,
-  /\bwhat do you think\b/i,
-  /\bis it (ok|okay)\b/i,
-]
-
-export function evalDirectedAtMe(newSignals: Signal[]): TriggerHit[] {
-  if (newSignals.length === 0) return []
-  const handles = readConfig().owner?.handles ?? {}
-  const ownerHandles = Object.values(handles).filter(Boolean).map((h) => h!.toLowerCase())
-
-  for (const signal of newSignals) {
-    // Skip own activity
-    if (signal.actor && ownerHandles.length > 0 &&
-        ownerHandles.some((h) => signal.actor.toLowerCase().includes(h))) continue
-
-    const text = `${signal.title} ${signal.body}`
-    if (!REQUEST_PATTERNS.some((p) => p.test(text))) continue
-
-    const taskKey = `${signal.surface}:${signal.kind}:${signal.external_id}`
-    const taskNode = dbGetNode(kindToNodeType(signal.kind), taskKey)
-    return [{
-      kind: 'directed',
-      focusNodeIds: taskNode ? [taskNode.id] : [],
-      reason: `Inbound request from ${signal.actor || 'unknown'} on '${signal.title.slice(0, 80)}'`
-    }]
-  }
-  return []
-}
-
 // ─── Convenience: all event triggers ─────────────────────────────────────────
+// Event-driven path: fires when new signals arrive. evalWaitingOnMe is the primary
+// consequence-based trigger; evalDependency covers blocked/related items; evalSpike
+// handles activity bursts. Staleness and threshold are now driven by the synthesis
+// heartbeat (ambient.ts) rather than being gated behind a per-poll counter here.
 
 export function evalEventTriggers(newSignals: Signal[]): TriggerHit[] {
-  const hits: TriggerHit[] = [
-    ...evalSpike(newSignals),
+  return [
+    ...evalWaitingOnMe(newSignals),
     ...evalDependency(newSignals),
-    ...evalDirectedAtMe(newSignals)
+    ...evalSpike(newSignals),
   ]
-  // Only add staleness/threshold occasionally (not every poll cycle)
-  // Use a rough "every 6th call" gate via a module counter
-  evaluationCount++
-  if (evaluationCount % 6 === 0) {
-    hits.push(...evalStaleness())
-    hits.push(...evalThreshold())
-  }
-  return hits
 }
-
-let evaluationCount = 0
 
 // ─── Coalesce hits sharing focus nodes ───────────────────────────────────────
 // If two hits overlap in focusNodeIds, merge them into one to avoid

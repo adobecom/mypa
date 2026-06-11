@@ -24,7 +24,7 @@ import { violatesScope } from './scope'
 import { callTool } from './mcp'
 import { startIngestion, stopIngestion, pollOnce } from './ingestion'
 import { ingestSignalIntoGraph, assembleContextPacket, startDecayTimer, stopDecayTimer } from './memory-graph'
-import { evalEventTriggers, evalTime, coalesceHits } from './triggers'
+import { evalEventTriggers, evalTime, coalesceHits, evalWaitingOnMeFromGraph, evalStaleAndMine } from './triggers'
 import { inferIntent, reproposeIntent } from './inference'
 import { enqueueEmbeddings, enqueueBackfill } from './embeddings'
 import { runMemorySummarization } from './memories'
@@ -50,6 +50,7 @@ let getWidgetWin: (() => BrowserWindow | null) | null = null
 const timeTriggerjobs = new Map<string, cron.ScheduledTask>()
 let inferenceQueue: Promise<void> = Promise.resolve()
 const MAX_INTENTS_PER_CYCLE = 3
+let synthesisIntervalId: ReturnType<typeof setInterval> | null = null
 
 // ─── Start / stop ─────────────────────────────────────────────────────────────
 
@@ -72,6 +73,7 @@ export function startAmbient(getWin: () => BrowserWindow | null): void {
   startDecayTimer()
   startIngestion(onNewSignals)
   scheduleTimeTriggers()
+  startSynthesisTimer()
   // Kick off one-time backfill of any signals that were inserted before
   // the embedding model was available (fire-and-forget, model may not be
   // downloaded yet — enqueueBackfill degrades gracefully)
@@ -82,6 +84,7 @@ export function startAmbient(getWin: () => BrowserWindow | null): void {
 export function stopAmbient(): void {
   stopIngestion()
   stopDecayTimer()
+  stopSynthesisTimer()
   for (const task of timeTriggerjobs.values()) task.stop()
   timeTriggerjobs.clear()
   getWidgetWin = null
@@ -128,18 +131,18 @@ export async function runAmbientCycle(
   hits: ReturnType<typeof evalEventTriggers>
 ): Promise<void> {
   const win = getWidgetWin?.() ?? null
-  let intentCount = 0
 
-  // Seed covered set from intents already visible to the user so we skip hits
-  // about the same nodes whether they arrive in this cycle or a later one.
+  // Phase A — infer ALL surviving hits (no early break), then rank
+  // Seed covered set from intents already visible to the user.
   const covered = activeFocusNodeIds()
+  const candidates: Array<{
+    hit: ReturnType<typeof evalEventTriggers>[number]
+    packet: Awaited<ReturnType<typeof assembleContextPacket>>
+    obj: IntentObject
+  }> = []
 
   for (const hit of hits) {
-    if (intentCount >= MAX_INTENTS_PER_CYCLE) break
-
-    // Skip hits whose focus nodes are already covered by a surfaced intent.
-    // Focus-less hits (e.g. time digests) are never skipped — they have their
-    // own purpose and won't collide with activity-based intents.
+    // Skip hits whose focus nodes are already covered by a pending intent.
     if (hit.focusNodeIds.length > 0 && hit.focusNodeIds.some((id) => covered.has(id))) {
       console.log(`[ambient] skipping ${hit.kind} hit — focus nodes already covered`)
       continue
@@ -155,6 +158,18 @@ export async function runAmbientCycle(
     }
     if (!obj) continue
 
+    // Mark focus nodes covered within this cycle to prevent same-cycle duplicates
+    for (const id of hit.focusNodeIds) covered.add(id)
+    candidates.push({ hit, packet, obj })
+  }
+
+  // Phase B — rank by (urgency desc, confidence desc), take top MAX_INTENTS_PER_CYCLE
+  candidates.sort((a, b) =>
+    b.obj.urgency - a.obj.urgency || b.obj.confidence - a.obj.confidence
+  )
+  const top = candidates.slice(0, MAX_INTENTS_PER_CYCLE)
+
+  for (const { hit, packet, obj } of top) {
     const tier = resolveTier(obj)
 
     // Informational intents (flag/digest/suggestion) muted by the user's policy are
@@ -194,22 +209,45 @@ export async function runAmbientCycle(
       console.error('[ambient] intent graph node error:', e)
     }
 
-    // Mark these focus nodes as covered so later hits in this same cycle are
-    // also deduplicated without needing a DB round-trip.
-    for (const id of hit.focusNodeIds) covered.add(id)
-
     dbAppendActionLog({
       intent_id: intent.id,
       event: 'emitted',
       action_type: actionTypeOf(obj),
       tier,
-      detail: { trigger: hit.reason },
+      detail: { trigger: hit.reason, urgency: obj.urgency },
       created_at: new Date().toISOString()
     })
 
     await handleIntent(intent, win)
-    intentCount++
   }
+}
+
+// ─── Synthesis heartbeat ──────────────────────────────────────────────────────
+// Fires periodically to re-evaluate "still waiting on me" and stale-and-mine items
+// during quiet periods (no new signal arrivals). Decoupled from the poll callback.
+
+function runSynthesisHeartbeat(): void {
+  const waitingHits = evalWaitingOnMeFromGraph()
+  const staleHits = evalStaleAndMine()
+  const hits = coalesceHits([...waitingHits, ...staleHits])
+  console.log(`[ambient] synthesis heartbeat — ${hits.length} hit(s)`)
+  if (hits.length === 0) return
+  inferenceQueue = inferenceQueue
+    .then(() => runAmbientCycle(hits))
+    .catch((e) => console.error('[ambient] synthesis cycle error:', e))
+}
+
+function startSynthesisTimer(): void {
+  if (synthesisIntervalId) return
+  const cfg = readConfig()
+  const intervalMs = cfg.ambient?.synthesisIntervalMs ?? 30 * 60 * 1000
+  // Defer first tick by one full interval (avoids colliding with startup stagger + backfill)
+  synthesisIntervalId = setInterval(runSynthesisHeartbeat, intervalMs)
+}
+
+function stopSynthesisTimer(): void {
+  if (synthesisIntervalId) clearInterval(synthesisIntervalId)
+  synthesisIntervalId = null
 }
 
 // ─── Intent routing by tier ───────────────────────────────────────────────────

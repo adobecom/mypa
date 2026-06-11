@@ -1,5 +1,5 @@
 import { getServerStatus, callTool } from './mcp'
-import { readConfig } from './config'
+import { readConfig, getOwnerHandles } from './config'
 import { dbInsertSignal, computeFingerprint } from '../db/index'
 import type { Signal, SignalInput, IntentSurface } from '@shared/types'
 
@@ -17,6 +17,11 @@ export interface RawObservation {
   occurred_at: string | null
   change_fields: Record<string, unknown>
   raw: Record<string, unknown>
+  // "Needs me" fields set by adapters
+  relation?: string | null
+  directed?: boolean
+  last_actor?: string | null
+  due_at?: string | null
 }
 
 export interface SurfaceAdapter {
@@ -27,7 +32,19 @@ export interface SurfaceAdapter {
   normalize(raw: RawObservation): SignalInput
 }
 
+// ─── Owner handle helpers ─────────────────────────────────────────────────────
+
+/** Returns true if `handle` matches any of the configured owner handles (case-insensitive). */
+function isOwnerHandle(handle: string): boolean {
+  if (!handle) return false
+  const lower = handle.toLowerCase()
+  return getOwnerHandles().some((h) => lower === h.toLowerCase() || lower.includes(h.toLowerCase()))
+}
+
 // ─── GitHub adapter ──────────────────────────────────────────────────────────
+
+// Max items to fetch the latest comment for per poll. Prioritise: review_requested > assigned > mentioned.
+const MAX_GITHUB_COMMENT_FETCHES = 15
 
 function makeGithubAdapter(): SurfaceAdapter {
   const surface: IntentSurface = 'github'
@@ -37,56 +54,111 @@ function makeGithubAdapter(): SurfaceAdapter {
     return getServerStatus().some((s) => s.name === serverName && s.connected)
   }
 
+  /** Returns the login of the latest commenter on a GitHub issue/PR, or null on failure. */
+  async function fetchLatestCommentActor(itemNumber: string): Promise<string | null> {
+    // Confirm the tool is available before calling
+    const server = getServerStatus().find((s) => s.name === serverName && s.connected)
+    if (!server) return null
+    const toolName = server.tools.find(
+      (t) => t.name === 'get_issue_comments' || t.name === 'list_issue_comments'
+    )?.name
+    if (!toolName) return null
+    try {
+      const raw = await callTool(serverName, toolName, { issue_number: Number(itemNumber) })
+      const parsed = safeParseJson<unknown[]>(raw, [])
+      const arr = Array.isArray(parsed) ? parsed : []
+      if (arr.length === 0) return null
+      const last = arr[arr.length - 1] as Record<string, unknown>
+      return String((last.user as any)?.login ?? '') || null
+    } catch {
+      return null
+    }
+  }
+
   async function poll(): Promise<RawObservation[]> {
+    // Role-tagged queries — more specific than `involves:@me` so we know WHY this item matters.
+    // Priority order for de-dup: review_requested > assigned > mentioned > involved.
+    const QUERIES: Array<{ q: string; relation: string; kind: 'pr' | 'issue' | 'both' }> = [
+      { q: 'is:open is:pr review-requested:@me',  relation: 'review_requested', kind: 'pr' },
+      { q: 'is:open assigned:@me',                 relation: 'assigned',         kind: 'both' },
+      { q: 'is:open mentions:@me',                 relation: 'mentioned',        kind: 'both' },
+      { q: 'is:open involves:@me',                 relation: 'involved',         kind: 'both' },
+    ]
+
+    // Map from external_id → {result, relation} — keeps highest-priority relation on de-dup
+    const byId = new Map<string, { r: Record<string, unknown>; relation: string; kind: string }>()
+
+    for (const { q, relation, kind } of QUERIES) {
+      const types = kind === 'pr' ? ['pr'] : kind === 'issue' ? ['issue'] : ['pr', 'issue']
+      for (const itemType of types) {
+        const searchQ = itemType === 'pr'
+          ? q.includes('is:pr') ? q : `${q} is:pr`
+          : q.includes('is:issue') ? q : `${q} is:issue`
+        try {
+          const res = await callTool(serverName, 'search_issues', { q: searchQ, per_page: 20 })
+          const parsed = safeParseJson<{ items?: unknown[] }>(res, {})
+          for (const item of parsed.items ?? []) {
+            const r = item as Record<string, unknown>
+            const id = String(r.number ?? r.id ?? '')
+            if (!id) continue
+            const extKind = itemType === 'pr' ? 'pull_request' : 'issue'
+            const extId = `${extKind}:${id}`
+            if (!byId.has(extId)) {
+              byId.set(extId, { r, relation, kind: extKind })
+            }
+            // else: already recorded with higher-priority relation — skip
+          }
+        } catch (e) {
+          console.warn(`[ingestion:github] query "${searchQ}" failed:`, e)
+        }
+      }
+    }
+
+    // Fetch latest comment actor for high-priority candidates (review_requested > assigned > mentioned)
+    const highPriority = [...byId.entries()]
+      .filter(([, v]) => v.relation !== 'involved')
+      .slice(0, MAX_GITHUB_COMMENT_FETCHES)
+
+    const commentActors = new Map<string, string | null>()
+    for (const [extId, { r, relation }] of highPriority) {
+      const itemNumber = String(r.number ?? '')
+      if (!itemNumber) continue
+      if (relation === 'review_requested') {
+        // review_requested is always directed at me — skip comment fetch
+        commentActors.set(extId, null)
+      } else {
+        commentActors.set(extId, await fetchLatestCommentActor(itemNumber))
+      }
+    }
+
     const obs: RawObservation[] = []
-    const results: Array<{ tool: string; result: unknown }> = []
+    for (const [extId, { r, relation, kind }] of byId) {
+      const itemNumber = String(r.number ?? '')
+      const lastActor = commentActors.get(extId) ?? null
 
-    // Pull requests assigned to / involving user
-    try {
-      const prs = await callTool(serverName, 'search_issues', {
-        q: 'is:pr involves:@me is:open',
-        per_page: 30
-      })
-      const parsed = safeParseJson<{ items?: unknown[] }>(prs, {})
-      for (const item of parsed.items ?? []) {
-        results.push({ tool: 'pr', result: item })
-      }
-    } catch (e) {
-      console.warn('[ingestion:github] pr poll failed:', e)
-    }
+      // directed: review requests are always directed; for others, last commenter must be non-owner
+      const directed =
+        relation === 'review_requested' ||
+        (lastActor !== null && !isOwnerHandle(lastActor))
 
-    // Issues assigned to or mentioning user
-    try {
-      const issues = await callTool(serverName, 'search_issues', {
-        q: 'is:issue involves:@me is:open',
-        per_page: 20
-      })
-      const parsed = safeParseJson<{ items?: unknown[] }>(issues, {})
-      for (const item of parsed.items ?? []) {
-        results.push({ tool: 'issue', result: item })
-      }
-    } catch (e) {
-      console.warn('[ingestion:github] issue poll failed:', e)
-    }
-
-    for (const { tool, result } of results) {
-      const r = result as Record<string, unknown>
-      const id = String(r.number ?? r.id ?? '')
-      if (!id) continue
-      const kind = tool === 'pr' ? 'pull_request' : 'issue'
       obs.push({
-        external_id: `${kind}:${id}`,
+        external_id: extId,
         kind,
         title: String(r.title ?? ''),
         body: String(r.body ?? '').slice(0, 500),
         actor: String((r.user as any)?.login ?? ''),
         url: String(r.html_url ?? r.url ?? ''),
         occurred_at: String(r.updated_at ?? r.created_at ?? ''),
+        relation,
+        directed,
+        last_actor: lastActor,
+        due_at: null, // GitHub milestones not surfaced in search results
         change_fields: {
           state: r.state,
           updated_at: r.updated_at,
           comments: r.comments,
-          assignees: (r.assignees as any[])?.map((a: any) => a.login)
+          assignees: (r.assignees as any[])?.map((a: any) => a.login),
+          last_actor: lastActor, // included in fingerprint — new comment registers as changed
         },
         raw: r
       })
@@ -105,10 +177,16 @@ function makeGithubAdapter(): SurfaceAdapter {
       actor: raw.actor,
       url: raw.url,
       occurred_at: raw.occurred_at,
-      // Store only the safe reference fields — not the full API response which may
-      // contain private content, PII, or secrets pasted in PR bodies / messages.
-      raw: scrubRaw(raw.raw, ['number', 'id', 'html_url', 'url', 'state', 'updated_at',
-        'created_at', 'repository', 'user'])
+      relation: raw.relation ?? null,
+      directed: raw.directed ?? false,
+      last_actor: raw.last_actor ?? null,
+      due_at: raw.due_at ?? null,
+      // Metadata-only fields — no free-text body content stored beyond title/body already captured.
+      raw: scrubRaw(raw.raw, [
+        'number', 'id', 'html_url', 'url', 'state', 'draft',
+        'updated_at', 'created_at', 'repository', 'user',
+        'assignee', 'assignees', 'requested_reviewers', 'labels', 'milestone', 'pull_request'
+      ])
     }
   }
 
@@ -130,25 +208,54 @@ function makeJiraAdapter(): SurfaceAdapter {
     try {
       const result = await callTool(serverName, 'jira_search', {
         jql: 'assignee = currentUser() OR mention = currentUser() ORDER BY updated DESC',
-        fields: 'summary,status,assignee,reporter,updated,created,comment',
+        // Added duedate, priority, issuelinks — enables relation/dependency edges
+        fields: 'summary,status,assignee,reporter,updated,created,comment,duedate,priority,issuelinks',
         limit: 30
       })
       const parsed = safeParseJson<{ issues?: unknown[] }>(result, {})
+      const ownerHandles = getOwnerHandles()
+
       for (const issue of parsed.issues ?? []) {
         const i = issue as Record<string, unknown>
         const fields = (i.fields as Record<string, unknown>) ?? {}
+
+        // Determine relation: assignee == me → assigned, else → mentioned
+        const assigneeDisplay = String((fields.assignee as any)?.displayName ?? '')
+        const assigneeAccount = String((fields.assignee as any)?.accountId ?? '')
+        const isAssigned = ownerHandles.length > 0 && ownerHandles.some((h) =>
+          assigneeDisplay.toLowerCase().includes(h.toLowerCase()) ||
+          assigneeAccount.toLowerCase().includes(h.toLowerCase())
+        )
+        const relation = isAssigned ? 'assigned' : 'mentioned'
+
+        // Latest comment author → last_actor + directed
+        const comments = (fields.comment as any)?.comments ?? []
+        const lastComment = comments.length > 0 ? comments[comments.length - 1] : null
+        const lastCommentAuthor = String(lastComment?.author?.displayName ?? '')
+        const lastActor = lastCommentAuthor || null
+        const directed = relation === 'assigned' ||
+          (lastActor !== null && !isOwnerHandle(lastActor))
+
+        // Body from latest comment — helps REQUEST_PATTERNS and context assembly
+        const latestCommentBody = lastComment ? String(lastComment.body ?? '').slice(0, 500) : ''
+
         obs.push({
           external_id: String(i.key ?? i.id ?? ''),
           kind: 'issue',
           title: String(fields.summary ?? ''),
-          body: '',
-          actor: String((fields.assignee as any)?.displayName ?? (fields.reporter as any)?.displayName ?? ''),
+          body: latestCommentBody,
+          actor: String(assigneeDisplay || (fields.reporter as any)?.displayName ?? ''),
           url: String(i.self ?? ''),
           occurred_at: String(fields.updated ?? fields.created ?? ''),
+          relation,
+          directed,
+          last_actor: lastActor,
+          due_at: fields.duedate ? String(fields.duedate) : null,
           change_fields: {
             status: (fields.status as any)?.name,
             updated: fields.updated,
-            comment_count: (fields.comment as any)?.total
+            comment_count: (fields.comment as any)?.total,
+            last_actor: lastActor, // fingerprint changes when new person comments
           },
           raw: i
         })
@@ -160,6 +267,23 @@ function makeJiraAdapter(): SurfaceAdapter {
   }
 
   function normalize(raw: RawObservation): SignalInput {
+    // Build a curated fields sub-object so graph derivation (assignee, issuelinks, sprint) works
+    // while avoiding storing full descriptions, custom fields, or arbitrary user content.
+    const rawFields = (raw.raw.fields as Record<string, unknown>) ?? {}
+    const curatedFields = {
+      assignee:   (rawFields.assignee as any) ? {
+        displayName: (rawFields.assignee as any).displayName,
+        accountId:   (rawFields.assignee as any).accountId
+      } : null,
+      reporter:   (rawFields.reporter as any) ? {
+        displayName: (rawFields.reporter as any).displayName,
+        accountId:   (rawFields.reporter as any).accountId
+      } : null,
+      issuelinks: (rawFields.issuelinks as any[]) ?? [],
+      status:     (rawFields.status as any)?.name ?? null,
+      priority:   (rawFields.priority as any)?.name ?? null,
+      duedate:    rawFields.duedate ?? null,
+    }
     return {
       surface,
       kind: raw.kind,
@@ -170,7 +294,11 @@ function makeJiraAdapter(): SurfaceAdapter {
       actor: raw.actor,
       url: raw.url,
       occurred_at: raw.occurred_at,
-      raw: scrubRaw(raw.raw, ['id', 'key', 'self', 'issuetype', 'status', 'updated', 'created'])
+      relation: raw.relation ?? null,
+      directed: raw.directed ?? false,
+      last_actor: raw.last_actor ?? null,
+      due_at: raw.due_at ?? null,
+      raw: { ...scrubRaw(raw.raw, ['id', 'key', 'self', 'issuetype', 'status', 'updated', 'created']), fields: curatedFields }
     }
   }
 
@@ -195,18 +323,50 @@ function makeSlackAdapter(): SurfaceAdapter {
         count: 20
       })
       const parsed = safeParseJson<{ messages?: { matches?: unknown[] } }>(result, {})
+      const ownerHandles = getOwnerHandles()
+
       for (const msg of parsed.messages?.matches ?? []) {
         const m = msg as Record<string, unknown>
         const ts = String(m.ts ?? '')
+        const channelId = String((m.channel as any)?.id ?? m.channel ?? '')
+        const author = String((m.username as string) ?? (m.user as string) ?? '')
+        const isDm = channelId.startsWith('D')
+        const threadTs = m.thread_ts ? String(m.thread_ts) : null
+
+        // Structural relation detection — no body storage needed for this logic
+        const titleText = String(m.text ?? '')
+        const mentionsOwner = ownerHandles.some((h) =>
+          titleText.toLowerCase().includes(`@${h.toLowerCase()}`) ||
+          titleText.toLowerCase().includes(h.toLowerCase())
+        )
+
+        let relation: string
+        if (isDm) {
+          relation = 'dm'
+        } else if (mentionsOwner) {
+          relation = 'mentioned'
+        } else if (threadTs) {
+          relation = 'thread_reply'
+        } else {
+          relation = 'involved'
+        }
+
+        // directed: someone else sent a DM, mentioned, or replied in a thread
+        const directed = !isOwnerHandle(author) && relation !== 'involved'
+
         obs.push({
-          external_id: `${m.channel}:${ts}`,
+          external_id: `${channelId}:${ts}`,
           kind: 'message',
-          title: String(m.text ?? '').slice(0, 200),
-          body: String(m.text ?? '').slice(0, 500),
-          actor: String((m.username as string) ?? (m.user as string) ?? ''),
+          title: titleText.slice(0, 200),
+          body: '', // Slack body not stored at rest (privacy)
+          actor: author,
           url: String(m.permalink ?? ''),
           occurred_at: ts ? new Date(parseFloat(ts) * 1000).toISOString() : null,
-          change_fields: { ts, channel: m.channel },
+          relation,
+          directed,
+          last_actor: author || null,
+          due_at: null,
+          change_fields: { ts, channel: channelId },
           raw: m
         })
       }
@@ -229,7 +389,11 @@ function makeSlackAdapter(): SurfaceAdapter {
       actor: raw.actor,
       url: raw.url,
       occurred_at: raw.occurred_at,
-      raw: scrubRaw(raw.raw, ['ts', 'channel', 'permalink', 'username', 'user'])
+      relation: raw.relation ?? null,
+      directed: raw.directed ?? false,
+      last_actor: raw.last_actor ?? null,
+      due_at: raw.due_at ?? null,
+      raw: scrubRaw(raw.raw, ['ts', 'channel', 'permalink', 'username', 'user', 'thread_ts'])
     }
   }
 
@@ -315,8 +479,9 @@ async function runAdapterPoll(adapter: SurfaceAdapter): Promise<Signal[]> {
   } catch (e) {
     console.error(`[ingestion:${adapter.surface}] poll error:`, e)
   }
-  if (newSignals.length > 0 && newSignalCallback) {
-    newSignalCallback(newSignals)
+  if (newSignals.length > 0) {
+    console.log(`[ingestion:${adapter.surface}] ${newSignals.length} new signal(s)`)
+    newSignalCallback?.(newSignals)
   }
   return newSignals
 }

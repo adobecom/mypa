@@ -377,11 +377,13 @@ export function dbInsertSignal(s: SignalInput): { inserted: boolean; id: string 
     // Update the row with the new state — mark unprocessed so triggers re-evaluate it
     const updateStmt = db.prepare(
       `UPDATE signals SET fingerprint=?, title=?, body=?, actor=?, url=?, raw=?, occurred_at=?,
-       observed_at=?, processed=0 WHERE id=?`
+       observed_at=?, processed=0, relation=?, directed=?, last_actor=?, due_at=? WHERE id=?`
     )
     const updateArgs = [
       s.fingerprint, s.title, s.body, s.actor, s.url,
-      JSON.stringify(s.raw), s.occurred_at ?? null, observed_at, existing.id
+      JSON.stringify(s.raw), s.occurred_at ?? null, observed_at,
+      s.relation ?? null, s.directed ? 1 : 0, s.last_actor ?? null, s.due_at ?? null,
+      existing.id
     ] as const
     try {
       updateStmt.run(...updateArgs)
@@ -400,13 +402,15 @@ export function dbInsertSignal(s: SignalInput): { inserted: boolean; id: string 
   const result = db
     .prepare(
       `INSERT OR IGNORE INTO signals
-        (id, surface, kind, external_id, fingerprint, title, body, actor, url, raw, occurred_at, observed_at, processed)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)`
+        (id, surface, kind, external_id, fingerprint, title, body, actor, url, raw, occurred_at, observed_at, processed,
+         relation, directed, last_actor, due_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)`
     )
     .run(
       id, s.surface, s.kind, s.external_id, s.fingerprint,
       s.title, s.body, s.actor, s.url,
-      JSON.stringify(s.raw), s.occurred_at ?? null, observed_at
+      JSON.stringify(s.raw), s.occurred_at ?? null, observed_at,
+      s.relation ?? null, s.directed ? 1 : 0, s.last_actor ?? null, s.due_at ?? null
     )
   return { inserted: result.changes > 0, id: result.changes > 0 ? id : '' }
 }
@@ -448,12 +452,28 @@ export function dbGetSignalByExternal(surface: string, externalId: string): Sign
   return row ? deserializeSignal(row) : null
 }
 
+/**
+ * Returns signals flagged as directed at the owner — used by the synthesis heartbeat
+ * to re-evaluate "still waiting on me" items during quiet periods (no new arrivals).
+ */
+export function dbGetDirectedSignals(limit = 50): Signal[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT * FROM signals WHERE directed = 1
+       AND relation IN ('review_requested','assigned','mentioned','dm','thread_reply')
+       ORDER BY observed_at DESC LIMIT ?`
+    )
+    .all(limit) as any[]
+  return rows.map(deserializeSignal)
+}
+
 function deserializeSignal(row: any): Signal {
   // Strip embedding columns — they're internal DB concerns and must not leak over IPC
   const { embedding: _emb, embedding_model: _model, ...rest } = row
   return {
     ...rest,
     processed: row.processed === 1,
+    directed: row.directed === 1,
     raw: safeJsonParse<Record<string, unknown>>(row.raw, {})
   }
 }
@@ -661,15 +681,16 @@ export function dbCreateIntent(
   getDb()
     .prepare(
       `INSERT INTO intents
-        (id, type, trigger_kind, confidence, surface, verb, target, payload, rationale,
+        (id, type, trigger_kind, confidence, urgency, surface, verb, target, payload, rationale,
          reversibility, required_approval, tier, status, context_packet, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     )
     .run(
       id,
       obj.type,
       triggerKind,
       obj.confidence,
+      obj.urgency,
       obj.proposed_action.surface,
       obj.proposed_action.verb,
       obj.proposed_action.target,

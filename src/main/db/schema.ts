@@ -262,6 +262,13 @@ export function initSchema(db: Database.Database): void {
   tryExec('ALTER TABLE signals ADD COLUMN embedding_model TEXT')
   // Store the user's challenge reason directly on the intent so it's visible in the Recent feed
   tryExec('ALTER TABLE intents ADD COLUMN challenge_reason TEXT')
+  // "Needs me" relation fields on signals (added 2026-06-11)
+  tryExec('ALTER TABLE signals ADD COLUMN relation TEXT')
+  tryExec('ALTER TABLE signals ADD COLUMN directed INTEGER NOT NULL DEFAULT 0')
+  tryExec('ALTER TABLE signals ADD COLUMN last_actor TEXT')
+  tryExec('ALTER TABLE signals ADD COLUMN due_at TEXT')
+  // Urgency axis on intents — separate from confidence (added 2026-06-11)
+  tryExec('ALTER TABLE intents ADD COLUMN urgency REAL NOT NULL DEFAULT 0')
 
   // Migrate signals from old UNIQUE(surface, external_id, fingerprint) → UNIQUE(surface, external_id).
   // The 3-column constraint allowed duplicate (surface, external_id) rows to accumulate, causing
@@ -286,11 +293,16 @@ export function initSchema(db: Database.Database): void {
         processed    INTEGER NOT NULL DEFAULT 0,
         embedding    BLOB,
         embedding_model TEXT,
+        relation     TEXT,
+        directed     INTEGER NOT NULL DEFAULT 0,
+        last_actor   TEXT,
+        due_at       TEXT,
         UNIQUE (surface, external_id)
       );
       INSERT OR IGNORE INTO signals_mig
         SELECT id, surface, kind, external_id, fingerprint, title, body, actor, url, raw,
-               occurred_at, observed_at, processed, embedding, embedding_model
+               occurred_at, observed_at, processed, embedding, embedding_model,
+               NULL, 0, NULL, NULL
         FROM signals ORDER BY observed_at DESC;
       DELETE FROM node_signals WHERE signal_id NOT IN (SELECT id FROM signals_mig);
       DROP TABLE signals;

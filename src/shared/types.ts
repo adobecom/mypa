@@ -210,7 +210,9 @@ export const DEFAULT_CONFIG: AppConfig = {
     enabled: true,
     pollIntervalMs: 5 * 60 * 1000,
     decayHalfLifeDays: 7,
-    confidenceFloor: 0.4
+    confidenceFloor: 0.4,
+    urgencyFloor: 0.5,
+    synthesisIntervalMs: 30 * 60 * 1000
   },
   checkin: {
     scheduleEnabled: false
@@ -231,7 +233,7 @@ export type IntentStatus =
   | 'expired'
   | 'failed'
 export type IntentReversibility = 'reversible' | 'irreversible'
-export type TriggerKind = 'spike' | 'staleness' | 'dependency' | 'threshold' | 'time' | 'directed' | 'routine'
+export type TriggerKind = 'spike' | 'staleness' | 'dependency' | 'threshold' | 'time' | 'directed' | 'routine' | 'waiting'
 export type Tier = 0 | 1 | 2 | 3
 export type TrayState = 'idle' | 'has-something' | 'needs-you'
 export type DigestSlot = 'morning' | 'midday' | 'eod'
@@ -288,6 +290,7 @@ export interface ProposedAction {
 export interface IntentObject {
   type: IntentType
   confidence: number
+  urgency: number
   proposed_action: ProposedAction
   rationale: string
   reversibility: IntentReversibility
@@ -299,6 +302,7 @@ export interface Intent {
   type: IntentType
   trigger_kind: TriggerKind
   confidence: number
+  urgency: number
   surface: IntentSurface | null
   verb: string | null
   target: string | null
@@ -329,6 +333,11 @@ export interface Signal {
   occurred_at: string | null
   observed_at: string
   processed: boolean
+  // "Needs me" relation fields — populated by adapters
+  relation: string | null     // review_requested | assigned | mentioned | involved | dm | thread_reply
+  directed: boolean           // true when latest non-owner actor acted on an item the owner is responsible for
+  last_actor: string | null   // latest comment/event author (fixes actor=original-author blind spot)
+  due_at: string | null       // deadline from Jira duedate / GitHub milestone
 }
 
 export type SignalInput = Omit<Signal, 'id' | 'observed_at' | 'processed'>
@@ -394,6 +403,8 @@ export interface AmbientConfig {
   pollIntervalMs: number
   decayHalfLifeDays: number
   confidenceFloor: number
+  urgencyFloor?: number        // intents below this urgency are dropped (default 0.5)
+  synthesisIntervalMs?: number // how often the synthesis heartbeat fires (default 30 min)
 }
 
 // ─── Check-ins ───────────────────────────────────────────────────────────────
