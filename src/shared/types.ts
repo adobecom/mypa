@@ -159,19 +159,20 @@ export type ResolvedHandle = { value: string; needsReview: boolean }
 export type ResolvedOwnerHandles = Partial<Record<'github' | 'slack' | 'jira' | 'linear' | 'notion', ResolvedHandle>>
 
 /**
- * Scope config — defines which external containers (GitHub orgs, Jira projects,
- * Slack channels) mypa is allowed to surface. When a list is provided for a
- * surface and a signal's container is NOT on that list, intents derived from that
- * signal are dropped before reaching the DB, graph, or UI.
- * An absent or empty list for a surface means "no restriction".
+ * Scope config — defines which external containers mypa is allowed to surface.
+ * When a list is provided for a surface and a signal's container is NOT on that
+ * list, intents derived from that signal are dropped before reaching the DB, graph,
+ * or UI. An absent or empty list for a surface means "no restriction".
+ *
+ * Keyed by IntentSurface ('github' | 'jira' | 'slack'). Values are arrays of
+ * container identifiers — GitHub org names, Jira project keys, or Slack channel IDs.
+ * All comparisons are case-insensitive.
+ *
+ * Populated automatically from check-in conversations. Manual editing not required.
  */
 export interface ScopeConfig {
-  /** GitHub org names to allow (e.g. ['adobecom', 'adobe']). Case-insensitive. */
-  allowedGithubOrgs?: string[]
-  /** Jira project keys to allow (e.g. ['PROJ', 'MYAPP']). Case-insensitive. */
-  allowedJiraProjects?: string[]
-  /** Slack channel IDs or names to allow (e.g. ['C123ABC']). */
-  allowedSlackChannels?: string[]
+  /** Per-surface allowlist of container identifiers. */
+  allowed?: Record<string, string[]>
 }
 
 export interface AppConfig {
@@ -418,6 +419,8 @@ export interface CheckInExtractionSummary {
   memoriesAdded: number
   nodesUpdated: number
   edgesAdded: number
+  /** Number of scope identifiers auto-derived and added from this check-in. */
+  scopeUpdated: number
 }
 
 export type MemoryType = 'fact' | 'pattern' | 'preference' | 'status'
