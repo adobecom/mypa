@@ -70,6 +70,8 @@ Stored in `AppConfig.ambient` (in `~/.mypa/config.json`):
 | `pollIntervalMs` | `300000` (5 min) | How often to poll external surfaces |
 | `decayHalfLifeDays` | `7` | Weight decay half-life for graph nodes and edges |
 | `confidenceFloor` | `0.4` | Minimum confidence to surface an intent |
+| `urgencyFloor` | `0.5` | Minimum urgency to surface an intent (separate from confidence; see urgency axis below) |
+| `synthesisIntervalMs` | `1800000` (30 min) | How often the synthesis heartbeat re-evaluates "still waiting on me" items |
 
 ---
 
@@ -91,24 +93,38 @@ Evaluated by `triggers.ts` against the current graph state:
 
 | Kind | Fires when |
 |---|---|
-| `spike` | A node's weight increased sharply in the last poll window (sudden activity) |
-| `staleness` | A node hasn't been updated in a configurable threshold (item going stale) |
+| `waiting` | An item is structurally directed at the owner: review-requested, assigned, or a non-owner commented on something the owner is responsible for. **Primary trigger — fired first.** |
 | `dependency` | A dependency or blocker edge connects to a node with recent activity |
-| `threshold` | A numeric metric (PR age, issue count, etc.) crosses a configured limit |
+| `spike` | A burst of new signals for the same surface+kind in a short window |
+| `staleness` | A node the owner **owns** (assigned/review-requested) hasn't been updated in 48+ hours |
 | `time` | A scheduled digest slot (morning / midday / eod) is due |
-| `directed` | A single inbound signal from a non-owner actor looks like a question or request |
+| `directed` | *(legacy, retired from event path)* — replaced by `waiting` |
+| `threshold` | *(retired from autonomous path)* — metric proxy, no longer fires autonomously |
+| `routine` | Fired by a routine run (not by the ambient poll loop) |
 
-### Directed-at-me trigger
+### Waiting-on-me trigger
 
-The `directed` trigger is the only kind that fires on a **single signal** rather than a volume pattern. It addresses the gap where a single Jira comment ("can we move this to next sprint?") would never trip a spike, so the agent would never propose a response.
+The `waiting` trigger replaces the old `directed` trigger. It is **structurally-driven**, not regex-driven, which eliminates false positives from the old actor=original-author blind spot.
 
-**Logic** (`evalDirectedAtMe` in `triggers.ts`):
-1. For each new signal, skip it if `signal.actor` matches any of the user's configured handles (own activity).
-2. Concatenate `signal.title + signal.body` and test against a fixed set of regex patterns: `?`, `can we/you/i`, `should we`, `please`, `lgtm`, `review`, `approve`, `defer`, `move to`, `next sprint/release/milestone`, `what do you think`, `is it ok/okay`.
-3. On a match, resolve the signal to its memory-graph node and return a `TriggerHit` with `kind: 'directed'`.
-4. Returns at most one hit per poll cycle to avoid flooding inference.
+**Logic** (`evalWaitingOnMe` in `triggers.ts`):
+1. For each new signal where `signal.directed === true` AND `signal.relation ∈ {review_requested, assigned, dm, thread_reply}`, emit a `TriggerHit { kind: 'waiting' }` with a human reason ("Sarah requested your review on PR #123").
+2. For `mentioned` signals without a structural `directed` flag, fall back to REQUEST_PATTERNS regex as a secondary booster.
+3. Capped at 3 hits per call; `coalesceHits` merges same-node duplicates.
 
-**Autonomy path**: once the inference pipeline generates a `jira:comment` or `github:comment` intent from a `directed` hit and the user approves it 5 consecutive times, the `surface:verb` policy drops to Tier 1 (notify-only). With an explicit Tier 0 opt-in, subsequent matching comments are sent automatically — enabling the "reply on my behalf" use case.
+**How `directed` is set in adapters:**
+- GitHub: `review_requested` → always `directed=true`. Others: `directed = last_actor !== null && last_actor not in ownerHandles`. `last_actor` is the author of the most recent comment, fetched per candidate item (up to 15 per poll, prioritized by relation). This fixes the actor=original-author blind spot.
+- Jira: `directed = relation === 'assigned' || (last_actor !== null && last_actor not in ownerHandles)`. Latest comment author is extracted from the already-fetched `comment` field.
+- Slack: `directed = author not in ownerHandles && relation !== 'involved'`. Structural detection from DM channel ID (starts with `D`), `@mention` in title, or `thread_ts`.
+
+### Stale-and-mine trigger
+
+The `staleness` trigger now restricts to items the owner **owns** (assigned or review-requested), rather than any high-weight node. This prevents nagging about other people's busy work.
+
+**Logic** (`evalStaleAndMine`): runs `getStaleCandidates(3.0)`, then cross-references against signals with `relation IN ('assigned','review_requested')` to keep only nodes the owner is responsible for.
+
+### Synthesis heartbeat
+
+Staleness and waiting-on-me from the heartbeat path re-evaluate the **current state of persisted signals** (`dbGetDirectedSignals`) every `synthesisIntervalMs` (default 30 min), not just on new arrivals. This ensures items like a PR waiting on your review for 3 days resurface even when GitHub is quiet (no new signals arriving). The heartbeat uses the same `inferenceQueue` serialization as all other paths, so it never races with poll-driven cycles.
 
 ---
 
@@ -124,7 +140,8 @@ An **intent** is a proposed action derived from trigger evaluation. Types:
 | `digest` | A structured summary (morning / midday / eod digest) |
 
 Each intent has:
-- `confidence` — 0–1 score from inference; filtered against `confidenceFloor`.
+- `confidence` — 0–1: how certain the LLM is this signal is real and worth attention; filtered against `confidenceFloor`.
+- `urgency` — 0–1: how consequential it is that the user acts **now** (separate axis from confidence). Considers: someone is blocked/waiting on the user, deadline proximity (due_at), cost of delay, irreversibility. Filtered against `urgencyFloor`. Used to rank within a cycle so the most consequential item surfaces first.
 - `reversibility` — `reversible` or `irreversible`; irreversible intents always require approval.
 - `tier` — the trust tier at the time it was created (affects whether it runs automatically).
 - `status` lifecycle: `pending → surfaced → approved / dismissed / challenged → executed / failed / expired`.
@@ -237,6 +254,7 @@ See [ipc.md](ipc.md) for full signatures. Quick reference:
 
 ## Changelog
 
+- 2026-06-11 — **"Needs me" reframe across all surfaces:** Four-layer change to make ambient genuinely proactive during quiet periods. (1) *Data capture* — signals table gains `relation TEXT`, `directed INTEGER`, `last_actor TEXT`, `due_at TEXT`; intents table gains `urgency REAL`. GitHub adapter now runs role-tagged queries (`review-requested:@me`, `assigned:@me`, `mentions:@me`, `involves:@me`) with de-dup by priority; fetches the latest comment author per candidate (up to 15/poll) to fix the actor=original-author blind spot. Jira adapter fetches `duedate`/`priority`/`issuelinks`; latest comment body populates signal `body`; curated `fields` sub-object un-deads `deriveAssigneeEdges` and Jira dependency edges. Slack adapter detects DM/mention/thread_reply structurally; `directed` set from author≠owner without storing body. (2) *Consequence-based triggers* — new `evalWaitingOnMe` (structural, not regex) replaces `evalDirectedAtMe`; `evalStaleAndMine` restricts staleness to owner-assigned/review-requested nodes; `evalThreshold` retired from autonomous path; `evaluationCount % 6` gate deleted; `TriggerKind` gains `'waiting'`. (3) *Urgency axis + editorial bar* — `SYSTEM_PROMPT` and `ROUTINE_SYSTEM_PROMPT` gain `"urgency"` field with instruction to rate consequence-of-delay separately from confidence; `inferIntent`/`inferRoutineIntents` drop intents below `urgencyFloor` (default 0.5); `runAmbientCycle` refactored into infer-all → sort by (urgency, confidence) → take top-3 so the most important item wins rather than the first to arrive. (4) *Synthesis heartbeat* — `startSynthesisTimer`/`stopSynthesisTimer` in `ambient.ts` re-evaluate `evalWaitingOnMeFromGraph` + `evalStaleAndMine` every `synthesisIntervalMs` (default 30 min) from persisted signals, decoupled from new-signal arrival. Known gap: dismissed-but-not-acted items can resurface on the next heartbeat (pending-intent dedup covers only pending/surfaced status). Privacy: GitHub stores metadata-only (no new free text); Jira stores single latest comment body (capped 500 chars); Slack stores structural flags only, body remains `''`.
 - 2026-06-10 — **Scope now self-derives from check-ins; registry-driven enforcement:** `scope.ts:violatesScope` logic (part_of traversal, conservative fallbacks) is unchanged. The enforcement mechanism is now registry-driven: it looks up the surface spec via `scopeSurfaceFor()` from `src/shared/scope-surfaces.ts` and calls `spec.parseIdentifier(key)`, eliminating the per-surface if/else. `ScopeConfig` reshaped to `{ allowed?: Record<string, string[]> }` — keyed by surface rather than three named fields; a migration shim handles any pre-existing config with named fields. Allowlists are populated automatically by `checkin.ts` during extraction (union semantics — never reduced) rather than via manual Settings input. The Scope card in Settings is now read-only.
 - 2026-06-10 — **Hard-rule enforcement and scope filter:** two enforcement layers added. (1) *Directive injection* — `config.ts` exports `buildDirectivesClause()`, which reads all active hard memories from the DB (`dbGetActiveHardMemories()`) and returns a trusted standing-directives block that is appended to inference system prompts (alongside `buildOwnerClause()`); hard memories are never rendered as advisory `<context>` data. (2) *Deterministic scope filter* — new `src/main/services/scope.ts` exports `violatesScope(obj, focusNodes): boolean`; it resolves each focus node's `part_of` container edges, extracts the org/project/channel key, and drops the intent if a configured allowlist for that surface exists and the container is not on it. Applied at both ambient chokepoints: `runAmbientCycle` (before `dbCreateIntent`) and `routeIntent` (same position). Conservative: when no container edges exist, the intent passes through. `AppConfig.scope` previously held `allowedGithubOrgs`, `allowedJiraProjects`, `allowedSlackChannels`; now replaced with the generic `allowed` map (see above).
 - 2026-06-10 — **Suggest multi-round re-proposal:** added Suggest as a fourth non-terminal user action on actionable intents. New `intent_threads` table persists the conversation. `inference.reproposeIntent` builds a re-proposal prompt from the original `context_packet`, current proposal, and conversation history, then calls `runClaudeWithMcp` — which wires the Claude CLI to connected MCP servers with a read-only tool allowlist (name-prefix filter) so Claude can look up extra context without ever mutating data. The assistant reply and updated `IntentObject` fields are stored; the intent stays `surfaced` for further Suggest rounds. `ambient:intent-message` push channel added; `ambient.suggest` / `ambient.getIntentThread` IPC methods added. The Suggest thread is rendered in `IntentCard` via the shared `ChatThread` component in both the widget and main-window Insights page.
