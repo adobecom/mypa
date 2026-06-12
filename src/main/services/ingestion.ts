@@ -244,7 +244,7 @@ function makeJiraAdapter(): SurfaceAdapter {
           kind: 'issue',
           title: String(fields.summary ?? ''),
           body: latestCommentBody,
-          actor: String(assigneeDisplay || (fields.reporter as any)?.displayName ?? ''),
+          actor: String(assigneeDisplay || (fields.reporter as any)?.displayName || ''),
           url: String(i.self ?? ''),
           occurred_at: String(fields.updated ?? fields.created ?? ''),
           relation,
