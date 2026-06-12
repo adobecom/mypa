@@ -713,7 +713,7 @@ export function dbGetIntent(id: string): Intent | null {
 
 export function dbGetPendingIntents(): Intent[] {
   const rows = getDb()
-    .prepare("SELECT * FROM intents WHERE status IN ('pending','surfaced') ORDER BY created_at ASC")
+    .prepare("SELECT * FROM intents WHERE status IN ('pending','surfaced') ORDER BY created_at DESC")
     .all() as any[]
   return rows.map(deserializeIntent)
 }
