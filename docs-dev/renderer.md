@@ -67,7 +67,7 @@ Free-text `<textarea>` at the bottom of the widget (converted from `<input type=
 
 `main-window/App.tsx` computes per-page unread counts on mount and via push events (`ambient:intent-created`, `ambient:intent-updated`, `plan:item-updated`, `badge:updated`):
 - **Insights** — pending action intents + active (non-done/skipped) plan items.
-- **Routines** — `pending_response` routine runs.
+- **Routines** — `pending_response` routine runs. This count is passed as `pendingCount` into `RoutinesPage` and also drives the **Needs you** sub-tab's count badge, so the sidebar badge and the sub-tab badge always show the same number.
 
 Each nav item renders a `.nav-item__badge` count pill (CSS in `index.css`) when its count > 0. Badges clear in real-time as the user acts.
 
@@ -109,9 +109,9 @@ toast.loading(title, opts?)      // sticky (duration: 0); update when done
 ```
 
 Variants: `success` (green), `error` (red), `info` (accent purple), `loading` (yellow spinner).  
-Toasts support an optional `action: { label, onClick }` button (e.g. "View logs" that navigates to the Run Logs sub-tab of the Routines page).
+Toasts support an optional `action: { label, onClick }` button (e.g. "View" that navigates to the Needs you sub-tab of the Routines page).
 
-**Background-event bridge** (`useRunToasts` in `App.tsx`): subscribes to `routine:run-started` (→ loading toast), `routine:run-completed` (→ update to success/error; "View logs" action switches to the Run Logs sub-tab), and `ambient:action-executed` (→ info toast). This is why clicking **Run now** in RoutinesManager now shows visible feedback — the run events are broadcast to both windows (see IPC docs).
+**Background-event bridge** (`useRunToasts` in `App.tsx`): subscribes to `routine:run-started` (→ loading toast), `routine:run-completed` (→ update to success/error; "View" action switches to the Needs you sub-tab), and `ambient:action-executed` (→ info toast). This is why clicking **Run now** in RoutinesManager now shows visible feedback — the run events are broadcast to both windows (see IPC docs).
 
 Styles in `src/renderer/src/main-window/index.css` (`.toast*` block), using existing design tokens. Timer cleanup on unmount prevents leaks.
 
@@ -119,19 +119,28 @@ Styles in `src/renderer/src/main-window/index.css` (`.toast*` block), using exis
 
 #### Routines
 
-`RoutinesPage` is the nav-level wrapper; it owns the page header and the **Routines / Run Logs** tab strip. The active tab renders one of its two children:
+`RoutinesPage` is the nav-level wrapper; it owns the page header and a three-tab strip. The sidebar Routines badge count equals the "Needs you" sub-tab count (both = `pending_response` runs), giving a precise drill-down from badge to inbox.
+
+| Tab | Component | Description |
+|---|---|---|
+| **Needs you** (first) | `RunLogs` (`filterStatuses=['pending_response','in_progress']`) | Inbox of runs waiting for a response; shows a count badge matching the sidebar badge |
+| **Routines** | `RoutinesManager` | List of all saved routines with enable/disable toggle and run-now button; "+ New routine" action row at top |
+| **Run Logs** | `RunLogs` (unfiltered) | Full history of all routine runs regardless of status |
+
+Additional components:
 
 | Component | Description |
 |---|---|
-| `RoutinesPage` | Outer shell: page header ("Routines"), Routines/Run Logs `<Tabs>` strip, conditionally renders child |
-| `RoutinesManager` | List of all saved routines with enable/disable toggle and run-now button; "+ New routine" action row at top |
+| `RoutinesPage` | Outer shell: page header ("Routines"), three-tab `<Tabs>` strip, `pendingCount` prop drives the Needs you count badge |
 | `RoutineForm` | Create / edit a routine: name, cron expression (with human-readable preview via `cronUtils.ts`), MCP actions, digest prompt |
 | `ServerCatalogPicker` | Browse and add servers from the built-in MCP catalog |
-| `RunLogs` | Table of all routine runs; click a row to expand; expanded view has "Raw output" / "Conversation" toggle |
+| `RunLogs` | Table of routine runs; click a row to expand; expanded view has "Raw output" / "Conversation" toggle; optional `filterStatuses` and `emptyMessage` props |
 
-`navigate:edit-routine` → opens the Routines sub-tab and opens `RoutineForm` in edit mode.  
-`navigate:run-chat` → opens the Run Logs sub-tab and auto-expands the target run in conversation view.  
-"View logs" toast action → navigates to the Run Logs sub-tab.
+Navigation:
+- Clicking **Routines** in the sidebar → auto-opens **Needs you** if `routinesBadge > 0`, otherwise lands on **Routines** tab.
+- `navigate:edit-routine` → opens the Routines sub-tab and opens `RoutineForm` in edit mode.  
+- `navigate:run-chat` → opens the Run Logs sub-tab and auto-expands the target run in conversation view (uses 'logs' so that resolved/dismissed runs from stale notifications are still reachable).  
+- "View" toast action → navigates to the Needs you sub-tab.
 
 #### Insights
 
@@ -229,6 +238,7 @@ Located in `src/renderer/src/` (shared between widget and main window):
 
 ## Changelog
 
+- 2026-06-13 — **"Needs you" inbox sub-tab in Routines:** `RoutinesPage.tsx` gains a third sub-tab ("Needs you", first tab, `Inbox` icon) that shows only `pending_response`/`in_progress` runs via `RunLogs` with a new `filterStatuses` prop; tab `count` prop is wired to `pendingCount` (= sidebar `routinesBadge`) so the badge drills precisely to the right spot. `RunLogs.tsx` gains optional `filterStatuses: RunStatus[]` and `emptyMessage: string` props (filtering is client-side at render time so open conversations are not collapsed when a run transitions status). `App.tsx`: `routinesTab` state widened to `RoutinesTab = 'needs' | 'routines' | 'logs'`; sidebar Routines click auto-lands on `'needs'` when `routinesBadge > 0`; completion toast action now navigates to `'needs'` ("View logs" label shortened to "View"); `navigate:run-chat` (OS notification click path) keeps pointing to `'logs'` so stale notifications for resolved runs still find the run. `RoutinesPage` exported `RoutinesTab` type imported into `App.tsx`.
 - 2026-06-10 — **Scope card is now read-only + dynamic to enabled integrations:** `Settings.tsx` — `ScopeCard` rewritten. All manual add/remove inputs and X-button chips removed. Scope now self-derives from check-in conversations. Card renders one section per scope-capable surface (`SCOPE_SURFACES` from `src/shared/scope-surfaces.ts`) that is currently enabled (i.e. the integration's `integrationId` appears in `AppConfig.mcp_servers`). Each section shows read-only chips from `AppConfig.scope.allowed[surface]`; empty = "no restriction" hint. If no scope-capable integration is connected, a single informational hint is shown. `CheckInPage.tsx` — `scopeUpdated` count from `CheckInExtractionSummary` is now rendered in the post–check-in summary (both the inline badge and the `summaryLine` helper) so scope derivation is visible to the user.
 - 2026-06-10 — **Scope card restyle + Danger Zone card:** `Settings.tsx` — `ScopeCard` now uses `.form-group`, `.form-label`, `.form-hint`, and `.form-input` classes (was broken: `className="input"` referenced an undefined CSS class; inline styles now replaced with shared design tokens). Removed unused `ScopeConfig` type import. Added `DangerZoneCard` component at the bottom of the Settings page with a two-step confirm-before-destroy factory reset button (`btn--danger`); calls `window.electron.system.factoryReset()`.
 - 2026-06-10 — **Widget↔main parity, auto-grow inputs, status dot alignment, Suggest re-proposal:**

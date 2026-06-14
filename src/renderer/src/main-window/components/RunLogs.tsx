@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import ChatThread from '../../widget/components/ChatThread'
-import type { RoutineRun, ChatMessage } from '../../../../../../shared/types'
+import type { RoutineRun, ChatMessage, RunStatus } from '../../../../../../shared/types'
 
 function formatTs(ts: string): string {
   return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -126,9 +126,11 @@ function RunDetail({ run, defaultView = 'output' }: RunDetailProps): React.React
 interface Props {
   initialRunId?: string | null
   onInitialRunHandled?: () => void
+  filterStatuses?: RunStatus[]
+  emptyMessage?: string
 }
 
-export default function RunLogs({ initialRunId, onInitialRunHandled }: Props): React.ReactElement {
+export default function RunLogs({ initialRunId, onInitialRunHandled, filterStatuses, emptyMessage }: Props): React.ReactElement {
   const [runs, setRuns] = useState<RoutineRun[]>([])
   const [expanded, setExpanded] = useState<string | null>(null)
   const [chatRunId, setChatRunId] = useState<string | null>(null)
@@ -141,6 +143,8 @@ export default function RunLogs({ initialRunId, onInitialRunHandled }: Props): R
       setLoading(false)
     })
   }, [])
+
+  const visible = filterStatuses ? runs.filter((r) => filterStatuses.includes(r.status)) : runs
 
   // Handle navigate:run-chat — auto-expand the target run in chat view
   useEffect(() => {
@@ -167,13 +171,13 @@ export default function RunLogs({ initialRunId, onInitialRunHandled }: Props): R
     <div>
       {loading ? (
         <div style={{ padding: 24, color: 'var(--text-muted)' }}>Loading…</div>
-      ) : runs.length === 0 ? (
+      ) : visible.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
-          No runs yet. Routines will appear here once they execute.
+          {emptyMessage ?? 'No runs yet. Routines will appear here once they execute.'}
         </div>
       ) : (
         <div className="card" style={{ padding: 0 }}>
-          {runs.map((run) => (
+          {visible.map((run) => (
             <div key={run.id} ref={expanded === run.id ? expandedRef : undefined}>
               <div className="run-log-row" style={{ cursor: 'pointer' }} onClick={() => handleExpand(run)}>
                 <div className={`run-log-row__status-dot run-log-row__status-dot--${run.status}`} />
