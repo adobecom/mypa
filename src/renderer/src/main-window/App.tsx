@@ -10,6 +10,7 @@ import PlanItemDetail from './components/PlanItemDetail'
 import CheckInPage from './components/CheckInPage'
 import InsightsPage from './components/InsightsPage'
 import RoutinesPage from './components/RoutinesPage'
+import type { RoutinesTab } from './components/RoutinesPage'
 import { ToastProvider, useToast } from './toast/ToastProvider'
 import type { AppConfig, RoutineRun, Intent, PlanItem } from '@shared/types'
 
@@ -19,7 +20,7 @@ type Page = 'routines' | 'settings' | 'memory' | 'usage' | 'plan' | 'checkin' | 
 // Subscribes to routine:run-started/completed and ambient:action-executed and
 // maps them to toasts. Must be called inside <ToastProvider>.
 
-function useRunToasts(setPage: (p: Page) => void, setRoutinesTab: (t: 'routines' | 'logs') => void): void {
+function useRunToasts(setPage: (p: Page) => void, setRoutinesTab: (t: RoutinesTab) => void): void {
   const toast = useToast()
   // Map runId → toastId so we can update a "running…" toast on completion
   const runToastMap = useRef<Map<string, string>>(new Map())
@@ -48,7 +49,7 @@ function useRunToasts(setPage: (p: Page) => void, setRoutinesTab: (t: 'routines'
         }
       } else {
         const opts = {
-          action: { label: 'View logs', onClick: () => { setRoutinesTab('logs'); setPage('routines') } }
+          action: { label: 'View', onClick: () => { setRoutinesTab('needs'); setPage('routines') } }
         }
         if (toastId) {
           toast.update(toastId, { variant: 'success', title: `${run.routine_name} complete`, ...opts })
@@ -134,7 +135,7 @@ const NAV_HIDDEN: Set<Page> = new Set(['plan'])
 // Inner shell (needs access to ToastProvider context via useRunToasts)
 function AppShell(): React.ReactElement {
   const [page, setPage] = useState<Page>('routines')
-  const [routinesTab, setRoutinesTab] = useState<'routines' | 'logs'>('routines')
+  const [routinesTab, setRoutinesTab] = useState<RoutinesTab>('routines')
   const [editRoutineId, setEditRoutineId] = useState<string | null>(null)
   const [activePlanItemId, setActivePlanItemId] = useState<string | null>(null)
   const [navigateRunId, setNavigateRunId] = useState<string | null>(null)
@@ -250,7 +251,7 @@ function AppShell(): React.ReactElement {
                   className={`nav-item${page === item.id ? ' active' : ''}`}
                   onClick={() => {
                     setPage(item.id)
-                    if (item.id === 'routines') setRoutinesTab('routines')
+                    if (item.id === 'routines') setRoutinesTab(routinesBadge > 0 ? 'needs' : 'routines')
                   }}
                 >
                   <span className="nav-item__icon">{item.icon}</span>
@@ -282,6 +283,7 @@ function AppShell(): React.ReactElement {
               onInitialRunHandled={() => setNavigateRunId(null)}
               tab={routinesTab}
               onTabChange={setRoutinesTab}
+              pendingCount={routinesBadge}
             />
           )}
           {page === 'memory' && <MemoryGraph />}
