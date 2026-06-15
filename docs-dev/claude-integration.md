@@ -116,14 +116,26 @@ Falls back gracefully: if Claude's output doesn't contain a JSON object, throws.
 
 ### `generateRoutineDigest(name, promptTemplate, rawOutput)`
 
-Summarizes MCP tool outputs for a routine run. Uses `runClaude` with a JSON-only prompt.
+Summarizes MCP tool outputs for a routine run. Uses `runClaude` with a 240 s timeout (larger than the default 120 s to handle big tool outputs).
 
 Returns:
 ```ts
-{ summary: string, items: string[], proposed_actions: string[] }
+{ summary: string, body: string }
 ```
 
-**Never throws.** Returns the graceful default `{ summary: '<name> completed', items: [], proposed_actions: [] }` on any failure — including `runClaude` errors, markdown-fenced responses, and JSON parse failures. Strips ` ```json ` fences before parsing so Claude's habit of wrapping JSON in code blocks doesn't cause errors.
+- `summary` — one-sentence headline (max ~120 chars), used as the OS notification body and run-row preview.
+- `body` — full markdown digest that follows the routine's prompt instructions, including any requested grouping or sections.
+
+The model is instructed to respond in the format:
+```
+SUMMARY: <one-sentence headline>
+
+<full markdown body>
+```
+
+Parsing is line-delimited (no JSON), so rich grouped output is never discarded. If no `SUMMARY:` line is present, the first non-empty line is used as the headline.
+
+**On failure:** logs the error with `console.error('[claude] routine digest failed:', err)` and returns `{ summary: 'Could not generate digest', body: 'The digest could not be generated. Reason: <message>. ...' }`. Never returns the silent `<name> completed` placeholder.
 
 ### `generateRoutineSetup(intent, servers)`
 
@@ -183,6 +195,7 @@ This clause is appended in `inferIntent` (`inference.ts`) **after** `buildOwnerC
 
 ## Changelog
 
+- 2026-06-15 — **Digest format overhaul:** `RoutineDigest` changed from `{ summary, items, proposed_actions }` to `{ summary, body }`; `generateRoutineDigest` now uses a line-delimited `SUMMARY: <headline>\n\n<markdown body>` format instead of a JSON schema, with a 240 s timeout (up from 120 s); on parse, extracts the `SUMMARY:` line as the notification headline and everything below as the full markdown body; on hard failure, logs to console and returns an honest error message rather than the silent `<name> completed` placeholder. `runClaude` gains an optional `timeoutMs` param (default 120 s unchanged for all other callers).
 - 2026-06-10 — **Standing directives clause:** added `buildDirectivesClause()` to `config.ts`; appended to the `inferIntent` system prompt alongside `buildOwnerClause()`; reads active hard memories via `dbGetActiveHardMemories()`. Hard memories are extracted from check-ins when the user states absolute rules; classification is done by the `checkin_extract` Claude call using a new `enforcement` field in the extraction JSON schema. Autonomous summarization (`memories.ts`) always defaults to `'soft'`. New `MemoryEnforcement` type in `src/shared/types.ts`.
 - 2026-06-09 — added `claudeEnv()` helper in `claude.ts`; both `runClaude` and `runClaudeStream` now pass `env: claudeEnv()` to `spawn`, injecting `ANTHROPIC_API_KEY` when `AppConfig.claude.apiKey` is set; if unset the process inherits the parent env (CLI's own auth)
 - 2026-06-07 — `runClaude` switched from `--output-format text` to `--output-format json`; added `source: UsageSource` param; both `runClaude` and `runClaudeStream` now call `recordUsage()` after each call; new `src/main/services/usage.ts` thin recorder

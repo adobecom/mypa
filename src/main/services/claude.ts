@@ -41,7 +41,8 @@ function claudeEnv(key?: string): NodeJS.ProcessEnv {
 export async function runClaude(
   systemPrompt: string,
   userPrompt: string,
-  source: UsageSource = 'other'
+  source: UsageSource = 'other',
+  timeoutMs: number = 120_000
 ): Promise<string> {
   const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
   const cfg = readConfig().claude
@@ -54,7 +55,7 @@ export async function runClaude(
     )
     let stdout = ''
     let stderr = ''
-    const timer = setTimeout(() => { proc.kill(); reject(new Error('Claude timed out')) }, 120_000)
+    const timer = setTimeout(() => { proc.kill(); reject(new Error('Claude timed out')) }, timeoutMs)
     proc.stdout.on('data', (d: Buffer) => { stdout += d.toString() })
     proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
     proc.on('close', (code) => {
@@ -241,8 +242,7 @@ If no time hint → "anytime".`,
 
 export interface RoutineDigest {
   summary: string
-  items: string[]
-  proposed_actions: string[]
+  body: string
 }
 
 export async function generateRoutineDigest(
@@ -250,52 +250,59 @@ export async function generateRoutineDigest(
   promptTemplate: string,
   rawOutput: string
 ): Promise<RoutineDigest> {
-  const defaultDigest: RoutineDigest = {
-    summary: `${routineName} completed`,
-    items: [],
-    proposed_actions: []
-  }
-
   let text: string
   try {
     const persona = readConfig().persona?.trim() || 'a personal assistant'
     text = await runClaude(
       `You are ${persona} digesting data feeds.${buildOwnerClause()}
-Respond ONLY with valid JSON matching the schema provided.`,
+Fully perform the analysis described in the Instructions below. Do not just acknowledge the task — carry it out completely.
+Format your response as:
+SUMMARY: <one-sentence headline of the most important finding, max 120 chars>
+
+<full markdown digest that follows any grouping or sections requested in the Instructions>`,
       `Routine: ${routineName}
 
 Instructions: ${promptTemplate}
 
 Raw data:
-${rawOutput}
-
-Return JSON:
-{
-  "summary": "one sentence headline (max 100 chars)",
-  "items": ["item needing attention", ...],
-  "proposed_actions": ["I can do X", "Want me to Y?", ...]
-}`,
-      'routine_digest'
+${rawOutput}`,
+      'routine_digest',
+      240_000
     )
-  } catch {
-    return defaultDigest
-  }
-
-  // Strip markdown fences if Claude wrapped the JSON
-  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '')
-  const jsonMatch = cleaned.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) return defaultDigest
-
-  try {
-    const parsed = JSON.parse(jsonMatch[0])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[claude] routine digest failed:', err)
     return {
-      summary: typeof parsed.summary === 'string' ? parsed.summary : defaultDigest.summary,
-      items: Array.isArray(parsed.items) ? parsed.items : [],
-      proposed_actions: Array.isArray(parsed.proposed_actions) ? parsed.proposed_actions : []
+      summary: 'Could not generate digest',
+      body: `The digest could not be generated. Reason: ${message}. The collected data is available under "Raw output".`
     }
-  } catch {
-    return defaultDigest
   }
+
+  // Parse the SUMMARY: prefix line and the markdown body below it.
+  // This format is robust — no JSON fragility, no hard cap on content length.
+  const lines = text.trim().split('\n')
+  const summaryLineIdx = lines.findIndex((l) => l.trimStart().toUpperCase().startsWith('SUMMARY:'))
+
+  let summary: string
+  let body: string
+
+  if (summaryLineIdx !== -1) {
+    summary = lines[summaryLineIdx].replace(/^.*SUMMARY:\s*/i, '').trim()
+    // Body = everything after the SUMMARY line, skipping any blank separator
+    const bodyLines = lines.slice(summaryLineIdx + 1)
+    const firstNonEmpty = bodyLines.findIndex((l) => l.trim().length > 0)
+    body = (firstNonEmpty === -1 ? bodyLines : bodyLines.slice(firstNonEmpty)).join('\n').trim()
+  } else {
+    // No SUMMARY: line — use the first non-empty line as headline, full text as body
+    const firstNonEmpty = lines.find((l) => l.trim().length > 0) ?? ''
+    summary = firstNonEmpty.trim().slice(0, 120)
+    body = text.trim()
+  }
+
+  if (!summary) summary = routineName
+  if (!body) body = text.trim()
+
+  return { summary, body }
 }
 
 // ─── Routine setup ───────────────────────────────────────────────────────────

@@ -12,12 +12,12 @@ Spawns the `claude` CLI for all AI work. See [claude-integration.md](claude-inte
 
 | Export | Description |
 |---|---|
-| `runClaude(systemPrompt, userPrompt, source?)` | One-shot JSON completion (120 s timeout); records usage |
+| `runClaude(systemPrompt, userPrompt, source?, timeoutMs?)` | One-shot JSON completion (default 120 s timeout, overridable); records usage |
 | `runClaudeWithMcp(systemPrompt, userPrompt, source?)` | One-shot with live MCP access; writes a temp `--mcp-config` file from connected servers, passes a read-only `--allowedTools` allowlist (tools whose names start with `get`/`list`/`search`/`read`/`fetch`/`view`/`find`/`show`/`describe`/`query`/`lookup`/`check`), then falls back to `runClaude` if no servers are connected |
 | `streamChat(history, userMessage, onChunk, onDone, rawContext?, streamId?, source?)` | Streaming multi-turn chat; records usage on completion |
 | `cancelStream(streamId)` | Kill an active stream by ID; returns `true` if found |
 | `generatePlanDraft(intent)` | Parse free-text intent → `PlanDraft` |
-| `generateRoutineDigest(name, promptTemplate, rawOutput)` | Summarize MCP output → `RoutineDigest` |
+| `generateRoutineDigest(name, promptTemplate, rawOutput)` | Summarize MCP output → `RoutineDigest` (`{ summary, body }`) |
 | `generateRoutineSetup(intent, servers)` | Natural-language intent → validated `RoutineSetupDraft` |
 
 ---
@@ -84,10 +84,10 @@ Orchestrates the full MCP → Claude → notification pipeline for a routine run
 
 **Execution steps (Phase B):**
 1. Execute all MCP actions → collect `rawOutput`
-2. `generateRoutineDigest` → persist digest + chat message
+2. `generateRoutineDigest` → persist `{ summary, body }` digest + chat message (renders the full markdown body); on failure logs the error and stores an honest "could not generate" message
 3. `inferRoutineIntents(name, rawOutput)` → up to 3 `IntentObject`s
 4. `routeIntent(obj, 'routine', ...)` for each — tier resolution, DB persist, graph node, notify
-5. OS notification (digest summary) + push events to both windows
+5. OS notification (digest `summary`) + push events to both windows
 
 ---
 
@@ -311,5 +311,6 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 - 2026-06-07 — `routines.ts`: `routine:run-started` and `routine:run-completed` now sent via `broadcast()` (both widget + main windows) instead of widget-only `webContents.send`; `ambient.ts`: emits new `ambient:action-executed` broadcast after a tier-0 intent auto-executes successfully; added `broadcast()` helper to `windows.ts`
 - 2026-06-07 — added `getOwnerHandles()` and `buildOwnerClause()` to `config.ts`; added `resolveOwnerHandles()` to `mcp.ts`; owner clause injected into all AI system prompts; owner nodes tagged `you (handle)` in `renderPacketForPrompt`
 - 2026-06-07 — added `memory-export.ts` service; fixed `autonomy.ts` two-level tier resolution + streak reset; hardened `generateRoutineDigest` to never throw (returns graceful default)
+- 2026-06-15 — `routines.ts` + `claude.ts`: rewrote `generateRoutineDigest` to use a free-form `{ summary, body }` digest instead of the rigid `{ summary, items, proposed_actions }` JSON schema; the prompt now instructs the model to fully carry out the routine's analysis and format a markdown body following the prompt's requested grouping; response parsing is line-delimited (`SUMMARY:` prefix line + markdown body) so rich grouped output is never discarded; `runClaude` gains an optional `timeoutMs` param (digest uses 240 s); on failure, logs with `console.error('[claude] routine digest failed:')` and returns an honest "Could not generate digest" message instead of the silent `<name> completed` placeholder. `RoutineCard.tsx` `parseDigest` type updated to `{ summary, body }`; redundant `items` bullet block removed (body in the chat thread covers it).
 - 2026-06-10 — `embeddings.ts`: migrated from deprecated `@xenova/transformers` (v2) to `@huggingface/transformers` (v3, transformers.js successor); `quantized: true` option replaced with `dtype: 'q8'` (v3 API); clears the critical `protobufjs` CVE (GHSA-xq3m-2v4x-88gg and 7 others) pulled in via the old onnxruntime-web transitive dep. Build toolchain upgraded: vite 5→7, electron-vite 2→5, @vitejs/plugin-react 4→5, electron-builder 25→26, @electron/rebuild 3→4, uuid 10→11 (plus overrides). Electron stays at 33.x (better-sqlite3 v8 API incompatible with electron 39.8.5+ — known upstream issue; CVE debt tracked separately).
 - 2026-06-06 — initial documentation; reflects services as of commit d8a8774
