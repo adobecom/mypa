@@ -1,6 +1,6 @@
 import { runClaude } from './claude'
 import { readConfig, buildOwnerClause } from './config'
-import { embedText, cosineSim } from './embeddings'
+import { embedText, cosineSim, floatToBlob, blobToFloat, MODEL_NAME } from './embeddings'
 import { sanitizeLabel, kindToNodeType } from './memory-graph'
 import {
   dbGetRecentSignals,
@@ -12,7 +12,9 @@ import {
   dbGetActiveMemories,
   dbGetMemoriesForNode,
   dbSupersedeMemory,
-  dbGetNodeFirstSeen
+  dbGetNodeFirstSeen,
+  dbSetMemoryEmbedding,
+  dbGetMemoryEmbedding,
 } from '../db/index'
 import type { Memory, MemoryInput, NodeType } from '@shared/types'
 
@@ -146,19 +148,27 @@ export async function runMemorySummarization(): Promise<void> {
     // Resolve entity key to a graph node id
     const node_id = resolveEntityToNodeId(raw.entity)
 
+    // Embed the content once — reused for both dedup and persistent storage.
+    const qVec = await embedText(content)
+
     // Dedup / supersede: prefer semantic similarity if embeddings are available,
     // fall back to node_id+type matching.
     const candidates: Memory[] = node_id
       ? dbGetMemoriesForNode(node_id).filter((m) => m.type === type)
       : dbGetActiveMemories(20).filter((m) => m.type === type && m.surface === surface)
 
-    const toSupersede = await findSuperseded(content, candidates, node_id)
+    const toSupersede = await findSuperseded(qVec, candidates, node_id)
 
     // Autonomous summarization never mints hard rules — that requires an explicit
     // manager statement in a check-in. Default enforcement is always 'soft' here.
     const input: MemoryInput = { content, type, enforcement: 'soft', confidence, importance, surface, node_id }
     const created_memory = dbCreateMemory(input)
     created++
+
+    // Persist the embedding so future dedup reads from DB instead of re-running ONNX inference.
+    if (qVec) {
+      dbSetMemoryEmbedding(created_memory.id, floatToBlob(qVec), MODEL_NAME)
+    }
 
     if (toSupersede) {
       dbSupersedeMemory(toSupersede.id, created_memory.id)
@@ -210,19 +220,21 @@ function resolveEntityToNodeId(entity: string | undefined): string | null {
 // ─── Dedup helper ─────────────────────────────────────────────────────────────
 
 async function findSuperseded(
-  newContent: string,
+  qVec: Float32Array | null,
   candidates: Memory[],
   node_id: string | null
 ): Promise<Memory | null> {
   if (candidates.length === 0) return null
 
-  // Try semantic similarity first (cap at 5 to keep the loop bounded)
-  const qVec = await embedText(newContent)
+  // Try semantic similarity first (cap at 5 to keep the loop bounded).
+  // Read each candidate's stored embedding blob to avoid live ONNX re-inference;
+  // fall back to embedText only for older rows that haven't been backfilled yet.
   if (qVec) {
     let bestSim = 0
     let bestCandidate: Memory | null = null
     for (const m of candidates.slice(0, 5)) {
-      const cVec = await embedText(m.content)
+      const stored = dbGetMemoryEmbedding(m.id)
+      const cVec = stored ? blobToFloat(stored) : await embedText(m.content)
       if (!cVec) continue
       const sim = cosineSim(qVec, cVec)
       if (sim > bestSim) { bestSim = sim; bestCandidate = m }

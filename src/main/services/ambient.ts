@@ -26,7 +26,7 @@ import { startIngestion, stopIngestion, pollOnce } from './ingestion'
 import { ingestSignalIntoGraph, assembleContextPacket, startDecayTimer, stopDecayTimer } from './memory-graph'
 import { evalEventTriggers, evalTime, coalesceHits, evalWaitingOnMeFromGraph, evalStaleAndMine } from './triggers'
 import { inferIntent, reproposeIntent } from './inference'
-import { enqueueEmbeddings, enqueueBackfill } from './embeddings'
+import { enqueueEmbeddings, enqueueBackfill, enqueueMemoryBackfill } from './embeddings'
 import { runMemorySummarization } from './memories'
 import {
   resolveTier,
@@ -74,10 +74,11 @@ export function startAmbient(getWin: () => BrowserWindow | null): void {
   startIngestion(onNewSignals)
   scheduleTimeTriggers()
   startSynthesisTimer()
-  // Kick off one-time backfill of any signals that were inserted before
+  // Kick off one-time backfill of any signals and memories that were inserted before
   // the embedding model was available (fire-and-forget, model may not be
-  // downloaded yet — enqueueBackfill degrades gracefully)
+  // downloaded yet — both functions degrade gracefully)
   enqueueBackfill()
+  enqueueMemoryBackfill()
   console.log('[ambient] started')
 }
 

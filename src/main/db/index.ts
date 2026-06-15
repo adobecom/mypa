@@ -311,10 +311,14 @@ export function dbUpdatePlanItemStatus(id: string, status: PlanItemStatus): void
   const current = dbGetPlanItem(id)
   if (!current) return
   const timestamp = new Date().toISOString()
-  getDb().prepare('UPDATE plan_items SET status = ? WHERE id = ?').run(status, id)
-  getDb()
-    .prepare('INSERT INTO plan_item_history (id, item_id, from_status, to_status, timestamp) VALUES (?,?,?,?,?)')
-    .run(uuidv4(), id, current.status, status, timestamp)
+  const historyId = uuidv4()
+  const fromStatus = current.status
+  const db = getDb()
+  db.transaction(() => {
+    db.prepare('UPDATE plan_items SET status = ? WHERE id = ?').run(status, id)
+    db.prepare('INSERT INTO plan_item_history (id, item_id, from_status, to_status, timestamp) VALUES (?,?,?,?,?)')
+      .run(historyId, id, fromStatus, status, timestamp)
+  })()
 }
 
 export function dbDeletePlanItem(id: string): void {
@@ -374,7 +378,8 @@ export function dbInsertSignal(s: SignalInput): { inserted: boolean; id: string 
     if (existing.fingerprint === s.fingerprint) {
       return { inserted: false, id: '' }
     }
-    // Update the row with the new state — mark unprocessed so triggers re-evaluate it
+    // Update the row with the new state — mark unprocessed so triggers re-evaluate it.
+    // Wrapped in a transaction so the optional duplicate-delete + update are atomic.
     const updateStmt = db.prepare(
       `UPDATE signals SET fingerprint=?, title=?, body=?, actor=?, url=?, raw=?, occurred_at=?,
        observed_at=?, processed=0, relation=?, directed=?, last_actor=?, due_at=? WHERE id=?`
@@ -385,16 +390,18 @@ export function dbInsertSignal(s: SignalInput): { inserted: boolean; id: string 
       s.relation ?? null, s.directed ? 1 : 0, s.last_actor ?? null, s.due_at ?? null,
       existing.id
     ] as const
-    try {
-      updateStmt.run(...updateArgs)
-    } catch (e: any) {
-      if (e?.code !== 'SQLITE_CONSTRAINT_UNIQUE') throw e
-      // A sibling row with the same fingerprint exists (leftover from old 3-column constraint).
-      // Delete duplicates and retry.
-      db.prepare('DELETE FROM signals WHERE surface=? AND external_id=? AND id!=?')
-        .run(s.surface, s.external_id, existing.id)
-      updateStmt.run(...updateArgs)
-    }
+    db.transaction(() => {
+      try {
+        updateStmt.run(...updateArgs)
+      } catch (e: any) {
+        if (e?.code !== 'SQLITE_CONSTRAINT_UNIQUE') throw e
+        // A sibling row with the same fingerprint exists (leftover from old 3-column constraint).
+        // Delete duplicates and retry.
+        db.prepare('DELETE FROM signals WHERE surface=? AND external_id=? AND id!=?')
+          .run(s.surface, s.external_id, existing.id)
+        updateStmt.run(...updateArgs)
+      }
+    })()
     return { inserted: true, id: existing.id }
   }
 
@@ -504,6 +511,30 @@ export function dbGetSignalsMissingEmbeddings(limit = 50): Signal[] {
     .prepare('SELECT * FROM signals WHERE embedding IS NULL ORDER BY observed_at DESC LIMIT ?')
     .all(limit) as any[]
   return rows.map(deserializeSignal)
+}
+
+// ─── Memory embeddings ────────────────────────────────────────────────────────
+
+export function dbSetMemoryEmbedding(id: string, embedding: Buffer, model: string): void {
+  getDb()
+    .prepare('UPDATE memories SET embedding = ?, embedding_model = ? WHERE id = ?')
+    .run(embedding, model, id)
+}
+
+/** Returns the raw embedding blob for a memory, or null if not yet computed. */
+export function dbGetMemoryEmbedding(id: string): Buffer | null {
+  const row = getDb()
+    .prepare('SELECT embedding FROM memories WHERE id = ?')
+    .get(id) as { embedding: Buffer | null } | undefined
+  return row?.embedding ?? null
+}
+
+/** Returns active memories that have no stored embedding (for backfill). */
+export function dbGetMemoriesMissingEmbeddings(limit = 50): Memory[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM memories WHERE embedding IS NULL AND status = 'active' ORDER BY created_at DESC LIMIT ?")
+    .all(limit) as any[]
+  return rows.map(deserializeMemory)
 }
 
 // ─── Graph nodes ──────────────────────────────────────────────────────────────
@@ -1036,8 +1067,10 @@ export function dbTouchMemoryAccessed(ids: string[]): void {
 }
 
 function deserializeMemory(row: any): Memory {
+  // Strip embedding columns — internal DB concerns, must not leak over IPC
+  const { embedding: _emb, embedding_model: _model, ...rest } = row
   return {
-    ...row,
+    ...rest,
     enforcement: row.enforcement === 'hard' ? 'hard' : 'soft'
   }
 }
