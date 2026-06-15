@@ -24,12 +24,20 @@ export default function ChatThread({
   onStop
 }: Props): React.ReactElement {
   const [input, setInput] = useState('')
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const threadRef = useRef<HTMLDivElement>(null)
   const inputRef = useAutoGrowTextarea(input)
 
+  // Scroll the inner chat container to bottom; never touches the window scroll.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = threadRef.current
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }, [messages, streamingContent])
+
+  // Focus the input when this component mounts (panel/pod just opened).
+  useEffect(() => {
+    const el = inputRef.current
+    if (el && !el.disabled) el.focus({ preventScroll: true })
+  }, [])
 
   const handleSend = () => {
     if (!input.trim() || sendDisabled || streaming) return
@@ -46,7 +54,7 @@ export default function ChatThread({
 
   return (
     <div>
-      <div className="chat-thread">
+      <div className="chat-thread" ref={threadRef}>
         {messages.filter((msg) => msg.content.trim() !== '').map((msg) => (
           <ChatBubble key={msg.id} message={msg} />
         ))}
@@ -86,7 +94,6 @@ export default function ChatThread({
             <div className="chat-message__bubble">{error}</div>
           </div>
         )}
-        <div ref={bottomRef} />
       </div>
 
       <div className="chat-input-row">
