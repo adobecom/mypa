@@ -362,9 +362,7 @@ function revalidatePendingIntents(): void {
       }
     } else {
       // Item is still present — reset miss counter
-      if (intentMissCount.has(intent.id)) {
-        intentMissCount.delete(intent.id)
-      }
+      intentMissCount.delete(intent.id)
     }
   }
 }
@@ -373,8 +371,11 @@ function startRevalidationTimer(): void {
   if (revalidationIntervalId) return
   const cfg = readConfig()
   const intervalMs = cfg.ambient?.pollIntervalMs ?? 5 * 60 * 1000
+  // Serialize through inferenceQueue so timer ticks never race with ambientPollNow on intentMissCount.
   revalidationIntervalId = setInterval(() => {
-    try { revalidatePendingIntents() } catch (e) { console.error('[ambient] revalidation error:', e) }
+    inferenceQueue = inferenceQueue
+      .then(() => revalidatePendingIntents())
+      .catch((e) => console.error('[ambient] revalidation error:', e))
   }, intervalMs)
 }
 
