@@ -21,9 +21,10 @@ type RunView = 'output' | 'chat'
 interface RunDetailProps {
   run: RoutineRun
   defaultView?: RunView
+  onRunChange?: (run: RoutineRun) => void
 }
 
-function RunDetail({ run, defaultView = 'output' }: RunDetailProps): React.ReactElement {
+function RunDetail({ run, defaultView = 'chat', onRunChange }: RunDetailProps): React.ReactElement {
   const [view, setView] = useState<RunView>(defaultView)
   const [thread, setThread] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState(false)
@@ -75,22 +76,32 @@ function RunDetail({ run, defaultView = 'output' }: RunDetailProps): React.React
     setStreamContent('')
   }
 
+  const handleDismiss = async () => {
+    await api.routines.updateRunStatus(run.id, 'dismissed')
+    onRunChange?.({ ...run, status: 'dismissed' })
+  }
+
+  const handleResolve = async () => {
+    await api.routines.updateRunStatus(run.id, 'resolved')
+    onRunChange?.({ ...run, status: 'resolved' })
+  }
+
   return (
     <div style={{ background: 'var(--bg-elevated)', borderTop: '1px solid var(--border-muted)', padding: '12px 16px' }}>
       <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-        <button
-          className={`btn ${view === 'output' ? 'btn--primary' : 'btn--ghost'}`}
-          style={{ fontSize: 11, padding: '3px 10px' }}
-          onClick={() => setView('output')}
-        >
-          Raw output
-        </button>
         <button
           className={`btn ${view === 'chat' ? 'btn--primary' : 'btn--ghost'}`}
           style={{ fontSize: 11, padding: '3px 10px' }}
           onClick={() => setView('chat')}
         >
           Conversation
+        </button>
+        <button
+          className={`btn ${view === 'output' ? 'btn--primary' : 'btn--ghost'}`}
+          style={{ fontSize: 11, padding: '3px 10px' }}
+          onClick={() => setView('output')}
+        >
+          Raw output
         </button>
       </div>
 
@@ -109,15 +120,29 @@ function RunDetail({ run, defaultView = 'output' }: RunDetailProps): React.React
           {run.raw_output ?? 'No raw output'}
         </div>
       ) : (
-        <ChatThread
-          messages={thread}
-          streaming={streaming}
-          streamingContent={streamContent}
-          onSend={handleSend}
-          onStop={handleStop}
-          sendDisabled={streaming || run.status === 'running'}
-          error={chatError}
-        />
+        <>
+          <ChatThread
+            messages={thread}
+            streaming={streaming}
+            streamingContent={streamContent}
+            onSend={handleSend}
+            onStop={handleStop}
+            sendDisabled={streaming || run.status === 'running'}
+            error={chatError}
+          />
+          <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
+            {run.status !== 'dismissed' && run.status !== 'resolved' && (
+              <button className="btn btn--ghost" onClick={handleDismiss} style={{ fontSize: 11 }}>
+                Dismiss
+              </button>
+            )}
+            {(run.status === 'in_progress' || run.status === 'pending_response') && (
+              <button className="btn btn--primary" onClick={handleResolve} style={{ fontSize: 11 }}>
+                Mark resolved
+              </button>
+            )}
+          </div>
+        </>
       )}
     </div>
   )
@@ -133,8 +158,10 @@ interface Props {
 export default function RunLogs({ initialRunId, onInitialRunHandled, filterStatuses, emptyMessage }: Props): React.ReactElement {
   const [runs, setRuns] = useState<RoutineRun[]>([])
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [chatRunId, setChatRunId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+
+  const handleRunChange = (updated: RoutineRun) =>
+    setRuns((prev) => prev.map((r) => (r.id === updated.id ? updated : r)))
   const expandedRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -150,7 +177,6 @@ export default function RunLogs({ initialRunId, onInitialRunHandled, filterStatu
   useEffect(() => {
     if (initialRunId && !loading) {
       setExpanded(initialRunId)
-      setChatRunId(initialRunId)
       onInitialRunHandled?.()
       // Scroll into view after a brief render delay
       setTimeout(() => expandedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
@@ -158,13 +184,7 @@ export default function RunLogs({ initialRunId, onInitialRunHandled, filterStatu
   }, [initialRunId, loading])
 
   const handleExpand = (run: RoutineRun) => {
-    if (expanded === run.id) {
-      setExpanded(null)
-      setChatRunId(null)
-    } else {
-      setExpanded(run.id)
-      setChatRunId(null)
-    }
+    setExpanded(expanded === run.id ? null : run.id)
   }
 
   return (
@@ -195,7 +215,8 @@ export default function RunLogs({ initialRunId, onInitialRunHandled, filterStatu
               {expanded === run.id && (
                 <RunDetail
                   run={run}
-                  defaultView={chatRunId === run.id ? 'chat' : 'output'}
+                  defaultView="chat"
+                  onRunChange={handleRunChange}
                 />
               )}
             </div>
