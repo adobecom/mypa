@@ -338,9 +338,11 @@ export interface Signal {
   directed: boolean           // true when latest non-owner actor acted on an item the owner is responsible for
   last_actor: string | null   // latest comment/event author (fixes actor=original-author blind spot)
   due_at: string | null       // deadline from Jira duedate / GitHub milestone
+  // Freshness tracking — set by the DB layer on every poll hit (even unchanged fingerprint)
+  last_seen_at: string | null // ISO timestamp of the last adapter poll that returned this signal
 }
 
-export type SignalInput = Omit<Signal, 'id' | 'observed_at' | 'processed'>
+export type SignalInput = Omit<Signal, 'id' | 'observed_at' | 'processed' | 'last_seen_at'>
 
 export interface GraphNode {
   id: string

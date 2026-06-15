@@ -404,6 +404,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
              </>
            ) :
            intent.status === 'dismissed' ? 'Dismissed' :
+           intent.status === 'expired' ? (intent.error ?? 'No longer relevant') :
            intent.status === 'failed' ? `Failed: ${intent.error ?? ''}` : intent.status}
         </div>
       )}

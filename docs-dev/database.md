@@ -119,6 +119,11 @@ Raw observed events from external surfaces. Deduplicated by `UNIQUE(surface, ext
 | `processed` | INTEGER | 0 / 1 — whether ingested into the graph |
 | `embedding` | BLOB | Nullable — local embedding vector |
 | `embedding_model` | TEXT | Nullable — model name that produced the embedding |
+| `relation` | TEXT | Nullable — `review_requested \| assigned \| mentioned \| involved \| dm \| thread_reply` |
+| `directed` | INTEGER | 0 / 1 — 1 when a non-owner actor directed this item at the owner |
+| `last_actor` | TEXT | Nullable — most recent commenter / event author |
+| `due_at` | TEXT | Nullable — deadline from Jira duedate or GitHub milestone |
+| `last_seen_at` | TEXT | Nullable — ISO timestamp of the last adapter poll that returned this signal (updated on every poll hit, even unchanged fingerprint); used by freshness revalidation to detect disappeared items |
 
 #### `intents`
 
@@ -288,6 +293,7 @@ All indexes use `CREATE INDEX IF NOT EXISTS`.
 | `idx_plan_items_status` | `plan_items` | `status` | Filter by status |
 | `idx_signals_unprocessed` | `signals` | `processed, observed_at` | Find unprocessed signals for ingestion |
 | `idx_signals_surface` | `signals` | `surface, occurred_at` | Surface-scoped queries |
+| `idx_signals_last_seen` | `signals` | `surface, last_seen_at` | Freshness revalidation — find signals not seen recently per surface |
 | `idx_graph_edges_src` | `graph_edges` | `src_id` | Outgoing edges |
 | `idx_graph_edges_dst` | `graph_edges` | `dst_id` | Incoming edges |
 | `idx_graph_nodes_weight` | `graph_nodes` | `weight` | Top-N by relevance |
@@ -357,6 +363,7 @@ Vectors are stored as raw little-endian Float32 BLOBs and similarity search is p
 
 ## Changelog
 
+- 2026-06-15 — **Freshness revalidation — `signals.last_seen_at`:** `signals` table gains `last_seen_at TEXT` (nullable) via additive `ALTER TABLE` migration. New index `idx_signals_last_seen ON signals(surface, last_seen_at)`. `dbInsertSignal` now stamps `last_seen_at = observed_at` on every path: INSERT, changed-fingerprint UPDATE, and the previously no-op unchanged-fingerprint path (which now does a cheap `UPDATE signals SET last_seen_at = ? WHERE id = ?` before returning). `deserializeSignal` includes `last_seen_at`. `Signal` interface and `SignalInput` type updated (`last_seen_at` omitted from `SignalInput` since it is set by the DB layer). Used by `revalidatePendingIntents()` in `ambient.ts` to detect work items that have disappeared from active adapter feeds.
 - 2026-06-15 — **Memory embeddings + transactions + pragma tuning:** `memories` table gains two new nullable columns via additive `ALTER TABLE` migration: `embedding BLOB` and `embedding_model TEXT` (mirrors the existing `signals` pattern). New DB helpers: `dbSetMemoryEmbedding(id, buf, model)`, `dbGetMemoryEmbedding(id) → Buffer | null`, `dbGetMemoriesMissingEmbeddings(limit) → Memory[]`. `deserializeMemory` now strips the embedding columns before returning (same pattern as `deserializeSignal`). `embeddings.ts` exports `MODEL_NAME` (was private) and adds `enqueueMemoryBackfill()` which drains missing embeddings in batches of 100 via the shared serialized queue; called fire-and-forget from `startAmbient` alongside the existing `enqueueBackfill`. `memories.ts` — `findSuperseded` now accepts a pre-computed `Float32Array | null` query vector (computed once in the caller) and reads each candidate's stored BLOB via `dbGetMemoryEmbedding`, falling back to live `embedText` only for unbackfilled rows; after `dbCreateMemory` the query vector is persisted via `dbSetMemoryEmbedding`. Two multi-statement writes wrapped in `db.transaction()`: `dbUpdatePlanItemStatus` (UPDATE plan_items + INSERT plan_item_history) and `dbInsertSignal` update path (UPDATE + optional DELETE-dup + retry). Pragmas added to the initial `db.exec()` block: `PRAGMA synchronous = NORMAL` (safe with WAL, fewer fsyncs) and `PRAGMA busy_timeout = 5000` (waits instead of throwing SQLITE_BUSY).
 - 2026-06-11 — **"Needs me" relation fields on signals; urgency on intents:** `signals` table gains four columns via additive `ALTER TABLE` migrations: `relation TEXT` (review_requested/assigned/mentioned/involved/dm/thread_reply), `directed INTEGER NOT NULL DEFAULT 0` (1 = latest non-owner actor directed this at the owner), `last_actor TEXT` (latest comment/event author), `due_at TEXT` (Jira duedate). `intents` table gains `urgency REAL NOT NULL DEFAULT 0`. All columns added via `tryExec` (safe on existing DBs). The `signals_mig` rebuild path updated to include the four new columns with safe defaults. `dbInsertSignal` INSERT and UPDATE statements updated to include the new columns. `deserializeSignal` coerces `directed: row.directed === 1`. `dbCreateIntent` INSERT includes `urgency`. New `dbGetDirectedSignals()` function returns signals with `directed=1` ordered by `observed_at DESC`.
 - 2026-06-10 — **Hard/soft memory enforcement:** added `enforcement TEXT NOT NULL DEFAULT 'soft'` column to `memories` (additive `ALTER TABLE` migration). New DB helper `dbGetActiveHardMemories()` returns all active hard memories (no cap), used by `buildDirectivesClause()` in `config.ts` to inject them as trusted standing directives into inference system prompts. New `MemoryEnforcement` and `ScopeConfig` types in `src/shared/types.ts`. New `src/main/services/scope.ts` with `violatesScope(obj, focusNodes)` deterministic filter applied at both ambient chokepoints (`runAmbientCycle` and `routeIntent`). `AppConfig` extended with `scope?: ScopeConfig`.
