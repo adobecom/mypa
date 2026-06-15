@@ -374,21 +374,23 @@ export function dbInsertSignal(s: SignalInput): { inserted: boolean; id: string 
     .get(s.surface, s.external_id) as { id: string; fingerprint: string } | undefined
 
   if (existing) {
-    // Only treat as "new" if the fingerprint changed (i.e., the item actually changed)
+    // Always stamp last_seen_at to record that this item was observed in this poll cycle.
+    // This happens even when the fingerprint is unchanged — it's the freshness heartbeat.
     if (existing.fingerprint === s.fingerprint) {
+      db.prepare('UPDATE signals SET last_seen_at = ? WHERE id = ?').run(observed_at, existing.id)
       return { inserted: false, id: '' }
     }
     // Update the row with the new state — mark unprocessed so triggers re-evaluate it.
     // Wrapped in a transaction so the optional duplicate-delete + update are atomic.
     const updateStmt = db.prepare(
       `UPDATE signals SET fingerprint=?, title=?, body=?, actor=?, url=?, raw=?, occurred_at=?,
-       observed_at=?, processed=0, relation=?, directed=?, last_actor=?, due_at=? WHERE id=?`
+       observed_at=?, processed=0, relation=?, directed=?, last_actor=?, due_at=?, last_seen_at=? WHERE id=?`
     )
     const updateArgs = [
       s.fingerprint, s.title, s.body, s.actor, s.url,
       JSON.stringify(s.raw), s.occurred_at ?? null, observed_at,
       s.relation ?? null, s.directed ? 1 : 0, s.last_actor ?? null, s.due_at ?? null,
-      existing.id
+      observed_at, existing.id
     ] as const
     db.transaction(() => {
       try {
@@ -405,19 +407,20 @@ export function dbInsertSignal(s: SignalInput): { inserted: boolean; id: string 
     return { inserted: true, id: existing.id }
   }
 
-  // New signal — insert
+  // New signal — insert (last_seen_at = observed_at since this is the first sighting)
   const result = db
     .prepare(
       `INSERT OR IGNORE INTO signals
         (id, surface, kind, external_id, fingerprint, title, body, actor, url, raw, occurred_at, observed_at, processed,
-         relation, directed, last_actor, due_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)`
+         relation, directed, last_actor, due_at, last_seen_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)`
     )
     .run(
       id, s.surface, s.kind, s.external_id, s.fingerprint,
       s.title, s.body, s.actor, s.url,
       JSON.stringify(s.raw), s.occurred_at ?? null, observed_at,
-      s.relation ?? null, s.directed ? 1 : 0, s.last_actor ?? null, s.due_at ?? null
+      s.relation ?? null, s.directed ? 1 : 0, s.last_actor ?? null, s.due_at ?? null,
+      observed_at
     )
   return { inserted: result.changes > 0, id: result.changes > 0 ? id : '' }
 }
@@ -481,6 +484,7 @@ function deserializeSignal(row: any): Signal {
     ...rest,
     processed: row.processed === 1,
     directed: row.directed === 1,
+    last_seen_at: row.last_seen_at ?? null,
     raw: safeJsonParse<Record<string, unknown>>(row.raw, {})
   }
 }

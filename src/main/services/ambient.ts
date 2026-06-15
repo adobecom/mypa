@@ -18,11 +18,12 @@ import {
   dbGetIntentThread,
   dbReproposeIntent,
   dbGetNodeById,
+  dbGetSignalByExternal,
 } from '../db/index'
 import { readConfig } from './config'
 import { violatesScope } from './scope'
 import { callTool } from './mcp'
-import { startIngestion, stopIngestion, pollOnce } from './ingestion'
+import { startIngestion, stopIngestion, pollOnce, getLastCompletePollAt } from './ingestion'
 import { ingestSignalIntoGraph, assembleContextPacket, startDecayTimer, stopDecayTimer } from './memory-graph'
 import { evalEventTriggers, evalTime, coalesceHits, evalWaitingOnMeFromGraph, evalStaleAndMine } from './triggers'
 import { inferIntent, reproposeIntent } from './inference'
@@ -42,7 +43,7 @@ import {
 } from './autonomy'
 import { setTrayState } from '../tray'
 import { broadcast, updateBadgeCount } from '../windows'
-import type { Signal, Intent, IntentObject, TriggerKind, TrayState, DigestSlot, AmbientDigest, Tier, ChatMessage } from '@shared/types'
+import type { Signal, Intent, IntentObject, TriggerKind, TrayState, DigestSlot, AmbientDigest, Tier, ChatMessage, IntentSurface } from '@shared/types'
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
@@ -51,6 +52,10 @@ const timeTriggerjobs = new Map<string, cron.ScheduledTask>()
 let inferenceQueue: Promise<void> = Promise.resolve()
 const MAX_INTENTS_PER_CYCLE = 3
 let synthesisIntervalId: ReturnType<typeof setInterval> | null = null
+let revalidationIntervalId: ReturnType<typeof setInterval> | null = null
+// Tracks how many consecutive complete polls each intent's work-item signals were absent.
+// Reset to 0 when the item reappears. Cleared when the intent is expired.
+const intentMissCount = new Map<string, number>()
 
 // ─── Start / stop ─────────────────────────────────────────────────────────────
 
@@ -74,6 +79,7 @@ export function startAmbient(getWin: () => BrowserWindow | null): void {
   startIngestion(onNewSignals)
   scheduleTimeTriggers()
   startSynthesisTimer()
+  startRevalidationTimer()
   // Kick off one-time backfill of any signals and memories that were inserted before
   // the embedding model was available (fire-and-forget, model may not be
   // downloaded yet — both functions degrade gracefully)
@@ -86,6 +92,7 @@ export function stopAmbient(): void {
   stopIngestion()
   stopDecayTimer()
   stopSynthesisTimer()
+  stopRevalidationTimer()
   for (const task of timeTriggerjobs.values()) task.stop()
   timeTriggerjobs.clear()
   getWidgetWin = null
@@ -249,6 +256,135 @@ function startSynthesisTimer(): void {
 function stopSynthesisTimer(): void {
   if (synthesisIntervalId) clearInterval(synthesisIntervalId)
   synthesisIntervalId = null
+}
+
+// ─── Freshness revalidation ───────────────────────────────────────────────────
+// Detects when a queued intent's underlying work item has disappeared from the
+// user's active feed — closed PR, resolved issue, un-assigned ticket, etc.
+//
+// The mechanism is fully surface-agnostic: it uses the universal observation that
+// any work item which was relevant to the user will stop appearing in adapter poll
+// results once it's no longer active. No per-surface "is it closed?" logic needed.
+//
+// Safeguards against false positives:
+//   1. Surface health gate — only expires when the surface adapter reports a complete poll.
+//   2. Pagination guard  — adapters set complete=false if any query hit its page limit.
+//   3. 2-poll debounce   — requires 2 consecutive misses before expiring.
+//   4. All-items rule    — a multi-focus intent only expires when ALL work-item signals vanish.
+
+// Node types that map to signals (work items). Non-work-item nodes (person, repo, etc.)
+// are skipped — they don't disappear when a PR is closed.
+const WORK_ITEM_NODE_TYPES = new Set(['pull_request', 'issue', 'message', 'document'])
+
+function revalidatePendingIntents(): void {
+  const win = getWidgetWin?.() ?? null
+  const pending = dbGetPendingIntents()
+
+  for (const intent of pending) {
+    const focusNodes = (intent.context_packet?.focusNodes ?? []) as Array<{
+      id?: string
+      key?: string
+      type?: string
+    }>
+
+    // Collect (surface, signal) pairs for work-item focus nodes only.
+    // Node key format: "${surface}:${kind}:${external_id}" — kind === node type for work items.
+    const workItems: Array<{ surface: IntentSurface; signal: ReturnType<typeof dbGetSignalByExternal> }> = []
+    for (const node of focusNodes) {
+      const key = node.key ?? node.id ?? ''
+      if (!key) continue
+      const parts = key.split(':')
+      if (parts.length < 3) continue
+      const surface = parts[0] as IntentSurface
+      const nodeType = node.type ?? parts[1]
+      if (!WORK_ITEM_NODE_TYPES.has(nodeType)) continue
+      const externalId = parts.slice(2).join(':')
+      const signal = dbGetSignalByExternal(surface, externalId)
+      workItems.push({ surface, signal })
+    }
+
+    if (workItems.length === 0) {
+      // No work-item signals linked — cannot assess freshness; leave intent as-is.
+      intentMissCount.delete(intent.id)
+      continue
+    }
+
+    // Determine whether ALL work-item signals have disappeared from their surface's latest
+    // complete poll. Any signal still present resets the count for the whole intent.
+    let allGone = true
+    for (const { surface, signal } of workItems) {
+      if (!signal) {
+        // Signal row not found — skip this item (shouldn't happen for a valid intent)
+        allGone = false
+        break
+      }
+      const lastCompletePoll = getLastCompletePollAt(surface)
+      if (!lastCompletePoll) {
+        // No complete poll recorded yet for this surface — cannot confirm disappearance
+        allGone = false
+        break
+      }
+      if (lastCompletePoll <= intent.created_at) {
+        // The last complete poll happened before this intent was even created — too soon to judge
+        allGone = false
+        break
+      }
+      if (signal.last_seen_at && signal.last_seen_at >= lastCompletePoll) {
+        // Signal was seen at or after the last complete poll — item is still active
+        allGone = false
+        break
+      }
+    }
+
+    if (allGone) {
+      const count = (intentMissCount.get(intent.id) ?? 0) + 1
+      intentMissCount.set(intent.id, count)
+      console.log(`[ambient] intent ${intent.id} miss count: ${count}/2`)
+
+      if (count >= 2) {
+        // Two consecutive complete polls returned without this item — expire the intent.
+        const surface = workItems[0].surface
+        const reason = `No longer in your active ${surface} items (closed, merged, or reassigned)`
+        dbUpdateIntentStatus(intent.id, 'expired', reason)
+        dbAppendActionLog({
+          intent_id: intent.id,
+          event: 'expired',
+          action_type: `${intent.surface ?? surface}:expired`,
+          tier: intent.tier,
+          detail: { reason },
+          created_at: new Date().toISOString()
+        })
+        const updated = dbGetIntent(intent.id)
+        if (updated) broadcast('ambient:intent-updated', updated)
+        intentMissCount.delete(intent.id)
+        refreshTray(win)
+        console.log(`[ambient] intent ${intent.id} expired — ${reason}`)
+      }
+    } else {
+      // Item is still present — reset miss counter
+      intentMissCount.delete(intent.id)
+    }
+  }
+}
+
+function startRevalidationTimer(): void {
+  if (revalidationIntervalId) return
+  const cfg = readConfig()
+  const intervalMs = cfg.ambient?.pollIntervalMs ?? 5 * 60 * 1000
+  // Serialize through inferenceQueue so timer ticks never race with ambientPollNow on intentMissCount.
+  revalidationIntervalId = setInterval(() => {
+    inferenceQueue = inferenceQueue
+      .then(() => revalidatePendingIntents())
+      .catch((e) => console.error('[ambient] revalidation error:', e))
+  }, intervalMs)
+}
+
+function stopRevalidationTimer(): void {
+  if (revalidationIntervalId) {
+    clearInterval(revalidationIntervalId)
+    revalidationIntervalId = null
+  }
+  intentMissCount.clear()
 }
 
 // ─── Intent routing by tier ───────────────────────────────────────────────────
@@ -666,6 +802,8 @@ export function ambientPollNow(): Promise<void> {
       for (const signal of signals) ingestSignalIntoGraph(signal)
       const hits = coalesceHits(evalEventTriggers(signals))
       if (hits.length > 0) await runAmbientCycle(hits)
+      // Revalidate after a manual poll so any disappeared items are retired immediately.
+      revalidatePendingIntents()
     })
     .catch((e) => console.error('[ambient] pollNow error:', e))
   return inferenceQueue

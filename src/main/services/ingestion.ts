@@ -28,7 +28,14 @@ export interface SurfaceAdapter {
   surface: IntentSurface
   serverName: string
   isAvailable(): boolean
-  poll(): Promise<RawObservation[]>
+  /**
+   * Fetch the latest batch of observations from the adapter.
+   * `complete` must be true only when the poll returned the full result set without
+   * truncation — i.e. no single query hit its page/count limit. This flag is used by
+   * revalidatePendingIntents() to safely infer that a missing item has genuinely
+   * disappeared from the user's active feed rather than been dropped by pagination.
+   */
+  poll(): Promise<{ observations: RawObservation[]; complete: boolean }>
   normalize(raw: RawObservation): SignalInput
 }
 
@@ -75,9 +82,10 @@ function makeGithubAdapter(): SurfaceAdapter {
     }
   }
 
-  async function poll(): Promise<RawObservation[]> {
+  async function poll(): Promise<{ observations: RawObservation[]; complete: boolean }> {
     // Role-tagged queries — more specific than `involves:@me` so we know WHY this item matters.
     // Priority order for de-dup: review_requested > assigned > mentioned > involved.
+    const PER_PAGE = 50  // raised from 20 to reduce truncation (truncation disables freshness expiry)
     const QUERIES: Array<{ q: string; relation: string; kind: 'pr' | 'issue' | 'both' }> = [
       { q: 'is:open is:pr review-requested:@me',  relation: 'review_requested', kind: 'pr' },
       { q: 'is:open assigned:@me',                 relation: 'assigned',         kind: 'both' },
@@ -87,6 +95,7 @@ function makeGithubAdapter(): SurfaceAdapter {
 
     // Map from external_id → {result, relation} — keeps highest-priority relation on de-dup
     const byId = new Map<string, { r: Record<string, unknown>; relation: string; kind: string }>()
+    let truncated = false
 
     for (const { q, relation, kind } of QUERIES) {
       const types = kind === 'pr' ? ['pr'] : kind === 'issue' ? ['issue'] : ['pr', 'issue']
@@ -95,9 +104,12 @@ function makeGithubAdapter(): SurfaceAdapter {
           ? q.includes('is:pr') ? q : `${q} is:pr`
           : q.includes('is:issue') ? q : `${q} is:issue`
         try {
-          const res = await callTool(serverName, 'search_issues', { q: searchQ, per_page: 20 })
+          const res = await callTool(serverName, 'search_issues', { q: searchQ, per_page: PER_PAGE })
           const parsed = safeParseJson<{ items?: unknown[] }>(res, {})
-          for (const item of parsed.items ?? []) {
+          const items = parsed.items ?? []
+          // If we got back a full page, results may have been truncated — mark incomplete
+          if (items.length >= PER_PAGE) truncated = true
+          for (const item of items) {
             const r = item as Record<string, unknown>
             const id = String(r.number ?? r.id ?? '')
             if (!id) continue
@@ -110,6 +122,7 @@ function makeGithubAdapter(): SurfaceAdapter {
           }
         } catch (e) {
           console.warn(`[ingestion:github] query "${searchQ}" failed:`, e)
+          truncated = true  // treat query failure as potentially truncated
         }
       }
     }
@@ -163,7 +176,7 @@ function makeGithubAdapter(): SurfaceAdapter {
         raw: r
       })
     }
-    return obs
+    return { observations: obs, complete: !truncated }
   }
 
   function normalize(raw: RawObservation): SignalInput {
@@ -203,16 +216,19 @@ function makeJiraAdapter(): SurfaceAdapter {
     return getServerStatus().some((s) => s.name === serverName && s.connected)
   }
 
-  async function poll(): Promise<RawObservation[]> {
+  async function poll(): Promise<{ observations: RawObservation[]; complete: boolean }> {
     const obs: RawObservation[] = []
+    const LIMIT = 30
+    let truncated = false
     try {
       const result = await callTool(serverName, 'jira_search', {
         jql: 'assignee = currentUser() OR mention = currentUser() ORDER BY updated DESC',
         // Added duedate, priority, issuelinks — enables relation/dependency edges
         fields: 'summary,status,assignee,reporter,updated,created,comment,duedate,priority,issuelinks',
-        limit: 30
+        limit: LIMIT
       })
       const parsed = safeParseJson<{ issues?: unknown[] }>(result, {})
+      if ((parsed.issues?.length ?? 0) >= LIMIT) truncated = true
       const ownerHandles = getOwnerHandles()
 
       for (const issue of parsed.issues ?? []) {
@@ -262,8 +278,9 @@ function makeJiraAdapter(): SurfaceAdapter {
       }
     } catch (e) {
       console.warn('[ingestion:jira] poll failed:', e)
+      truncated = true  // treat poll failure as potentially truncated
     }
-    return obs
+    return { observations: obs, complete: !truncated }
   }
 
   function normalize(raw: RawObservation): SignalInput {
@@ -315,14 +332,17 @@ function makeSlackAdapter(): SurfaceAdapter {
     return getServerStatus().some((s) => s.name === serverName && s.connected)
   }
 
-  async function poll(): Promise<RawObservation[]> {
+  async function poll(): Promise<{ observations: RawObservation[]; complete: boolean }> {
     const obs: RawObservation[] = []
+    const COUNT = 20
+    let truncated = false
     try {
       const result = await callTool(serverName, 'slack_search_public', {
         query: 'from:me OR to:me',
-        count: 20
+        count: COUNT
       })
       const parsed = safeParseJson<{ messages?: { matches?: unknown[] } }>(result, {})
+      if ((parsed.messages?.matches?.length ?? 0) >= COUNT) truncated = true
       const ownerHandles = getOwnerHandles()
 
       for (const msg of parsed.messages?.matches ?? []) {
@@ -372,8 +392,9 @@ function makeSlackAdapter(): SurfaceAdapter {
       }
     } catch (e) {
       console.warn('[ingestion:slack] poll failed:', e)
+      truncated = true  // treat poll failure as potentially truncated
     }
-    return obs
+    return { observations: obs, complete: !truncated }
   }
 
   function normalize(raw: RawObservation): SignalInput {
@@ -407,6 +428,17 @@ export const adapters: SurfaceAdapter[] = [
   makeJiraAdapter(),
   makeSlackAdapter()
 ]
+
+// ─── Freshness tracking ───────────────────────────────────────────────────────
+// Records the ISO timestamp of the last fully-complete, error-free poll per surface.
+// "Complete" means no query hit its pagination limit (so absence == true absence).
+// Used by revalidatePendingIntents() in ambient.ts to detect disappeared work items.
+const lastCompletePollAt = new Map<IntentSurface, string>()
+
+/** Returns the ISO timestamp of the last complete poll for the given surface, or null. */
+export function getLastCompletePollAt(surface: IntentSurface): string | null {
+  return lastCompletePollAt.get(surface) ?? null
+}
 
 // Stagger offsets so surfaces don't all call MCP in the same tick (ms)
 const STAGGER_OFFSETS: Record<IntentSurface, number> = {
@@ -447,6 +479,7 @@ export function stopIngestion(): void {
   for (const id of intervalIds.values()) clearInterval(id)
   intervalIds.clear()
   newSignalCallback = null
+  lastCompletePollAt.clear()
 }
 
 export async function pollOnce(): Promise<Signal[]> {
@@ -462,8 +495,10 @@ export async function pollOnce(): Promise<Signal[]> {
 async function runAdapterPoll(adapter: SurfaceAdapter): Promise<Signal[]> {
   if (!adapter.isAvailable()) return []
   const newSignals: Signal[] = []
+  let pollComplete = false
   try {
-    const observations = await adapter.poll()
+    const { observations, complete } = await adapter.poll()
+    pollComplete = complete
     for (const obs of observations) {
       const input = adapter.normalize(obs)
       const { inserted, id } = dbInsertSignal(input)
@@ -472,12 +507,18 @@ async function runAdapterPoll(adapter: SurfaceAdapter): Promise<Signal[]> {
           id,
           ...input,
           observed_at: new Date().toISOString(),
-          processed: false
+          processed: false,
+          last_seen_at: new Date().toISOString()
         })
       }
     }
   } catch (e) {
     console.error(`[ingestion:${adapter.surface}] poll error:`, e)
+  }
+  if (pollComplete) {
+    // Record that we completed a full, non-truncated poll for this surface.
+    // revalidatePendingIntents() uses this to safely infer item disappearance.
+    lastCompletePollAt.set(adapter.surface, new Date().toISOString())
   }
   if (newSignals.length > 0) {
     console.log(`[ingestion:${adapter.surface}] ${newSignals.length} new signal(s)`)

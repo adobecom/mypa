@@ -34,6 +34,18 @@ export default function QueueView({
     (i) => i.type === 'action' && !TERMINAL.includes(i.status)
   )
 
+  // "Recently resolved" — terminal intents present in this session's state, newest first, capped at 5.
+  // These are intents that were pending when the widget opened and became terminal since then
+  // (executed, dismissed, expired, etc.). Shows where items went rather than silently disappearing.
+  const recentlyResolved = intents
+    .filter((i) => TERMINAL.includes(i.status))
+    .sort((a, b) => {
+      const ta = a.resolved_at ?? a.created_at
+      const tb = b.resolved_at ?? b.created_at
+      return new Date(tb).getTime() - new Date(ta).getTime()
+    })
+    .slice(0, 5)
+
   // "Tasks" — active plan items
   const activeItems = items.filter((i) => i.status === 'pending' || i.status === 'in_progress')
 
@@ -44,7 +56,7 @@ export default function QueueView({
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     .slice(0, 10)
 
-  const isEmpty = pendingIntents.length === 0 && activeItems.length === 0 && doneItems.length === 0
+  const isEmpty = pendingIntents.length === 0 && activeItems.length === 0 && doneItems.length === 0 && recentlyResolved.length === 0
 
   function handleIntentChange(updated: Intent): void {
     onIntentsChange(intents.map((i) => (i.id === updated.id ? updated : i)))
@@ -123,6 +135,17 @@ export default function QueueView({
               collapsed
               readOnly={item.source === 'ambient_action'}
             />
+          ))}
+        </>
+      )}
+
+      {recentlyResolved.length > 0 && (
+        <>
+          <div className="section-header" style={{ color: 'var(--text-muted)' }}>
+            Recently resolved
+          </div>
+          {recentlyResolved.map((intent) => (
+            <IntentCard key={intent.id} intent={intent} onIntentChange={handleIntentChange} />
           ))}
         </>
       )}

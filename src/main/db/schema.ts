@@ -274,6 +274,10 @@ export function initSchema(db: Database.Database): void {
   tryExec('ALTER TABLE signals ADD COLUMN due_at TEXT')
   // Urgency axis on intents — separate from confidence (added 2026-06-11)
   tryExec('ALTER TABLE intents ADD COLUMN urgency REAL NOT NULL DEFAULT 0')
+  // Freshness tracking — last time a signal was returned by an adapter poll, even if unchanged
+  // Used by revalidatePendingIntents() to detect when a work item disappears from active feeds (added 2026-06-15)
+  tryExec('ALTER TABLE signals ADD COLUMN last_seen_at TEXT')
+  tryExec('CREATE INDEX IF NOT EXISTS idx_signals_last_seen ON signals(surface, last_seen_at)')
 
   // Migrate signals from old UNIQUE(surface, external_id, fingerprint) → UNIQUE(surface, external_id).
   // The 3-column constraint allowed duplicate (surface, external_id) rows to accumulate, causing
