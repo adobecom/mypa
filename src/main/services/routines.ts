@@ -105,22 +105,9 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
 
 function buildDigestMessage(digest: {
   summary: string
-  items: string[]
-  proposed_actions: string[]
+  body: string
 }): string {
-  const parts = [`**${digest.summary}**`]
-
-  if (digest.items.length > 0) {
-    parts.push('\n**Needs attention:**')
-    digest.items.forEach((item) => parts.push(`• ${item}`))
-  }
-
-  if (digest.proposed_actions.length > 0) {
-    parts.push('\n**I can help with:**')
-    digest.proposed_actions.forEach((action) => parts.push(`• ${action}`))
-  }
-
-  return parts.join('\n')
+  return `**${digest.summary}**\n\n${digest.body}`
 }
 
 export async function handleRunMessage(

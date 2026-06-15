@@ -9,7 +9,7 @@ interface Props {
   collapsed?: boolean
 }
 
-function parseDigest(digest: string | null): { summary: string; items: string[]; proposed_actions: string[] } | null {
+function parseDigest(digest: string | null): { summary: string; body: string } | null {
   if (!digest) return null
   try { return JSON.parse(digest) } catch { return null }
 }
@@ -141,16 +141,6 @@ export default function RoutineCard({ run, onRunChange, collapsed }: Props): Rea
 
       {!collapsed && expanded && (
         <div className="routine-card__body">
-          {digest && digest.items.length > 0 && (
-            <div style={{ marginBottom: 10 }}>
-              {digest.items.map((item, i) => (
-                <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', padding: '2px 0' }}>
-                  • {item}
-                </div>
-              ))}
-            </div>
-          )}
-
           <ChatThread
             messages={thread}
             streaming={streaming}
