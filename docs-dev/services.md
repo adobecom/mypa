@@ -196,21 +196,26 @@ Takes a `ContextPacket` (assembled by `memory-graph.ts`) and produces scored `In
 
 ## `embeddings.ts` — Local embeddings
 
-Generates text embeddings using [`@huggingface/transformers`](https://huggingface.co/docs/transformers.js) (transformers.js v3) entirely on-device (no network call). Used by `memory-graph.ts` to build semantic similarity edges. The model is loaded quantized (`dtype: 'q8'`) from the HuggingFace hub and cached at `~/.mypa/models`.
+Generates text embeddings using [`@huggingface/transformers`](https://huggingface.co/docs/transformers.js) (transformers.js v3) entirely on-device (no network call). Used by `memory-graph.ts` to build semantic similarity edges. The model is loaded quantized (`dtype: 'q8'`) from the HuggingFace hub and cached at `~/.mypa/models`. All inference is serialized through a single promise chain (`embeddingQueue`) to prevent concurrent ONNX runs.
 
 **Key exports:**
 
 | Export | Description |
 |---|---|
-| `embedText(text)` | Returns a Float32Array embedding vector |
-| `cosineSim(a, b)` | Cosine similarity between two Float32Arrays |
+| `MODEL_NAME` | The model identifier string (`Xenova/all-MiniLM-L6-v2`) |
+| `embedText(text)` | Returns a normalized 384-dim Float32Array (or null on model-not-ready) |
+| `cosineSim(a, b)` | Dot product of two pre-normalized unit vectors |
+| `floatToBlob(v)` | Serialize a Float32Array to a Buffer for SQLite BLOB storage |
 | `blobToFloat(blob)` | Deserialize a BLOB column value to Float32Array |
+| `enqueueEmbeddings(signals)` | Fire-and-forget: embed new signals in the background queue |
+| `enqueueBackfill()` | One-time startup drain: embed all signals missing an embedding |
+| `enqueueMemoryBackfill()` | One-time startup drain: embed all active memories missing an embedding; called from `startAmbient` alongside `enqueueBackfill` |
 
 ---
 
-## `memories.ts` — Memory CRUD
+## `memories.ts` — Memory CRUD and summarization
 
-Typed wrappers around the DB query functions for the `memories` table. Provides `createMemory`, `getActiveMemories`, `getMemoriesForNode`, `supersedeMemory`, `updateMemory`.
+Orchestrates periodic memory extraction from recent signals and graph context. After each `dbCreateMemory` call the content's embedding is persisted via `dbSetMemoryEmbedding` so future dedup reads from BLOB storage instead of re-running ONNX inference. `findSuperseded` accepts a pre-computed query vector and reads each candidate's stored BLOB via `dbGetMemoryEmbedding`, falling back to live `embedText` only for unbackfilled rows.
 
 ---
 
@@ -290,6 +295,7 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 
 ## Changelog
 
+- 2026-06-15 — **Persisted memory embeddings + memory backfill:** `embeddings.ts` — `MODEL_NAME` is now exported; added `enqueueMemoryBackfill()` (drains active memories with no stored embedding in batches of 100); called fire-and-forget from `startAmbient` alongside the existing `enqueueBackfill`. `memories.ts` — `findSuperseded` signature changed from `(newContent, candidates, node_id)` to `(qVec, candidates, node_id)`: the caller now computes `qVec = await embedText(content)` once, passes it in, and the function reads each candidate's stored BLOB via `dbGetMemoryEmbedding` + `blobToFloat` (falling back to live `embedText` only for unbackfilled rows); after `dbCreateMemory` the query vector is persisted via `dbSetMemoryEmbedding`. This removes up to 5 live ONNX inferences per summarization run once embeddings are warm.
 - 2026-06-11 — **"Needs me" reframe (ingestion + triggers + inference + ambient):** `ingestion.ts` — GitHub adapter replaced two broad `involves:@me` queries with four role-tagged queries (review_requested/assigned/mentioned/involved); adds `fetchLatestCommentActor` helper (up to 15/poll, tool name confirmed from live `getServerStatus().tools`); `last_actor` included in `change_fields` so new comments change the fingerprint and re-trigger evaluation. Jira adapter adds `duedate/priority/issuelinks` to JQL fields; curated `raw.fields` sub-object un-deads `deriveAssigneeEdges` and dependency edges; latest comment body populates signal `body`. Slack adapter detects DM/mention/thread_reply structurally; `directed` set from author≠owner. `isOwnerHandle` helper added. `RawObservation` interface extended with `relation/directed/last_actor/due_at`. `runAdapterPoll` logs when `newSignals.length > 0` (no quiet-poll spam). `triggers.ts` — `evalWaitingOnMe(newSignals)` structural trigger replaces `evalDirectedAtMe`; `evalWaitingOnMeFromGraph()` variant queries `dbGetDirectedSignals` for heartbeat use; `evalStaleAndMine()` replaces `evalStaleness()` (restricts to owner-assigned/review-requested nodes); `evalThreshold` retired from autonomous path; `evaluationCount % 6` gate and counter deleted; `evalEventTriggers` simplified. `inference.ts` — `SYSTEM_PROMPT` and `ROUTINE_SYSTEM_PROMPT` gain `"urgency"` field; `parseIntentObject` extracts/clamps `urgency`; both `inferIntent` and `inferRoutineIntents` apply `urgencyFloor` filter. `ambient.ts` — `runAmbientCycle` refactored to infer-all → sort by (urgency, confidence) → take top-3 (rank-then-cap); synthesis heartbeat `startSynthesisTimer`/`stopSynthesisTimer` wired into `startAmbient`/`stopAmbient`, re-evaluates waiting+stale every 30 min from persisted signals.
 - 2026-06-10 — **Scope auto-derivation from check-ins + registry-driven enforcement:** `src/shared/scope-surfaces.ts` (new) is the single registry of scope-capable surfaces (`github`/`jira`/`slack`), each carrying an `integrationId`, human label, item noun, and `parseIdentifier` function. `ScopeConfig` reshaped to `{ allowed?: Record<string, string[]> }` — a surface-keyed map replacing the three hardcoded named fields. `scope.ts` is now registry-driven: looks up `scopeSurfaceFor(surface)` and calls `spec.parseIdentifier(key)` instead of branching per surface; adds a `normalizeScopeAllowed()` shim that folds any legacy `allowedGithubOrgs`/`allowedJiraProjects`/`allowedSlackChannels` config fields into `allowed.{github,jira,slack}` for backward compatibility. `checkin.ts` — extraction schema extended with a `scope_rules` array and a matching prompt rule (held to the same absolute bar as `enforcement: "hard"`); after the `new_edges` loop, extracted scope rules union-merge new identifiers into the current `allowed` map via `updateConfig`; `CheckInExtractionSummary.scopeUpdated` count is incremented per identifier added. Autonomous summarization still never writes scope rules. To register a future scope-capable surface, add an entry to `SCOPE_SURFACES` in `scope-surfaces.ts`.
 - 2026-06-10 — added `path-fix.ts` (`fixPath()`): probes the user's login shell to resolve the real `$PATH` and unions it with static Homebrew/user-local dirs; called once at the very start of `main()` in `index.ts` so packaged GUI builds find `claude`, `npx`, etc. `config.ts`: added `resetConfig()` — deletes `~/.mypa/config.json` (idempotent). `db/index.ts`: added `resetDatabase()` — closes the SQLite handle, then deletes `data.db`, `data.db-wal`, and `data.db-shm`. Both are called by the new `system:factory-reset` IPC handler (see ipc.md). `claude.ts`: hardened `findClaude()` fallback path list to include `/opt/homebrew/bin/claude` (Apple Silicon Homebrew).

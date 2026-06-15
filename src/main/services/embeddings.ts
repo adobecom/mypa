@@ -1,11 +1,11 @@
 import { join } from 'path'
 import { app } from 'electron'
-import { dbSetSignalEmbedding, dbGetSignalsMissingEmbeddings } from '../db/index'
+import { dbSetSignalEmbedding, dbGetSignalsMissingEmbeddings, dbSetMemoryEmbedding, dbGetMemoriesMissingEmbeddings } from '../db/index'
 import type { Signal } from '@shared/types'
 
 // ─── Model constants ──────────────────────────────────────────────────────────
 
-const MODEL_NAME = 'Xenova/all-MiniLM-L6-v2'
+export const MODEL_NAME = 'Xenova/all-MiniLM-L6-v2'
 const EMBEDDING_DIM = 384
 
 // ─── Lazy pipeline singleton ──────────────────────────────────────────────────
@@ -110,22 +110,60 @@ export function enqueueBackfill(): void {
         batch = dbGetSignalsMissingEmbeddings(100)
         if (batch.length > 0) {
           console.log(`[embeddings] backfilling ${batch.length} signals`)
-          await embedBatch(batch)
+          const wrote = await embedBatch(batch)
+          // Model not ready yet — stop and let live embedding handle it later
+          if (wrote === 0) break
         }
       } while (batch.length === 100) // if exactly 100 returned, there may be more
     })
     .catch((e) => console.error('[embeddings] backfill error:', e))
 }
 
-async function embedBatch(signals: Signal[]): Promise<void> {
+// Returns the number of embeddings successfully written.
+async function embedBatch(signals: Signal[]): Promise<number> {
+  let wrote = 0
   for (const signal of signals) {
     try {
       const text = `${signal.title}\n${signal.body}`.trim()
       const vec = await embedText(text)
       if (!vec) continue // model not ready yet
       dbSetSignalEmbedding(signal.id, floatToBlob(vec), MODEL_NAME)
+      wrote++
     } catch (e) {
       console.warn(`[embeddings] failed to embed signal ${signal.id}:`, e)
     }
   }
+  return wrote
+}
+
+/**
+ * One-time backfill: embed all active memories that have no stored embedding.
+ * Drains in batches of 100 until none remain.
+ * Call from startAmbient (fire-and-forget) alongside enqueueBackfill.
+ */
+export function enqueueMemoryBackfill(): void {
+  embeddingQueue = embeddingQueue
+    .then(async () => {
+      let batch: ReturnType<typeof dbGetMemoriesMissingEmbeddings>
+      do {
+        batch = dbGetMemoriesMissingEmbeddings(100)
+        if (batch.length > 0) {
+          console.log(`[embeddings] backfilling ${batch.length} memory embeddings`)
+          let wrote = 0
+          for (const memory of batch) {
+            try {
+              const vec = await embedText(memory.content)
+              if (!vec) continue // model not ready yet
+              dbSetMemoryEmbedding(memory.id, floatToBlob(vec), MODEL_NAME)
+              wrote++
+            } catch (e) {
+              console.warn(`[embeddings] failed to embed memory ${memory.id}:`, e)
+            }
+          }
+          // Model not ready yet — stop and let live embedding handle it later
+          if (wrote === 0) break
+        }
+      } while (batch.length === 100) // if exactly 100 returned, there may be more
+    })
+    .catch((e) => console.error('[embeddings] memory backfill error:', e))
 }

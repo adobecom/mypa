@@ -5,6 +5,8 @@ mypa uses SQLite via [`better-sqlite3`](https://github.com/WiseLibs/better-sqlit
 - **Location:** `~/.mypa/data.db`
 - **Journal mode:** WAL (`PRAGMA journal_mode = WAL`)
 - **Foreign keys:** ON (`PRAGMA foreign_keys = ON`)
+- **Sync mode:** NORMAL (`PRAGMA synchronous = NORMAL`) — safe with WAL; reduces fsyncs vs. FULL
+- **Busy timeout:** 5000 ms (`PRAGMA busy_timeout = 5000`) — waits instead of throwing `SQLITE_BUSY`
 - **Schema:** `src/main/db/schema.ts` — applied with `CREATE TABLE IF NOT EXISTS` on startup (no separate migration tool)
 - **Query functions:** `src/main/db/index.ts` — typed wrappers around prepared statements
 - **Initialization:** called from `src/main/index.ts` at startup via `initDb()`
@@ -252,6 +254,8 @@ Extracted facts, patterns, preferences, and statuses tied to graph nodes.
 | `superseded_by` | TEXT | ID of the replacing memory |
 | `created_at` | TEXT | |
 | `last_accessed` | TEXT | Nullable |
+| `embedding` | BLOB | Nullable — local embedding vector (stripped before IPC) |
+| `embedding_model` | TEXT | Nullable — model name that produced the embedding |
 
 #### `usage_events`
 
@@ -339,8 +343,21 @@ There is no migration framework. `initSchema()` uses `CREATE TABLE IF NOT EXISTS
 
 Indexes: `idx_checkin_messages_checkin` (checkin_id, timestamp), `idx_check_ins_status` (status, started_at).
 
+## Vector search — current approach and future path
+
+Vectors are stored as raw little-endian Float32 BLOBs and similarity search is performed with a brute-force dot-product loop in JavaScript (vectors are L2-normalized, so cosine similarity = dot product). This is sufficient for current scale:
+
+- Signal retrieval cap: ≤500 rows / last 7 days (`memory-graph.ts`)
+- Similarity-edge building: top-12 nodes, ~66 comparisons (hourly)
+- Memory dedup: ≤5 candidates
+
+**sqlite-vec decision (2026-06-15):** Do not adopt sqlite-vec yet. The JS loop is sub-millisecond at current scale; the real cost is ONNX inference, which sqlite-vec doesn't address. Upstream sqlite-vec is pre-v1 ("expect breaking changes") and adopting it adds native-extension surface (`loadExtension`, per-platform binaries, asarUnpack) that the codebase currently avoids. Revisit at ~10k+ vectors using the [`@photostructure/sqlite-vec` fork](https://www.npmjs.com/package/@photostructure/sqlite-vec) (v1.x, Electron-asar-aware, production-ready).
+
+---
+
 ## Changelog
 
+- 2026-06-15 — **Memory embeddings + transactions + pragma tuning:** `memories` table gains two new nullable columns via additive `ALTER TABLE` migration: `embedding BLOB` and `embedding_model TEXT` (mirrors the existing `signals` pattern). New DB helpers: `dbSetMemoryEmbedding(id, buf, model)`, `dbGetMemoryEmbedding(id) → Buffer | null`, `dbGetMemoriesMissingEmbeddings(limit) → Memory[]`. `deserializeMemory` now strips the embedding columns before returning (same pattern as `deserializeSignal`). `embeddings.ts` exports `MODEL_NAME` (was private) and adds `enqueueMemoryBackfill()` which drains missing embeddings in batches of 100 via the shared serialized queue; called fire-and-forget from `startAmbient` alongside the existing `enqueueBackfill`. `memories.ts` — `findSuperseded` now accepts a pre-computed `Float32Array | null` query vector (computed once in the caller) and reads each candidate's stored BLOB via `dbGetMemoryEmbedding`, falling back to live `embedText` only for unbackfilled rows; after `dbCreateMemory` the query vector is persisted via `dbSetMemoryEmbedding`. Two multi-statement writes wrapped in `db.transaction()`: `dbUpdatePlanItemStatus` (UPDATE plan_items + INSERT plan_item_history) and `dbInsertSignal` update path (UPDATE + optional DELETE-dup + retry). Pragmas added to the initial `db.exec()` block: `PRAGMA synchronous = NORMAL` (safe with WAL, fewer fsyncs) and `PRAGMA busy_timeout = 5000` (waits instead of throwing SQLITE_BUSY).
 - 2026-06-11 — **"Needs me" relation fields on signals; urgency on intents:** `signals` table gains four columns via additive `ALTER TABLE` migrations: `relation TEXT` (review_requested/assigned/mentioned/involved/dm/thread_reply), `directed INTEGER NOT NULL DEFAULT 0` (1 = latest non-owner actor directed this at the owner), `last_actor TEXT` (latest comment/event author), `due_at TEXT` (Jira duedate). `intents` table gains `urgency REAL NOT NULL DEFAULT 0`. All columns added via `tryExec` (safe on existing DBs). The `signals_mig` rebuild path updated to include the four new columns with safe defaults. `dbInsertSignal` INSERT and UPDATE statements updated to include the new columns. `deserializeSignal` coerces `directed: row.directed === 1`. `dbCreateIntent` INSERT includes `urgency`. New `dbGetDirectedSignals()` function returns signals with `directed=1` ordered by `observed_at DESC`.
 - 2026-06-10 — **Hard/soft memory enforcement:** added `enforcement TEXT NOT NULL DEFAULT 'soft'` column to `memories` (additive `ALTER TABLE` migration). New DB helper `dbGetActiveHardMemories()` returns all active hard memories (no cap), used by `buildDirectivesClause()` in `config.ts` to inject them as trusted standing directives into inference system prompts. New `MemoryEnforcement` and `ScopeConfig` types in `src/shared/types.ts`. New `src/main/services/scope.ts` with `violatesScope(obj, focusNodes)` deterministic filter applied at both ambient chokepoints (`runAmbientCycle` and `routeIntent`). `AppConfig` extended with `scope?: ScopeConfig`.
 - 2026-06-10 — **Suggest re-proposal thread:** added `intent_threads` table (mirrors `plan_item_threads` with `intent_id FK → intents CASCADE DELETE`) and `idx_intent_threads_intent_id` index. New query helpers in `db/index.ts`: `dbAddIntentMessage(intentId, role, content)`, `dbGetIntentThread(intentId) → ChatMessage[]`, and `dbReproposeIntent(id, { verb, target, payload, rationale, confidence, reversibility, required_approval })` — updates proposal fields in-place without touching `status`, keeping the intent actionable across multiple Suggest rounds.

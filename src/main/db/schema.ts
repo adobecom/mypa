@@ -4,6 +4,8 @@ export function initSchema(db: Database.Database): void {
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
+    PRAGMA synchronous = NORMAL;
+    PRAGMA busy_timeout = 5000;
 
     CREATE TABLE IF NOT EXISTS routines (
       id          TEXT PRIMARY KEY,
@@ -260,6 +262,9 @@ export function initSchema(db: Database.Database): void {
   // Embedding columns on signals — nullable so old rows remain valid immediately
   tryExec('ALTER TABLE signals ADD COLUMN embedding BLOB')
   tryExec('ALTER TABLE signals ADD COLUMN embedding_model TEXT')
+  // Persisted embedding vectors on memories — avoids re-embedding candidates at dedup time
+  tryExec('ALTER TABLE memories ADD COLUMN embedding BLOB')
+  tryExec('ALTER TABLE memories ADD COLUMN embedding_model TEXT')
   // Store the user's challenge reason directly on the intent so it's visible in the Recent feed
   tryExec('ALTER TABLE intents ADD COLUMN challenge_reason TEXT')
   // "Needs me" relation fields on signals (added 2026-06-11)
