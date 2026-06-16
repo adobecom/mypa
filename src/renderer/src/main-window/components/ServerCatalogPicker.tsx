@@ -286,7 +286,8 @@ function ConfigurePanel({
     const resolvedArgs = (entry.argInputs ?? []).flatMap(
       (_, i) => argValues[i]?.filter((v) => v.trim()) ?? []
     )
-    const env: Record<string, string> = { ...envValues }
+    // Merge fixed catalog env first so user-supplied values can override if needed
+    const env: Record<string, string> = { ...(entry.fixedEnv ?? {}), ...envValues }
     if (effectiveToken && entry.oauthTokenEnvKey) {
       env[entry.oauthTokenEnvKey] = effectiveToken
     }
