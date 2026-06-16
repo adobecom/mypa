@@ -222,7 +222,7 @@ function makeJiraAdapter(): SurfaceAdapter {
     let truncated = false
     try {
       const result = await callTool(serverName, 'jira_search', {
-        jql: 'assignee = currentUser() OR mention = currentUser() ORDER BY updated DESC',
+        jql: 'assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser() ORDER BY updated DESC',
         // Added duedate, priority, issuelinks — enables relation/dependency edges
         fields: 'summary,status,assignee,reporter,updated,created,comment,duedate,priority,issuelinks',
         limit: LIMIT
