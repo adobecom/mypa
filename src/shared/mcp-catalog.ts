@@ -27,6 +27,11 @@ export interface McpCatalogEntry {
   oauthProvider?: OAuthProvider
   oauthTokenEnvKey?: string
   requiredEnv?: EnvField[]
+  /**
+   * Static env vars injected automatically — not shown to the user.
+   * Merged into the server config alongside user-supplied requiredEnv values.
+   */
+  fixedEnv?: Record<string, string>
   /** Optional PAT alternative for oauth entries */
   patLabel?: string
   patPlaceholder?: string
@@ -88,25 +93,21 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   {
     id: 'slack',
     name: 'Slack',
-    description: 'Read and send messages in Slack workspaces',
+    description: 'Read messages, DMs, and mentions; reply and send messages',
     category: 'Communication',
     command: 'npx',
-    baseArgs: ['-y', '@modelcontextprotocol/server-slack'],
+    baseArgs: ['-y', 'slack-mcp-server'],
     requiredEnv: [
       {
-        key: 'SLACK_BOT_TOKEN',
-        label: 'Bot token',
-        placeholder: 'xoxb-...',
-        hint: 'Create a Slack app and install it to your workspace.',
+        key: 'SLACK_MCP_XOXP_TOKEN',
+        label: 'User OAuth token',
+        placeholder: 'xoxp-...',
+        hint: 'Go to api.slack.com/apps, create an app, and add a user token with channels:history, search:read, im:history, groups:history, mpim:history, and chat:write scopes.',
         secret: true
-      },
-      {
-        key: 'SLACK_TEAM_ID',
-        label: 'Team ID',
-        placeholder: 'T01234ABCDE',
-        hint: 'Found in your workspace URL or admin settings.'
       }
     ],
+    // Enables the conversations_add_message tool (off by default in the server).
+    fixedEnv: { SLACK_MCP_ADD_MESSAGE_TOOL: 'true' },
     authType: 'api_key'
   },
   // ─── Productivity ────────────────────────────────────────────────────────────

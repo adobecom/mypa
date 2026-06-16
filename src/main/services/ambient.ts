@@ -195,6 +195,26 @@ export async function runAmbientCycle(
       continue
     }
 
+    // For Slack reply/send actions, inject _channel_id and _thread_ts into the
+    // payload so executeIntent can build the correct conversations_add_message
+    // args without needing to re-derive them from the context packet.
+    // Node key format: "slack:message:{channelId}:{ts}" (ts has no colons).
+    if (obj.proposed_action.surface === 'slack' &&
+        (obj.proposed_action.verb === 'reply' || obj.proposed_action.verb === 'send')) {
+      const msgNode = packet.focusNodes.find(n => n.key.startsWith('slack:message:'))
+      if (msgNode) {
+        const parts = msgNode.key.split(':')
+        if (parts.length === 4 && parts[2]) {
+          obj.proposed_action.payload = {
+            ...obj.proposed_action.payload,
+            _channel_id: parts[2],
+            // reply posts in-thread; send starts a new top-level message
+            ...(obj.proposed_action.verb === 'reply' ? { _thread_ts: parts[3] } : {})
+          }
+        }
+      }
+    }
+
     const intent = dbCreateIntent(obj, hit.kind as TriggerKind, tier, packet as unknown as Record<string, unknown>)
 
     // Mirror the intent into the knowledge graph so it appears alongside the
@@ -450,7 +470,7 @@ async function executeIntent(intent: Intent, win: BrowserWindow | null): Promise
         return
       }
 
-      const toolResult = await callTool(intent.surface, tool, intent.payload as Record<string, unknown>)
+      const toolResult = await callTool(intent.surface, tool, buildToolArgs(intent))
       console.log(`[ambient] auto-executed ${actionType}:`, toolResult.slice(0, 200))
     }
 
@@ -502,7 +522,7 @@ async function executeIntent(intent: Intent, win: BrowserWindow | null): Promise
 const VERB_TO_TOOL: Record<string, Record<string, string>> = {
   github: { comment: 'create_issue_comment', label: 'add_labels_to_issue' },
   jira:   { comment: 'jira_add_comment' },
-  slack:  { reply: 'slack_send_message', send: 'slack_send_message' }
+  slack:  { reply: 'conversations_add_message', send: 'conversations_add_message' }
 }
 
 // Hard allowlist of (surface:verb) pairs that may ever be auto-executed (tier < 2).
@@ -518,6 +538,26 @@ const AUTO_EXECUTABLE: ReadonlySet<string> = new Set([
 
 function verbToTool(surface: string, verb: string): string | null {
   return VERB_TO_TOOL[surface]?.[verb] ?? null
+}
+
+/**
+ * Build the actual MCP tool arguments from an intent's payload.
+ *
+ * For most surfaces the payload produced by inference maps 1:1 to tool args.
+ * Slack is the exception: inference sets payload.message (per the prompt schema)
+ * but conversations_add_message expects { channel_id, text, thread_ts? }.
+ * The _channel_id / _thread_ts routing fields are injected at intent-creation
+ * time (in runAmbientCycle) so they are available here at execution time.
+ */
+function buildToolArgs(intent: Intent): Record<string, unknown> {
+  if (intent.surface !== 'slack') return intent.payload as Record<string, unknown>
+  const { message, _channel_id, _thread_ts, ...rest } = intent.payload as Record<string, unknown>
+  return {
+    ...rest,
+    channel_id: _channel_id,
+    text: message,
+    ...(_thread_ts ? { thread_ts: _thread_ts } : {})
+  }
 }
 
 // ─── External-pipeline routing ───────────────────────────────────────────────
@@ -547,6 +587,23 @@ export async function routeIntent(
   if (violatesScope(obj, focusNodesForScope)) {
     console.log(`[ambient] routeIntent dropped — out of scope (${obj.proposed_action.surface}: ${obj.proposed_action.target})`)
     return
+  }
+
+  // Same enrichment as runAmbientCycle — routeIntent receives focusNodeIds so use
+  // the already-resolved focusNodesForScope to find the Slack message node.
+  if (obj.proposed_action.surface === 'slack' &&
+      (obj.proposed_action.verb === 'reply' || obj.proposed_action.verb === 'send')) {
+    const msgNode = focusNodesForScope.find(n => n.key.startsWith('slack:message:'))
+    if (msgNode) {
+      const parts = msgNode.key.split(':')
+      if (parts.length === 4 && parts[2]) {
+        obj.proposed_action.payload = {
+          ...obj.proposed_action.payload,
+          _channel_id: parts[2],
+          ...(obj.proposed_action.verb === 'reply' ? { _thread_ts: parts[3] } : {})
+        }
+      }
+    }
   }
 
   const intent = dbCreateIntent(obj, triggerKind, tier, contextPacket)

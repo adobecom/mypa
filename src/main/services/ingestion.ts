@@ -322,6 +322,64 @@ function makeJiraAdapter(): SurfaceAdapter {
   return { surface, serverName, isAvailable, poll, normalize }
 }
 
+// ─── Slack CSV parser ─────────────────────────────────────────────────────────
+// The slack-mcp-server returns conversations_search_messages results as RFC 4180
+// CSV (via gocsv), not JSON. Parse into an array of row objects keyed by header.
+
+function parseCsvRow(line: string): string[] {
+  const fields: string[] = []
+  let i = 0
+  while (i < line.length) {
+    if (line[i] === '"') {
+      // Quoted field — consume until the closing unescaped quote
+      let field = ''
+      i++ // skip opening quote
+      while (i < line.length) {
+        if (line[i] === '"') {
+          if (i + 1 < line.length && line[i + 1] === '"') {
+            field += '"' // escaped quote
+            i += 2
+          } else {
+            i++ // skip closing quote
+            break
+          }
+        } else {
+          field += line[i++]
+        }
+      }
+      fields.push(field)
+      if (i < line.length && line[i] === ',') i++ // skip field separator
+    } else {
+      // Unquoted field — read up to the next comma
+      const commaIdx = line.indexOf(',', i)
+      if (commaIdx === -1) {
+        fields.push(line.slice(i))
+        break
+      } else {
+        fields.push(line.slice(i, commaIdx))
+        i = commaIdx + 1
+      }
+    }
+  }
+  return fields
+}
+
+function parseSlackCsv(csv: string): Record<string, string>[] {
+  const lines = csv.trim().split('\n')
+  if (lines.length < 2) return []
+  const headers = parseCsvRow(lines[0])
+  const rows: Record<string, string>[] = []
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i]
+    if (!line.trim()) continue
+    const fields = parseCsvRow(line)
+    const row: Record<string, string> = {}
+    headers.forEach((h, idx) => { row[h.trim()] = fields[idx] ?? '' })
+    rows.push(row)
+  }
+  return rows
+}
+
 // ─── Slack adapter ────────────────────────────────────────────────────────────
 
 function makeSlackAdapter(): SurfaceAdapter {
@@ -337,24 +395,32 @@ function makeSlackAdapter(): SurfaceAdapter {
     const COUNT = 20
     let truncated = false
     try {
-      const result = await callTool(serverName, 'slack_search_public', {
-        query: 'from:me OR to:me',
-        count: COUNT
-      })
-      const parsed = safeParseJson<{ messages?: { matches?: unknown[] } }>(result, {})
-      if ((parsed.messages?.matches?.length ?? 0) >= COUNT) truncated = true
       const ownerHandles = getOwnerHandles()
+      // Slack search syntax: to:<handle> matches DMs and @mentions in channels.
+      // Falls back to "to:me" when no handles are configured.
+      const searchQuery = ownerHandles.length > 0
+        ? ownerHandles.map(h => `to:${h}`).join(' OR ')
+        : 'to:me'
 
-      for (const msg of parsed.messages?.matches ?? []) {
-        const m = msg as Record<string, unknown>
-        const ts = String(m.ts ?? '')
-        const channelId = String((m.channel as any)?.id ?? m.channel ?? '')
-        const author = String((m.username as string) ?? (m.user as string) ?? '')
+      const result = await callTool(serverName, 'conversations_search_messages', {
+        search_query: searchQuery,
+        limit: COUNT
+      })
+
+      // The server returns CSV (gocsv RFC 4180 format) with a header row.
+      // Columns: msgID, channelID, ThreadTs, text, permalink, userUser, userID, time
+      const rows = parseSlackCsv(result)
+      if (rows.length >= COUNT) truncated = true
+
+      for (const row of rows) {
+        const ts = row.msgID ?? ''
+        const channelId = row.channelID ?? ''
+        const author = row.userUser || row.userID || ''
         const isDm = channelId.startsWith('D')
-        const threadTs = m.thread_ts ? String(m.thread_ts) : null
+        const threadTs = row.ThreadTs || null
 
         // Structural relation detection — no body storage needed for this logic
-        const titleText = String(m.text ?? '')
+        const titleText = row.text ?? ''
         const mentionsOwner = ownerHandles.some((h) =>
           titleText.toLowerCase().includes(`@${h.toLowerCase()}`) ||
           titleText.toLowerCase().includes(h.toLowerCase())
@@ -374,20 +440,25 @@ function makeSlackAdapter(): SurfaceAdapter {
         // directed: someone else sent a DM, mentioned, or replied in a thread
         const directed = !isOwnerHandle(author) && relation !== 'involved'
 
+        // row.time is ISO RFC3339 from the server; fall back to parsing ts as Slack epoch seconds
+        let occurredAt: string | null = null
+        if (row.time) { try { occurredAt = new Date(row.time).toISOString() } catch {} }
+        if (!occurredAt && ts) { try { occurredAt = new Date(parseFloat(ts) * 1000).toISOString() } catch {} }
+
         obs.push({
           external_id: `${channelId}:${ts}`,
           kind: 'message',
           title: titleText.slice(0, 200),
           body: '', // Slack body not stored at rest (privacy)
           actor: author,
-          url: String(m.permalink ?? ''),
-          occurred_at: ts ? new Date(parseFloat(ts) * 1000).toISOString() : null,
+          url: row.permalink ?? '',
+          occurred_at: occurredAt,
           relation,
           directed,
           last_actor: author || null,
           due_at: null,
           change_fields: { ts, channel: channelId },
-          raw: m
+          raw: { ts, channel: channelId, threadTs, userUser: author, userID: row.userID ?? '' }
         })
       }
     } catch (e) {
@@ -414,7 +485,7 @@ function makeSlackAdapter(): SurfaceAdapter {
       directed: raw.directed ?? false,
       last_actor: raw.last_actor ?? null,
       due_at: raw.due_at ?? null,
-      raw: scrubRaw(raw.raw, ['ts', 'channel', 'permalink', 'username', 'user', 'thread_ts'])
+      raw: scrubRaw(raw.raw, ['ts', 'channel', 'threadTs', 'userUser', 'userID'])
     }
   }
 

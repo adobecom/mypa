@@ -235,7 +235,8 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
   const payload = intent.payload ?? {}
   const payloadTextKey = payloadDraftKey  // same key, kept for clarity in JSX below
   const payloadText = payloadTextKey ? String(payload[payloadTextKey]) : null
-  const payloadExtra = Object.entries(payload).filter(([k]) => k !== payloadTextKey)
+  // Exclude the display key and any _-prefixed internal routing fields (e.g. _channel_id)
+  const payloadExtra = Object.entries(payload).filter(([k]) => k !== payloadTextKey && !k.startsWith('_'))
 
   const cp = intent.context_packet ?? {}
   const memories = safeArray(cp.memories, isRecord)
