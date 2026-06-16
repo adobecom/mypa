@@ -532,6 +532,8 @@ export interface SetupHealthServer {
   name: string
   connected: boolean
   missingEnvKeys: string[]
+  /** Filesystem path problems (missing, not a directory, unresolved tilde, etc.) */
+  invalidArgs?: string[]
   oauthProvider?: OAuthProvider
   oauthConnectedAt?: string
   oauthStaleDays?: number
@@ -597,6 +599,9 @@ export interface IpcApi {
     getWindowType(): 'widget' | 'main-window'
     openExternal(url: string): Promise<void>
     factoryReset(): Promise<void>
+    /** Open the native OS directory-picker dialog. Returns an array of absolute paths,
+     *  or an empty array if the user cancels. Pass multiple=true to allow multi-select. */
+    pickDirectory(multiple?: boolean): Promise<string[]>
   }
   ambient: {
     getIntents(): Promise<Intent[]>

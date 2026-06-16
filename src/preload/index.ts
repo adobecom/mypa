@@ -56,7 +56,8 @@ const api: IpcApi = {
       return window.location.pathname.includes('widget') ? 'widget' : 'main-window'
     },
     openExternal: (url: string) => ipcRenderer.invoke('system:open-external', url),
-    factoryReset: () => ipcRenderer.invoke('system:factory-reset')
+    factoryReset: () => ipcRenderer.invoke('system:factory-reset'),
+    pickDirectory: (multiple?: boolean) => ipcRenderer.invoke('system:pick-directory', multiple)
   },
   ambient: {
     getIntents: () => ipcRenderer.invoke('ambient:get-intents'),

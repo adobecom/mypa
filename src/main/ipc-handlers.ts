@@ -1,5 +1,6 @@
 import { ipcMain, BrowserWindow, dialog, shell, app } from 'electron'
-import { writeFileSync } from 'fs'
+import { writeFileSync, statSync } from 'fs'
+import { homedir } from 'os'
 import {
   dbGetRoutines,
   dbCreateRoutine,
@@ -297,6 +298,33 @@ export function registerIpcHandlers(
         }
       }
 
+      // Validate path-type arg inputs (e.g. filesystem allowed directories)
+      const invalidArgs: string[] = []
+      const pathArgInputs = entry?.argInputs?.filter((a) => a.isPath) ?? []
+      if (pathArgInputs.length > 0) {
+        const baseArgCount = entry?.baseArgs.length ?? 0
+        const dirs = (srv.args ?? []).slice(baseArgCount)
+        if (dirs.length === 0) {
+          invalidArgs.push('No allowed directories configured')
+        } else {
+          for (const raw of dirs) {
+            // Expand leading tilde for validation (same logic as mcp.ts expandTildeArgs)
+            const expanded = raw.startsWith('~/')
+              ? homedir() + raw.slice(1)
+              : raw === '~' ? homedir() : raw
+            if (!expanded.startsWith('/')) {
+              invalidArgs.push(`Not an absolute path: ${raw}`)
+            } else {
+              try {
+                if (!statSync(expanded).isDirectory()) invalidArgs.push(`Directory not found: ${raw}`)
+              } catch {
+                invalidArgs.push(`Directory not found: ${raw}`)
+              }
+            }
+          }
+        }
+      }
+
       const provider = entry?.oauthProvider as string | undefined
       const oauthConnectedAt = provider
         ? config.oauth_connected_at?.[provider as 'github' | 'notion' | 'linear']
@@ -310,6 +338,7 @@ export function registerIpcHandlers(
         name: srv.name,
         connected: status?.connected ?? false,
         missingEnvKeys,
+        invalidArgs: invalidArgs.length > 0 ? invalidArgs : undefined,
         oauthProvider: entry?.oauthProvider,
         oauthConnectedAt,
         oauthStaleDays
@@ -366,6 +395,16 @@ export function registerIpcHandlers(
     // Relaunch into a fresh onboarding session
     app.relaunch()
     app.exit(0)
+  })
+
+  ipcMain.handle('system:pick-directory', async (_e, multiple?: boolean) => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select directory',
+      properties: multiple
+        ? ['openDirectory', 'createDirectory', 'multiSelections']
+        : ['openDirectory', 'createDirectory']
+    })
+    return result.canceled ? [] : result.filePaths
   })
 
   // ─── Ambient ───────────────────────────────────────────────────────────────

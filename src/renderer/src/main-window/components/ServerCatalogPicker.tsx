@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react'
-import { ArrowLeft, Check, ExternalLink, Download } from 'lucide-react'
+import { ArrowLeft, Check, ExternalLink, Download, FolderOpen } from 'lucide-react'
 import { MCP_CATALOG, CATALOG_CATEGORIES, type McpCatalogEntry } from '@shared/mcp-catalog'
 import type { McpServerConfig, DeviceFlowStart, OAuthProvider, OAuthAppCredential, AppConfig, DetectedMcpServer } from '@shared/types'
 
@@ -275,8 +275,17 @@ function ConfigurePanel({
       if (entry.requiredEnv?.some((f) => !envValues[f.key]?.trim())) return false
     }
     if (entry.argInputs) {
-      for (const vals of argValues) {
+      for (let i = 0; i < entry.argInputs.length; i++) {
+        const argInput = entry.argInputs[i]
+        const vals = argValues[i] ?? []
         if (!vals.some((v) => v.trim())) return false
+        // For path inputs, require each non-empty value to be absolute or a valid tilde path (~ or ~/)
+        if (argInput.isPath && vals.some((v) => {
+          const t = v.trim()
+          return t && !t.startsWith('/') && t !== '~' && !t.startsWith('~/')
+        })) {
+          return false
+        }
       }
     }
     return true
@@ -426,53 +435,87 @@ function ConfigurePanel({
       ))}
 
       {/* Arg inputs (e.g. filesystem paths) */}
-      {entry.argInputs?.map((argInput, inputIdx) => (
-        <div key={inputIdx} className="form-group">
-          <label className="form-label">{argInput.label}</label>
-          {(argValues[inputIdx] ?? ['']).map((val, lineIdx) => (
-            <div key={lineIdx} style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
-              <input
-                className="form-input form-input--mono"
-                style={{ flex: 1 }}
-                placeholder={argInput.placeholder}
-                value={val}
-                onChange={(e) => {
-                  const updated = [...(argValues[inputIdx] ?? [''])]
-                  updated[lineIdx] = e.target.value
-                  const next = [...argValues]
-                  next[inputIdx] = updated
-                  setArgValues(next)
-                }}
-              />
-              {argInput.multiple && lineIdx === (argValues[inputIdx]?.length ?? 1) - 1 && (
-                <button
-                  className="btn btn--ghost btn--sm"
-                  onClick={() => {
+      {entry.argInputs?.map((argInput, inputIdx) => {
+        const vals = argValues[inputIdx] ?? ['']
+        const hasRelativePath = argInput.isPath && vals.some((v) => {
+          const t = v.trim()
+          return t && !t.startsWith('/') && t !== '~' && !t.startsWith('~/')
+        })
+
+        const handleBrowse = async () => {
+          const picked = await window.electron.system.pickDirectory(argInput.multiple ?? false)
+          if (!picked.length) return
+          // Merge picked paths with existing non-empty rows
+          const existing = vals.filter((v) => v.trim())
+          const merged = [...new Set([...existing, ...picked])]
+          const next = [...argValues]
+          next[inputIdx] = merged.length ? merged : ['']
+          setArgValues(next)
+        }
+
+        return (
+          <div key={inputIdx} className="form-group">
+            <label className="form-label">{argInput.label}</label>
+            {vals.map((val, lineIdx) => (
+              <div key={lineIdx} style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
+                <input
+                  className="form-input form-input--mono"
+                  style={{ flex: 1 }}
+                  placeholder={argInput.placeholder}
+                  value={val}
+                  onChange={(e) => {
+                    const updated = [...vals]
+                    updated[lineIdx] = e.target.value
                     const next = [...argValues]
-                    next[inputIdx] = [...(argValues[inputIdx] ?? ['']), '']
+                    next[inputIdx] = updated
                     setArgValues(next)
                   }}
-                >
-                  +
-                </button>
-              )}
-              {argInput.multiple && (argValues[inputIdx]?.length ?? 0) > 1 && (
-                <button
-                  className="btn btn--ghost btn--sm"
-                  onClick={() => {
-                    const next = [...argValues]
-                    next[inputIdx] = (argValues[inputIdx] ?? []).filter((_, i) => i !== lineIdx)
-                    setArgValues(next)
-                  }}
-                >
-                  ×
-                </button>
-              )}
-            </div>
-          ))}
-          {argInput.hint && <div className="form-hint">{argInput.hint}</div>}
-        </div>
-      ))}
+                />
+                {argInput.multiple && lineIdx === vals.length - 1 && (
+                  <button
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => {
+                      const next = [...argValues]
+                      next[inputIdx] = [...vals, '']
+                      setArgValues(next)
+                    }}
+                  >
+                    +
+                  </button>
+                )}
+                {argInput.multiple && vals.length > 1 && (
+                  <button
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => {
+                      const next = [...argValues]
+                      next[inputIdx] = vals.filter((_, i) => i !== lineIdx)
+                      setArgValues(next)
+                    }}
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            ))}
+            {argInput.isPath && (
+              <button
+                className="btn btn--ghost btn--sm"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginBottom: 4 }}
+                onClick={handleBrowse}
+              >
+                <FolderOpen size={13} />
+                Browse…
+              </button>
+            )}
+            {hasRelativePath && (
+              <div className="form-hint" style={{ color: 'var(--color-warning, #c8960a)' }}>
+                Use an absolute path (starting with / or ~).
+              </div>
+            )}
+            {argInput.hint && <div className="form-hint">{argInput.hint}</div>}
+          </div>
+        )
+      })}
 
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 }}>
         <button className="btn btn--ghost btn--sm" onClick={onBack}>Back</button>

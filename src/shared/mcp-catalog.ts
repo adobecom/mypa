@@ -13,6 +13,9 @@ export interface ArgInput {
   placeholder?: string
   hint?: string
   multiple?: boolean
+  /** When true, values are filesystem directory paths. The UI shows a Browse button
+   *  and the main process expands leading ~ before spawning the server. */
+  isPath?: boolean
 }
 
 export interface McpCatalogEntry {
@@ -66,7 +69,8 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
         label: 'Allowed directories',
         placeholder: '/Users/you/projects',
         hint: 'One directory per line. The server can only access these paths.',
-        multiple: true
+        multiple: true,
+        isPath: true
       }
     ],
     authType: 'none'
