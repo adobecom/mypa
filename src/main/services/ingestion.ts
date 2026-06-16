@@ -149,9 +149,12 @@ function makeGithubAdapter(): SurfaceAdapter {
       const itemNumber = String(r.number ?? '')
       const lastActor = commentActors.get(extId) ?? null
 
-      // directed: review requests are always directed; for others, last commenter must be non-owner
+      // directed: review requests, assignments, and mentions are always directed at me;
+      // for other relations (involved), fall back to last commenter being a non-owner
       const directed =
         relation === 'review_requested' ||
+        relation === 'assigned' ||
+        relation === 'mentioned' ||
         (lastActor !== null && !isOwnerHandle(lastActor))
 
       obs.push({
@@ -222,8 +225,10 @@ function makeJiraAdapter(): SurfaceAdapter {
     let truncated = false
     try {
       const result = await callTool(serverName, 'jira_search', {
-        jql: 'assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser() ORDER BY updated DESC',
-        // Added duedate, priority, issuelinks — enables relation/dependency edges
+        // watcher = currentUser() is omitted: it is frequently invalid on Jira Server/DC
+        // and would reject the entire query, silently producing zero signals.
+        jql: 'assignee = currentUser() OR reporter = currentUser() ORDER BY updated DESC',
+        // mcp-atlassian maps the 'comment' field request to the top-level 'comments' array
         fields: 'summary,status,assignee,reporter,updated,created,comment,duedate,priority,issuelinks',
         limit: LIMIT
       })
@@ -233,21 +238,24 @@ function makeJiraAdapter(): SurfaceAdapter {
 
       for (const issue of parsed.issues ?? []) {
         const i = issue as Record<string, unknown>
-        const fields = (i.fields as Record<string, unknown>) ?? {}
+        // mcp-atlassian returns a flat simplified dict — all fields at top level with snake_case keys.
+        // There is no nested 'fields' wrapper; sub-objects use snake_case (display_name, not displayName).
+        const assignee = (i.assignee as any) ?? {}
+        const reporter = (i.reporter as any) ?? {}
 
         // Determine relation: assignee == me → assigned, else → mentioned
-        const assigneeDisplay = String((fields.assignee as any)?.displayName ?? '')
-        const assigneeAccount = String((fields.assignee as any)?.accountId ?? '')
+        const assigneeDisplay = String(assignee.display_name ?? '')
+        const assigneeAccount = String(assignee.name ?? '')  // 'name' = username/key
         const isAssigned = ownerHandles.length > 0 && ownerHandles.some((h) =>
           assigneeDisplay.toLowerCase().includes(h.toLowerCase()) ||
           assigneeAccount.toLowerCase().includes(h.toLowerCase())
         )
         const relation = isAssigned ? 'assigned' : 'mentioned'
 
-        // Latest comment author → last_actor + directed
-        const comments = (fields.comment as any)?.comments ?? []
+        // Latest comment author — top-level 'comments' array (not fields.comment.comments)
+        const comments: any[] = Array.isArray(i.comments) ? i.comments : []
         const lastComment = comments.length > 0 ? comments[comments.length - 1] : null
-        const lastCommentAuthor = String(lastComment?.author?.displayName ?? '')
+        const lastCommentAuthor = String(lastComment?.author?.display_name ?? '')
         const lastActor = lastCommentAuthor || null
         const directed = relation === 'assigned' ||
           (lastActor !== null && !isOwnerHandle(lastActor))
@@ -258,20 +266,22 @@ function makeJiraAdapter(): SurfaceAdapter {
         obs.push({
           external_id: String(i.key ?? i.id ?? ''),
           kind: 'issue',
-          title: String(fields.summary ?? ''),
+          title: String(i.summary ?? ''),
           body: latestCommentBody,
-          actor: String(assigneeDisplay || (fields.reporter as any)?.displayName || ''),
-          url: String(i.self ?? ''),
-          occurred_at: String(fields.updated ?? fields.created ?? ''),
+          actor: String(assigneeDisplay || reporter.display_name || ''),
+          url: String(i.url ?? ''),
+          occurred_at: String(i.updated ?? i.created ?? ''),
           relation,
           directed,
           last_actor: lastActor,
-          due_at: fields.duedate ? String(fields.duedate) : null,
+          due_at: i.duedate ? String(i.duedate) : null,
           change_fields: {
-            status: (fields.status as any)?.name,
-            updated: fields.updated,
-            comment_count: (fields.comment as any)?.total,
-            last_actor: lastActor, // fingerprint changes when new person comments
+            status: (i.status as any)?.name,
+            updated: i.updated,
+            // last_comment_id is the fingerprint key for new comments: it changes on each
+            // new comment regardless of pagination (the API always returns the latest comments).
+            last_comment_id: lastComment?.id ?? null,
+            last_actor: lastActor,
           },
           raw: i
         })
@@ -284,22 +294,26 @@ function makeJiraAdapter(): SurfaceAdapter {
   }
 
   function normalize(raw: RawObservation): SignalInput {
-    // Build a curated fields sub-object so graph derivation (assignee, issuelinks, sprint) works
-    // while avoiding storing full descriptions, custom fields, or arbitrary user content.
-    const rawFields = (raw.raw.fields as Record<string, unknown>) ?? {}
+    // Build a curated fields sub-object so graph derivation (assignee, issuelinks) works.
+    // mcp-atlassian returns a flat simplified dict (no nested 'fields' key); read top-level
+    // keys directly. memory-graph.ts expects raw.fields.assignee.{displayName, accountId}
+    // so we map snake_case → camelCase here to keep that contract stable.
+    const flat = raw.raw as Record<string, unknown>
+    const assigneeRaw = (flat.assignee as any)
+    const reporterRaw = (flat.reporter as any)
     const curatedFields = {
-      assignee:   (rawFields.assignee as any) ? {
-        displayName: (rawFields.assignee as any).displayName,
-        accountId:   (rawFields.assignee as any).accountId
+      assignee: assigneeRaw ? {
+        displayName: assigneeRaw.display_name ?? null,
+        accountId:   assigneeRaw.name ?? null,   // 'name' = username/key in simplified dict
       } : null,
-      reporter:   (rawFields.reporter as any) ? {
-        displayName: (rawFields.reporter as any).displayName,
-        accountId:   (rawFields.reporter as any).accountId
+      reporter: reporterRaw ? {
+        displayName: reporterRaw.display_name ?? null,
+        accountId:   reporterRaw.name ?? null,
       } : null,
-      issuelinks: (rawFields.issuelinks as any[]) ?? [],
-      status:     (rawFields.status as any)?.name ?? null,
-      priority:   (rawFields.priority as any)?.name ?? null,
-      duedate:    rawFields.duedate ?? null,
+      issuelinks: [],  // mcp-atlassian simplified dict does not expose issuelinks
+      status:     (flat.status as any)?.name ?? null,
+      priority:   (flat.priority as any)?.name ?? null,
+      duedate:    flat.duedate ?? null,
     }
     return {
       surface,
@@ -315,7 +329,7 @@ function makeJiraAdapter(): SurfaceAdapter {
       directed: raw.directed ?? false,
       last_actor: raw.last_actor ?? null,
       due_at: raw.due_at ?? null,
-      raw: { ...scrubRaw(raw.raw, ['id', 'key', 'self', 'issuetype', 'status', 'updated', 'created']), fields: curatedFields }
+      raw: { ...scrubRaw(raw.raw, ['id', 'key', 'url', 'summary', 'status', 'updated', 'created']), fields: curatedFields }
     }
   }
 
@@ -374,7 +388,9 @@ function parseSlackCsv(csv: string): Record<string, string>[] {
     if (!line.trim()) continue
     const fields = parseCsvRow(line)
     const row: Record<string, string> = {}
-    headers.forEach((h, idx) => { row[h.trim()] = fields[idx] ?? '' })
+    // Normalize header keys to lowercase so PascalCase Go field names (MsgID, Channel…)
+    // and any other casing convention map to the same accessor.
+    headers.forEach((h, idx) => { row[h.trim().toLowerCase()] = fields[idx] ?? '' })
     rows.push(row)
   }
   return rows
@@ -407,17 +423,19 @@ function makeSlackAdapter(): SurfaceAdapter {
         limit: COUNT
       })
 
-      // The server returns CSV (gocsv RFC 4180 format) with a header row.
-      // Columns: msgID, channelID, ThreadTs, text, permalink, userUser, userID, time
+      // The server (korotovsky/slack-mcp-server) returns RFC 4180 CSV with a header row.
+      // Headers are Go exported field names (PascalCase): MsgID, Channel, UserName, UserID,
+      // RealName, ThreadTs, Text, Time, Permalink. parseSlackCsv normalizes them to lowercase
+      // so all reads use the lowercased form (msgid, channel, username, threadts, text…).
       const rows = parseSlackCsv(result)
       if (rows.length >= COUNT) truncated = true
 
       for (const row of rows) {
-        const ts = row.msgID ?? ''
-        const channelId = row.channelID ?? ''
-        const author = row.userUser || row.userID || ''
+        const ts = row.msgid ?? ''
+        const channelId = row.channel ?? ''
+        const author = row.username || row.userid || ''
         const isDm = channelId.startsWith('D')
-        const threadTs = row.ThreadTs || null
+        const threadTs = row.threadts || null
 
         // Structural relation detection — no body storage needed for this logic
         const titleText = row.text ?? ''
@@ -458,7 +476,7 @@ function makeSlackAdapter(): SurfaceAdapter {
           last_actor: author || null,
           due_at: null,
           change_fields: { ts, channel: channelId },
-          raw: { ts, channel: channelId, threadTs, userUser: author, userID: row.userID ?? '' }
+          raw: { ts, channel: channelId, threadTs, username: author, userid: row.userid ?? '' }
         })
       }
     } catch (e) {
@@ -485,7 +503,7 @@ function makeSlackAdapter(): SurfaceAdapter {
       directed: raw.directed ?? false,
       last_actor: raw.last_actor ?? null,
       due_at: raw.due_at ?? null,
-      raw: scrubRaw(raw.raw, ['ts', 'channel', 'threadTs', 'userUser', 'userID'])
+      raw: scrubRaw(raw.raw, ['ts', 'channel', 'threadTs', 'username', 'userid'])
     }
   }
 
