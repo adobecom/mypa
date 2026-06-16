@@ -431,6 +431,17 @@ export default function Settings(): React.ReactElement {
               <div className="card__title">OAuth App Credentials</div>
               <div className="card__subtitle">App credentials for connected OAuth providers.</div>
             </div>
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={async () => {
+                for (const provider of Array.from(usedProviders) as OAuthProvider[]) {
+                  const creds = config.oauth_apps?.[provider]
+                  if (creds) await handleCredentialSave(provider, creds)
+                }
+              }}
+            >
+              Save
+            </button>
           </div>
 
           {usedProviders.has('github') && (

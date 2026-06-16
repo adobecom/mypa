@@ -230,6 +230,9 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('config:update', async (_e, partial) => {
+    // The API key has a dedicated channel (config:set-claude-key). Never allow
+    // the generic update path to overwrite or clear it — the renderer never sees it.
+    if (partial?.claude && 'apiKey' in partial.claude) delete partial.claude.apiKey
     const wasEnabled = readConfig().ambient?.enabled ?? true
     const updated = updateConfig(partial)
     // Re-connect MCP servers if changed
@@ -370,12 +373,6 @@ export function registerIpcHandlers(
 
   ipcMain.handle('system:get-badge-count', async () => {
     return dbGetBadgeCount()
-  })
-
-  ipcMain.handle('system:get-window-type', (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender)
-    if (!win) return 'unknown'
-    return win.getTitle().includes('widget') ? 'widget' : 'main-window'
   })
 
   ipcMain.handle('system:open-external', async (_e, url: string) => {

@@ -58,7 +58,7 @@ Read and write app configuration; query MCP server status.
 | Method | Signature | Description |
 |---|---|---|
 | `get` | `() → AppConfig` | Read the full config; `claude.apiKey` is stripped — use `getClaudeKey` for key status |
-| `update` | `(config: Partial<AppConfig>) → void` | Deep-merge a partial config update |
+| `update` | `(config: Partial<AppConfig>) → AppConfig` | Deep-merge a partial config update; returns the resulting merged config. The `claude.apiKey` field is silently stripped from the incoming partial — use `setClaudeKey` to change the API key. |
 | `testMcpServer` | `(cfg: McpServerConfig) → { ok, tools, error? }` | Test a single MCP server connection |
 | `getMcpStatus` | `() → McpServerStatus[]` | Live connection status + tool list for all configured servers |
 | `getClaudeKey` | `() → { configured: boolean; preview: string \| null }` | Returns whether a custom Anthropic API key is stored and a masked preview (e.g. `sk-ant-…AB12`); never returns the raw key |
@@ -95,7 +95,7 @@ OS-level and window utilities.
 |---|---|---|
 | `openMainWindow` | `(routineId?) → void` | Open (or focus) the main window; optionally navigate to a specific routine |
 | `getBadgeCount` | `() → number` | Current unread badge count |
-| `getWindowType` | `() → 'widget' \| 'main-window'` | Which window is calling — useful for shared components |
+| `getWindowType` | `() → 'widget' \| 'main-window'` | Which window is calling — useful for shared components. Resolved in the preload from `window.location.pathname`; no main-process round-trip. |
 | `openExternal` | `(url: string) → void` | Open a URL in the OS default browser via `shell.openExternal` |
 | `factoryReset` | `() → void` | Wipe `~/.mypa/config.json` and `~/.mypa/data.db`, then relaunch the app into onboarding |
 | `pickDirectory` | `(multiple?) → string[]` | Open the native OS directory-picker dialog; returns an array of absolute paths or `[]` if cancelled. Pass `multiple: true` to allow multi-selection. Used by `ServerCatalogPicker` for `isPath`-type argInputs. |
@@ -242,6 +242,7 @@ Manage PA check-in sessions and their chat threads.
 
 ## Changelog
 
+- 2026-06-16 — settings menu hardening: `config.update` return type corrected to `AppConfig` (was `void`); main-process `system:get-window-type` handler removed (dead code — preload resolves window type from `window.location.pathname`); `config:update` handler now defensively strips `apiKey` from the incoming partial so the dedicated `config:set-claude-key` channel remains the sole write path for the API key; OAuth App Credentials card gains a per-card Save button that calls `handleCredentialSave` (stamps `oauth_connected_at`) instead of requiring the page-level Save.
 - 2026-06-09 — action-centric ambient redesign (Phase A): `ambient.approve` gains optional `payload?` arg for draft-and-confirm; `ambient.getAllIntents(limit?)` added for historical queries; `ambient:approve`/`dismiss`/`challenge` IPC handlers now broadcast updates to both windows (was widget-only); tray state and badge now driven only by `type:"action"` intents — informational (flag/digest/suggestion) no longer notify or light up the tray
 - 2026-06-09 — added `plan:user-message` and `routine:user-message` push channels (broadcast to both windows immediately after user message is saved to DB, before streaming begins); changed `badge:updated` to broadcast to both windows (was widget-only); removed unused `widgetWin` parameter from `handlePlanMessage` and `handleRunMessage` services
 - 2026-06-09 — added `config.getClaudeKey` and `config.setClaudeKey` channels; `config.get` now strips `claude.apiKey` before returning to the renderer (raw key never transmitted); `ClaudeConfig` gained `apiKey?: string` (encrypted at rest via `safeStorage`)
