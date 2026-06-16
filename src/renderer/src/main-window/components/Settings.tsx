@@ -660,6 +660,10 @@ export default function Settings(): React.ReactElement {
 
       {/* Danger Zone */}
       <DangerZoneCard />
+
+      <div style={{ textAlign: 'center', padding: '8px 0 4px', color: 'var(--text-muted)', fontSize: 11 }}>
+        mypa v{import.meta.env.VITE_APP_VERSION} · {import.meta.env.VITE_GIT_SHA}
+      </div>
     </div>
   )
 }

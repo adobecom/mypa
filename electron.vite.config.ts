@@ -1,6 +1,14 @@
 import { resolve } from 'path'
+import { execSync } from 'child_process'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+
+const gitSha = (() => {
+  try { return execSync('git rev-parse --short HEAD').toString().trim() } catch { return 'unknown' }
+})()
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const appVersion = require('./package.json').version as string
 
 export default defineConfig({
   main: {
@@ -21,6 +29,10 @@ export default defineConfig({
   },
   renderer: {
     plugins: [react()],
+    define: {
+      'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
+      'import.meta.env.VITE_GIT_SHA': JSON.stringify(gitSha)
+    },
     resolve: {
       alias: {
         '@shared': resolve('src/shared'),
