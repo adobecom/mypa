@@ -1,4 +1,4 @@
-import { app, BrowserWindow, nativeImage } from 'electron'
+import { app, BrowserWindow, nativeImage, dialog } from 'electron'
 import { fixPath } from './services/path-fix'
 import { handleOAuthCallback } from './services/oauth'
 import { readFileSync } from 'fs'
@@ -57,8 +57,22 @@ async function main(): Promise<void> {
     openOrFocusMainWindow()
   })
 
-  // Initialize database
-  initDb()
+  // Initialize database — wrap so a missing/misbuilt native module shows a
+  // clear error dialog instead of crashing silently or half-starting the app.
+  try {
+    initDb()
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    dialog.showErrorBox(
+      'mypa could not start',
+      `The local database failed to initialize:\n\n${msg}\n\n` +
+      `If you just installed mypa or updated Node.js, run:\n\n` +
+      `  npm run postinstall\n\n` +
+      `in the project directory to rebuild native dependencies, then restart the app.`
+    )
+    app.quit()
+    return
+  }
 
   // Create widget window (hidden initially)
   const win = createWidgetWindow()

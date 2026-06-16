@@ -1,4 +1,7 @@
-import BetterSqlite3 from 'better-sqlite3'
+// Lazy-loaded so a failed native build is catchable at runtime rather than
+// crashing the process at module-import time (import throws synchronously,
+// before any try/catch in main() can run).
+import type BetterSqlite3 from 'better-sqlite3'
 import { join } from 'path'
 import { app } from 'electron'
 import { mkdirSync, unlinkSync } from 'fs'
@@ -52,7 +55,11 @@ export function initDb(): void {
   const dataDir = join(app.getPath('home'), '.mypa')
   mkdirSync(dataDir, { recursive: true })
   const dbPath = join(dataDir, 'data.db')
-  _db = new BetterSqlite3(dbPath)
+  // require() here (not at module top) so a missing/misbuilt native binary
+  // throws inside this function rather than at import time, where it cannot
+  // be caught.  If it fails, the caller (main.ts) shows an error dialog.
+  const Database = require('better-sqlite3') as typeof BetterSqlite3  // eslint-disable-line @typescript-eslint/no-var-requires
+  _db = new Database(dbPath) as BetterSqlite3.Database
   initSchema(_db)
 }
 

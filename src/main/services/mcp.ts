@@ -12,6 +12,19 @@ interface ActiveServer {
 
 const servers = new Map<string, ActiveServer>()
 
+/** Races `promise` against a timeout. Rejects with a clear message on expiry. */
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>
+  const race = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms)
+  })
+  try {
+    return await Promise.race([promise, race])
+  } finally {
+    clearTimeout(timer!)
+  }
+}
+
 export async function connectServer(cfg: McpServerConfig): Promise<McpTool[]> {
   await disconnectServer(cfg.name)
 
@@ -31,17 +44,26 @@ export async function connectServer(cfg: McpServerConfig): Promise<McpTool[]> {
     { capabilities: {} }
   )
 
-  await client.connect(transport)
+  // Wrap connect + listTools in a try/catch so that if either times out we
+  // close the client (which terminates the spawned subprocess) before throwing.
+  // Without this the subprocess is orphaned — it never lands in servers.Map so
+  // disconnectServer() cannot find and kill it on subsequent reconnect attempts.
+  try {
+    await withTimeout(client.connect(transport), 30_000, `connect ${cfg.name}`)
 
-  const toolsResult = await client.listTools()
-  const tools: McpTool[] = (toolsResult.tools ?? []).map((t) => ({
-    name: t.name,
-    description: t.description ?? '',
-    inputSchema: (t.inputSchema as Record<string, unknown>) ?? {}
-  }))
+    const toolsResult = await withTimeout(client.listTools(), 30_000, `listTools ${cfg.name}`)
+    const tools: McpTool[] = (toolsResult.tools ?? []).map((t) => ({
+      name: t.name,
+      description: t.description ?? '',
+      inputSchema: (t.inputSchema as Record<string, unknown>) ?? {}
+    }))
 
-  servers.set(cfg.name, { client, transport, tools, config: cfg })
-  return tools
+    servers.set(cfg.name, { client, transport, tools, config: cfg })
+    return tools
+  } catch (err) {
+    try { await client.close() } catch {}
+    throw err
+  }
 }
 
 export async function disconnectServer(name: string): Promise<void> {
@@ -61,7 +83,11 @@ export async function callTool(
   const server = servers.get(serverName)
   if (!server) throw new Error(`MCP server "${serverName}" not connected`)
 
-  const result = await server.client.callTool({ name: toolName, arguments: params })
+  const result = await withTimeout(
+    server.client.callTool({ name: toolName, arguments: params }),
+    30_000,
+    `callTool ${serverName}::${toolName}`
+  )
   const content = result.content ?? []
   return content
     .map((c: any) => (c.type === 'text' ? c.text : JSON.stringify(c)))
@@ -200,8 +226,8 @@ export async function testServer(
       env: { ...process.env, ...(cfg.env ?? {}) } as Record<string, string>
     })
     client = new Client({ name: 'mypa-test', version: '0.1.0' }, { capabilities: {} })
-    await client.connect(transport)
-    const toolsResult = await client.listTools()
+    await withTimeout(client.connect(transport), 30_000, `connect ${cfg.name}`)
+    const toolsResult = await withTimeout(client.listTools(), 30_000, `listTools ${cfg.name}`)
     const tools: McpTool[] = (toolsResult.tools ?? []).map((t) => ({
       name: t.name,
       description: t.description ?? '',

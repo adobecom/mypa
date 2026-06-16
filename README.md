@@ -19,7 +19,9 @@ A local-first personal assistant for developers, built as a macOS/Linux/Windows 
 ## Prerequisites
 
 - [Node.js](https://nodejs.org) 20+
-- [Claude Code CLI](https://claude.ai/code) installed and authenticated (`claude` must be on your `$PATH`)
+- [Claude Code CLI](https://claude.ai/code) installed and authenticated
+
+  mypa auto-detects `claude` in all common install locations — official installer (`~/.claude/local/claude`), Homebrew, nvm, npm-global, bun, volta — without requiring a manual PATH configuration.
 
 ## Getting started
 
@@ -29,6 +31,21 @@ cd mypa
 npm install
 npm run dev          # Start Electron + Vite with hot-module reload
 ```
+
+## Troubleshooting
+
+**`better-sqlite3` fails to compile during `npm install`**
+
+This usually means the macOS Command Line Tools are missing or have a broken receipt. Fix:
+
+```bash
+sudo rm -rf /Library/Developer/CommandLineTools
+xcode-select --install     # accept the popup; wait for it to finish
+xcode-select -p            # should print /Library/Developer/CommandLineTools
+npm install                # retry; the prebuilt binary should now download or compile
+```
+
+If the prebuilt download times out on a slow network, simply re-run `npm install` — it will retry. Once Command Line Tools are in place the source-compile fallback also succeeds.
 
 ## Commands
 

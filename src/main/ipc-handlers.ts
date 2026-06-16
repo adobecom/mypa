@@ -1,5 +1,4 @@
 import { ipcMain, BrowserWindow, dialog, shell, app } from 'electron'
-import { execFileSync } from 'child_process'
 import { writeFileSync } from 'fs'
 import {
   dbGetRoutines,
@@ -38,7 +37,7 @@ import { startDeviceFlow, pollDeviceFlow, startPkceFlow } from './services/oauth
 import { detectClaudeMcpServers } from './services/claude-import'
 import { executeRoutine, handleRunMessage } from './services/routines'
 import { createPlanDraft, confirmPlanDraft, updatePlanItemStatus, deletePlanItem, handlePlanMessage } from './services/plan'
-import { generateRoutineSetup, cancelStream } from './services/claude'
+import { generateRoutineSetup, cancelStream, detectClaudeBin } from './services/claude'
 import { refreshSchedules, refreshCheckinSchedule, stopScheduler } from './services/cron'
 import { startCheckIn, handleCheckInMessage, endCheckIn, cancelCheckinStream } from './services/checkin'
 import {
@@ -273,24 +272,11 @@ export function registerIpcHandlers(
   // ─── Setup / Health ────────────────────────────────────────────────────────
 
   ipcMain.handle('setup:check-prerequisites', async (): Promise<{ claudeCli: boolean }> => {
-    let claudeCli = false
-    try {
-      execFileSync('/usr/bin/which', ['claude'], { stdio: 'ignore' })
-      claudeCli = true
-    } catch {
-      // not found
-    }
-    return { claudeCli }
+    return { claudeCli: detectClaudeBin() !== null }
   })
 
   ipcMain.handle('setup:get-health', async (): Promise<SetupHealth> => {
-    let claudeCli = false
-    try {
-      execFileSync('/usr/bin/which', ['claude'], { stdio: 'ignore' })
-      claudeCli = true
-    } catch {
-      // not found
-    }
+    const claudeCli = detectClaudeBin() !== null
 
     const config = readConfig()
     const statuses = getServerStatus()

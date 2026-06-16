@@ -48,13 +48,15 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
   const toast = useToast()
 
   useEffect(() => {
-    api.config.get().then((cfg) => {
-      setModel(cfg.claude.model ?? 'claude-opus-4-8')
-      setExistingServers(cfg.mcp_servers)
-      setOauthCreds(cfg.oauth_apps ?? {})
-      setOwnerName(cfg.owner?.name ?? '')
-      setOwnerHandles(cfg.owner?.handles ?? {})
-    })
+    api.config.get()
+      .then((cfg) => {
+        setModel(cfg.claude.model ?? 'claude-opus-4-8')
+        setExistingServers(cfg.mcp_servers)
+        setOauthCreds(cfg.oauth_apps ?? {})
+        setOwnerName(cfg.owner?.name ?? '')
+        setOwnerHandles(cfg.owner?.handles ?? {})
+      })
+      .catch(() => toast.error('Could not load config', { message: 'Some settings may not be pre-filled.' }))
   }, [api])
 
   const checkCli = useCallback(async () => {
@@ -62,10 +64,13 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
     try {
       const { claudeCli } = await api.setup.checkPrerequisites()
       setCliOk(claudeCli)
+    } catch {
+      setCliOk(false)
+      toast.error('Check failed', { message: 'Could not reach the main process. Try restarting mypa.' })
     } finally {
       setCheckingCli(false)
     }
-  }, [api])
+  }, [api, toast])
 
   useEffect(() => {
     if (step === 2 && cliOk === null) checkCli()
@@ -87,6 +92,8 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
         })
       }
       setStep((s) => (s + 1) as Step)
+    } catch {
+      toast.error('Could not save your changes', { message: 'Please try again.' })
     } finally {
       setTransitioning(false)
     }
@@ -117,6 +124,8 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
           return merged
         })
       }
+    } catch {
+      toast.error('Auto-fill failed', { message: 'Could not reach identity tools — fill in your handles manually.' })
     } finally {
       setAutoFilling(false)
     }
@@ -126,16 +135,24 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
 
   const handleAddServer = async (srv: McpServerConfig) => {
     const allServers = [...existingServers, ...serversAdded, srv]
-    await api.config.update({ mcp_servers: allServers })
-    setServersAdded((prev) => [...prev, srv])
+    try {
+      await api.config.update({ mcp_servers: allServers })
+      setServersAdded((prev) => [...prev, srv])
+    } catch {
+      toast.error('Could not add tool', { message: 'Config could not be saved — try again.' })
+    }
   }
 
   const handleCredentialSave = async (provider: OAuthProvider, creds: OAuthAppCredential) => {
-    await api.config.update({
-      oauth_apps: { [provider]: creds } as AppConfig['oauth_apps'],
-      oauth_connected_at: { [provider]: new Date().toISOString() } as AppConfig['oauth_connected_at']
-    })
-    setOauthCreds((prev) => ({ ...prev, [provider]: creds }))
+    try {
+      await api.config.update({
+        oauth_apps: { [provider]: creds } as AppConfig['oauth_apps'],
+        oauth_connected_at: { [provider]: new Date().toISOString() } as AppConfig['oauth_connected_at']
+      })
+      setOauthCreds((prev) => ({ ...prev, [provider]: creds }))
+    } catch {
+      toast.error('Could not save credentials', { message: 'Config could not be saved — try again.' })
+    }
   }
 
   const handleFinish = async () => {
@@ -144,13 +161,15 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
     try {
       await api.config.update({ onboarding_complete: true })
       onComplete()
+    } catch {
+      toast.error('Could not finish setup', { message: 'Please try again.' })
     } finally {
       setTransitioning(false)
     }
   }
 
   const copyInstallCommand = () => {
-    navigator.clipboard.writeText('brew install anthropic/claude/claude')
+    navigator.clipboard.writeText('npm install -g @anthropic-ai/claude-code')
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -258,7 +277,7 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
                   background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)'
                 }}>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
-                    Install with Homebrew (macOS):
+                    Install the Claude Code CLI:
                   </div>
                   <div style={{
                     display: 'flex', alignItems: 'center', gap: 8,
@@ -266,7 +285,7 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
                     padding: '8px 12px', fontFamily: 'monospace', fontSize: 13
                   }}>
                     <span style={{ flex: 1, color: 'var(--text-secondary)' }}>
-                      brew install anthropic/claude/claude
+                      npm install -g @anthropic-ai/claude-code
                     </span>
                     <button
                       className="btn btn--ghost btn--sm"

@@ -6,18 +6,24 @@ All AI work in mypa goes through `src/main/services/claude.ts`, which spawns the
 
 ## Binary discovery
 
-```ts
-// Priority order:
-1. which claude         (shell PATH)
-2. /usr/local/bin/claude
-3. $HOME/.local/bin/claude
-```
+`detectClaudeBin(): string | null` (exported from `claude.ts`) is the single resolver used by both the runtime spawn (`getClaude()`) and the setup/health IPC handlers. It never throws.
 
-The resolved path is cached in `_claudeBin` for the lifetime of the process. If none of the above are found, the function throws:
+Priority order:
 
-```
-claude CLI not found — is Claude Code installed?
-```
+1. `which claude` against the PATH that `fixPath()` patched (covers Homebrew, nvm, npm-global when PATH is correctly inherited or repaired).
+2. Static candidate list, checked with `existsSync`, in order:
+   - `~/.claude/local/claude` — official installer
+   - `~/.npm-global/bin/claude` — default npm global prefix
+   - `~/.local/bin/claude`
+   - `~/.bun/bin/claude`
+   - `~/.nvm/versions/node/<ver>/bin/claude` — all installed nvm node versions, newest first (enumerated from disk via `readdirSync`, no shell)
+   - `/opt/homebrew/bin/claude`
+   - `/usr/local/bin/claude`
+   - `$(npm prefix -g)/bin/claude` — best-effort custom prefix (3 s timeout, never blocks startup)
+
+`getClaude()` calls `detectClaudeBin()` and throws the familiar `claude CLI not found — is Claude Code installed?` message if null. The resolved path is cached in `_claudeBin` **only on success**, so installing claude after launch is detected on the next spawn (no restart required).
+
+`path-fix.ts` (`fixPath()`) also enumerates all nvm node-version bin dirs via `nvmBinDirs()` and adds `~/.claude/local`, `~/.npm-global/bin`, `~/.bun/bin`, and `~/.volta/bin` to `process.env.PATH`, so the `which claude` step usually succeeds even for installs whose PATH lines live in `.zshrc` (which the `-lc` login-shell probe deliberately skips for speed).
 
 ---
 
@@ -195,6 +201,7 @@ This clause is appended in `inferIntent` (`inference.ts`) **after** `buildOwnerC
 
 ## Changelog
 
+- 2026-06-16 — **Unified claude detection:** replaced the separate `execFileSync('/usr/bin/which', ['claude'])` calls in `setup:check-prerequisites` and `setup:get-health` with `detectClaudeBin()` (new export from `claude.ts`) so the wizard gate is identical to what the runtime uses. Broadened fallback candidate list to cover the official installer (`~/.claude/local/claude`), nvm node-version bin dirs (all versions, enumerated via `readdirSync`), `~/.npm-global/bin`, `~/.bun/bin`, and `~/.volta/bin`. `path-fix.ts` static dirs widened to match; `nvmBinDirs()` helper added there too. Failure is no longer cached — a null result leaves `_claudeBin` null so a post-launch install is picked up immediately.
 - 2026-06-15 — **Digest format overhaul:** `RoutineDigest` changed from `{ summary, items, proposed_actions }` to `{ summary, body }`; `generateRoutineDigest` now uses a line-delimited `SUMMARY: <headline>\n\n<markdown body>` format instead of a JSON schema, with a 240 s timeout (up from 120 s); on parse, extracts the `SUMMARY:` line as the notification headline and everything below as the full markdown body; on hard failure, logs to console and returns an honest error message rather than the silent `<name> completed` placeholder. `runClaude` gains an optional `timeoutMs` param (default 120 s unchanged for all other callers).
 - 2026-06-10 — **Standing directives clause:** added `buildDirectivesClause()` to `config.ts`; appended to the `inferIntent` system prompt alongside `buildOwnerClause()`; reads active hard memories via `dbGetActiveHardMemories()`. Hard memories are extracted from check-ins when the user states absolute rules; classification is done by the `checkin_extract` Claude call using a new `enforcement` field in the extraction JSON schema. Autonomous summarization (`memories.ts`) always defaults to `'soft'`. New `MemoryEnforcement` type in `src/shared/types.ts`.
 - 2026-06-09 — added `claudeEnv()` helper in `claude.ts`; both `runClaude` and `runClaudeStream` now pass `env: claudeEnv()` to `spawn`, injecting `ANTHROPIC_API_KEY` when `AppConfig.claude.apiKey` is set; if unset the process inherits the parent env (CLI's own auth)
