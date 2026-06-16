@@ -520,7 +520,7 @@ async function executeIntent(intent: Intent, win: BrowserWindow | null): Promise
 // Verb → MCP tool mapping. Only mapped (surface, verb) pairs may be executed.
 // verbToTool returns null for unmapped pairs to prevent arbitrary tool invocation.
 const VERB_TO_TOOL: Record<string, Record<string, string>> = {
-  github: { comment: 'create_issue_comment', label: 'add_labels_to_issue' },
+  github: { comment: 'add_issue_comment', label: 'add_labels_to_issue' },
   jira:   { comment: 'jira_add_comment' },
   slack:  { reply: 'conversations_add_message', send: 'conversations_add_message' }
 }
