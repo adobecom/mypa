@@ -278,8 +278,10 @@ function makeJiraAdapter(): SurfaceAdapter {
           change_fields: {
             status: (i.status as any)?.name,
             updated: i.updated,
-            comment_count: comments.length,
-            last_actor: lastActor, // fingerprint changes when new person comments
+            // last_comment_id is the fingerprint key for new comments: it changes on each
+            // new comment regardless of pagination (the API always returns the latest comments).
+            last_comment_id: lastComment?.id ?? null,
+            last_actor: lastActor,
           },
           raw: i
         })
@@ -292,22 +294,26 @@ function makeJiraAdapter(): SurfaceAdapter {
   }
 
   function normalize(raw: RawObservation): SignalInput {
-    // Build a curated fields sub-object so graph derivation (assignee, issuelinks, sprint) works
-    // while avoiding storing full descriptions, custom fields, or arbitrary user content.
-    const rawFields = (raw.raw.fields as Record<string, unknown>) ?? {}
+    // Build a curated fields sub-object so graph derivation (assignee, issuelinks) works.
+    // mcp-atlassian returns a flat simplified dict (no nested 'fields' key); read top-level
+    // keys directly. memory-graph.ts expects raw.fields.assignee.{displayName, accountId}
+    // so we map snake_case → camelCase here to keep that contract stable.
+    const flat = raw.raw as Record<string, unknown>
+    const assigneeRaw = (flat.assignee as any)
+    const reporterRaw = (flat.reporter as any)
     const curatedFields = {
-      assignee:   (rawFields.assignee as any) ? {
-        displayName: (rawFields.assignee as any).displayName,
-        accountId:   (rawFields.assignee as any).accountId
+      assignee: assigneeRaw ? {
+        displayName: assigneeRaw.display_name ?? null,
+        accountId:   assigneeRaw.name ?? null,   // 'name' = username/key in simplified dict
       } : null,
-      reporter:   (rawFields.reporter as any) ? {
-        displayName: (rawFields.reporter as any).displayName,
-        accountId:   (rawFields.reporter as any).accountId
+      reporter: reporterRaw ? {
+        displayName: reporterRaw.display_name ?? null,
+        accountId:   reporterRaw.name ?? null,
       } : null,
-      issuelinks: (rawFields.issuelinks as any[]) ?? [],
-      status:     (rawFields.status as any)?.name ?? null,
-      priority:   (rawFields.priority as any)?.name ?? null,
-      duedate:    rawFields.duedate ?? null,
+      issuelinks: [],  // mcp-atlassian simplified dict does not expose issuelinks
+      status:     (flat.status as any)?.name ?? null,
+      priority:   (flat.priority as any)?.name ?? null,
+      duedate:    flat.duedate ?? null,
     }
     return {
       surface,
@@ -323,7 +329,7 @@ function makeJiraAdapter(): SurfaceAdapter {
       directed: raw.directed ?? false,
       last_actor: raw.last_actor ?? null,
       due_at: raw.due_at ?? null,
-      raw: { ...scrubRaw(raw.raw, ['id', 'key', 'self', 'issuetype', 'status', 'updated', 'created']), fields: curatedFields }
+      raw: { ...scrubRaw(raw.raw, ['id', 'key', 'url', 'summary', 'status', 'updated', 'created']), fields: curatedFields }
     }
   }
 
