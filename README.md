@@ -32,6 +32,39 @@ npm install
 npm run dev          # Start Electron + Vite with hot-module reload
 ```
 
+## Install locally
+
+To build and install mypa as a standalone desktop app (rather than running in dev mode):
+
+```bash
+git clone https://github.com/adobecom/mypa.git
+cd mypa
+npm install          # also rebuilds native deps (better-sqlite3) automatically
+npm run dist         # compiles + packages; writes installer(s) to dist/
+```
+
+Then install the artifact for your platform:
+
+**macOS** — open `dist/mypa-<version>.dmg` and drag mypa to Applications.
+
+> Because the build is unsigned (`identity: null`), macOS Gatekeeper will block the first launch. Right-click the app in Applications, choose **Open**, then **Open** again in the dialog. Alternatively, clear the quarantine flag:
+> ```bash
+> xattr -dr com.apple.quarantine /Applications/mypa.app
+> ```
+
+**Linux** — run the AppImage directly:
+```bash
+chmod +x dist/mypa-<version>.AppImage
+./dist/mypa-<version>.AppImage
+```
+Or install the Debian package: `sudo dpkg -i dist/mypa_<version>_amd64.deb`
+
+**Windows** — run `dist\mypa Setup <version>.exe` and follow the installer.
+
+Once launched, mypa lives in your system tray. The [Claude Code CLI](https://claude.ai/code) must be installed and authenticated before the app can run AI calls.
+
+> **Quick local test (no installer):** `npm run pack` drops an unpacked app directory into `dist/` without producing an installer — useful for a fast smoke test after a local build.
+
 ## Troubleshooting
 
 **`better-sqlite3` fails to compile during `npm install`**
