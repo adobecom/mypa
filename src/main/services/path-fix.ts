@@ -1,4 +1,6 @@
 import { execFileSync } from 'child_process'
+import { readdirSync } from 'fs'
+import { join } from 'path'
 
 /**
  * Augments process.env.PATH so that packaged Electron apps launched from
@@ -17,6 +19,22 @@ import { execFileSync } from 'child_process'
  *
  * Call once, before any child-process spawning, at the top of main().
  */
+/**
+ * Enumerate all ~/.nvm/versions/node/<ver>/bin dirs that exist on disk,
+ * newest node version first.  Returns an empty array when nvm is not present.
+ */
+function nvmBinDirs(home: string): string[] {
+  if (!home) return []
+  const versionsDir = join(home, '.nvm', 'versions', 'node')
+  try {
+    return readdirSync(versionsDir)
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+      .map((v) => join(versionsDir, v, 'bin'))
+  } catch {
+    return []
+  }
+}
+
 export function fixPath(): void {
   if (process.platform === 'win32') return   // Windows inherits PATH correctly from the shell
 
@@ -50,8 +68,17 @@ export function fixPath(): void {
     '/opt/homebrew/sbin',
     '/usr/local/bin',
     '/usr/local/sbin',
+    // Official Claude Code installer
+    `${home}/.claude/local`,
+    // npm global (default prefix ~/.npm-global)
+    `${home}/.npm-global/bin`,
     // User-local installs (mise, fnm, pip --user, etc.)
     `${home}/.local/bin`,
+    // Other package managers
+    `${home}/.bun/bin`,
+    `${home}/.volta/bin`,
+    // nvm: every installed node-version bin dir (newest first)
+    ...nvmBinDirs(home),
     // System defaults
     '/usr/bin',
     '/bin',

@@ -103,7 +103,11 @@ export function ensureConfigDir(): void {
 export function readConfig(): AppConfig {
   ensureConfigDir()
   if (!existsSync(CONFIG_PATH)) {
-    writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2))
+    try {
+      writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2))
+    } catch {
+      // Disk full or unwritable — proceed with in-memory defaults
+    }
     return { ...DEFAULT_CONFIG }
   }
   try {
