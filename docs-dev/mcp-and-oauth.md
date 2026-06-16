@@ -49,6 +49,43 @@ Maintains a `Map<string, Client>` of active connections keyed by server name.
 
 `src/shared/mcp-catalog.ts` exports a list of pre-configured MCP server templates users can add in one click from the Settings panel. Each entry includes the command, args template, required env keys, and an OAuth provider hint (if applicable).
 
+#### `ArgInput` — positional argument collection
+
+Some catalog entries need positional CLI arguments rather than env vars. The `argInputs?: ArgInput[]` field on `McpCatalogEntry` declares these:
+
+```ts
+interface ArgInput {
+  label: string
+  placeholder?: string
+  hint?: string
+  multiple?: boolean  // allow one or more rows
+  isPath?: boolean    // values are filesystem directory paths — enables Browse button
+                      // and tilde expansion at connect time
+}
+```
+
+When `isPath: true`, the renderer shows a **Browse…** button (native `dialog.showOpenDialog`) alongside the text inputs. Paths selected via the picker are always absolute. Manually typed paths must start with `/` or `~` — the "Add" button stays disabled while any non-empty value fails this check.
+
+Tilde expansion (`~` → `os.homedir()`) is applied in `mcp.ts` at connect time (not stored), so the persisted value remains portable.
+
+#### Filesystem server
+
+The `filesystem` catalog entry (`id: 'filesystem'`, `@modelcontextprotocol/server-filesystem`) uses `argInputs` to collect one or more **allowed directories**. These become positional `argv` after the package name:
+
+```
+npx -y @modelcontextprotocol/server-filesystem <dir1> [<dir2> ...]
+```
+
+The server can only read/write within the listed directories. No environment variables are required (`authType: 'none'`).
+
+**Health validation:** `setup.getHealth()` (`setup:get-health` IPC) validates that:
+- At least one directory is configured.
+- Each directory (after tilde expansion) exists and is a real directory.
+
+Failures are reported in `SetupHealthServer.invalidArgs` and surfaced in the Setup Health card.
+
+**Claude-import path:** Filesystem servers imported from `~/.claude.json` carry their `args` verbatim (including any allowed directories already configured there). Tilde expansion still applies at connect time.
+
 ---
 
 ### Claude Code config import (`claude-import.ts`)
@@ -138,16 +175,20 @@ Provider configurations (client IDs, scopes, token endpoints) live in `src/share
 
 ### Connection status
 
-`SetupHealth.servers[]` (from `setup.getHealth()`) reports per-server OAuth health:
+`SetupHealth.servers[]` (from `setup.getHealth()`) reports per-server health:
 
 | Field | Description |
 |---|---|
+| `connected` | Whether the server process is currently connected |
+| `missingEnvKeys` | Required env vars not yet configured (empty array if all present) |
+| `invalidArgs` | Path-type arg problems: missing dirs, non-existent paths, relative paths (undefined if clean) |
 | `oauthProvider` | Which OAuth provider the server uses (if any) |
 | `oauthConnectedAt` | ISO timestamp of last successful auth |
 | `oauthStaleDays` | Days since last auth (if stale, show re-auth prompt) |
 
 ## Changelog
 
+- 2026-06-16 — **Filesystem MCP hardening:** `mcp-catalog.ts` — added `isPath?: boolean` to `ArgInput` interface; filesystem entry sets `isPath: true` on its allowed-directories input. `mcp.ts` — added `expandTildeArgs(cfg)` helper: for catalog entries with `isPath` argInputs, expands a leading `~` in each directory arg to `os.homedir()` before spawning; applied to both `connectServer` and `testServer`. `ipc-handlers.ts` — added `system:pick-directory` handler (`dialog.showOpenDialog`, returns `string[]`); updated `setup:get-health` to validate path-type args (missing dirs, non-existent paths, relative paths) and return them in `SetupHealthServer.invalidArgs`. `types.ts` — `SetupHealthServer` gains `invalidArgs?: string[]`; `IpcApi.system` gains `pickDirectory(multiple?): Promise<string[]>`. `ServerCatalogPicker.tsx` — arg-input rows now show a Browse… button (`FolderOpen` icon) for `isPath` inputs; `isReady()` rejects non-empty values that are neither absolute nor tilde-prefixed. `Settings.tsx` — health display folds `invalidArgs` into issue count and per-server detail.
 - 2026-06-16 — **Slack catalog migrated to `slack-mcp-server` (korotovsky):** `mcp-catalog.ts` — Slack entry replaced: package changed from the deprecated `@modelcontextprotocol/server-slack` to `slack-mcp-server`; auth changed from bot token (`SLACK_BOT_TOKEN` + `SLACK_TEAM_ID`) to a user OAuth token (`SLACK_MCP_XOXP_TOKEN`, required scopes: `channels:history search:read im:history groups:history mpim:history chat:write`). The new server exposes `conversations_search_messages` (real search, user-token-capable) and `conversations_add_message` (posting, disabled by default). Added `fixedEnv?: Record<string, string>` field to `McpCatalogEntry` interface for static env vars that are always injected without user input; the Slack entry uses it to set `SLACK_MCP_ADD_MESSAGE_TOOL=true`. `ServerCatalogPicker.tsx` — `handleAdd` merges `entry.fixedEnv` into the server config env before saving.
 - 2026-06-16 — **MCP call timeouts:** `mcp.ts` — added `withTimeout<T>(promise, ms, label)` helper (Promise.race with a reject-on-expiry timer). Applied to `client.connect(transport)` and `client.listTools()` in `connectServer` (30 s each), and to `server.client.callTool()` in `callTool` (30 s). A hung MCP server subprocess now unblocks the `connectAllServers` startup loop and the onboarding Auto-fill identity button after 30 s rather than hanging forever.
 - 2026-06-08 — Jira catalog entry switched from `mcp-atlassian` (Cloud-only, npx) to `sooperset/mcp-atlassian` (Server/DC support, uvx); env vars changed from `ATLASSIAN_BASE_URL`/`ATLASSIAN_EMAIL`/`ATLASSIAN_API_TOKEN` to `JIRA_URL`/`JIRA_PERSONAL_TOKEN`

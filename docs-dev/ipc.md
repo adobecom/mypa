@@ -83,7 +83,7 @@ Pre-flight checks and server auto-detection.
 | Method | Signature | Description |
 |---|---|---|
 | `checkPrerequisites` | `() → { claudeCli: boolean }` | Check whether the `claude` CLI binary is on `$PATH` |
-| `getHealth` | `() → SetupHealth` | Full health check: Claude CLI + each MCP server (missing env keys, OAuth staleness) |
+| `getHealth` | `() → SetupHealth` | Full health check: Claude CLI + each MCP server (missing env keys, invalid path args, OAuth staleness). `SetupHealthServer.invalidArgs?: string[]` carries path validation messages for servers with `isPath` argInputs. |
 | `detectClaudeMcp` | `() → DetectedMcpServer[]` | Auto-detect MCP servers from an existing Claude Code config file |
 | `resolveOwnerHandles` | `() → ResolvedOwnerHandles` | Best-effort: call each connected MCP server's identity tool and return per-surface handles with a `needsReview` flag for opaque IDs (e.g. Slack UIDs). Returns only surfaces where a handle was found. |
 
@@ -98,6 +98,7 @@ OS-level and window utilities.
 | `getWindowType` | `() → 'widget' \| 'main-window'` | Which window is calling — useful for shared components |
 | `openExternal` | `(url: string) → void` | Open a URL in the OS default browser via `shell.openExternal` |
 | `factoryReset` | `() → void` | Wipe `~/.mypa/config.json` and `~/.mypa/data.db`, then relaunch the app into onboarding |
+| `pickDirectory` | `(multiple?) → string[]` | Open the native OS directory-picker dialog; returns an array of absolute paths or `[]` if cancelled. Pass `multiple: true` to allow multi-selection. Used by `ServerCatalogPicker` for `isPath`-type argInputs. |
 
 ### `ambient`
 
@@ -246,6 +247,7 @@ Manage PA check-in sessions and their chat threads.
 - 2026-06-09 — added `config.getClaudeKey` and `config.setClaudeKey` channels; `config.get` now strips `claude.apiKey` before returning to the renderer (raw key never transmitted); `ClaudeConfig` gained `apiKey?: string` (encrypted at rest via `safeStorage`)
 - 2026-06-10 — `CheckInExtractionSummary` gains `scopeUpdated: number` (count of scope identifiers auto-derived from the check-in transcript and unioned into `AppConfig.scope.allowed`). `ScopeConfig` reshaped to `{ allowed?: Record<string, string[]> }` — surface-keyed map replacing the three named fields (`allowedGithubOrgs` etc.); backward-compat read shim in `scope.ts`. The Scope card in Settings is now read-only.
 - 2026-06-08 — added `checkin` namespace (`start`, `getActive`, `getAll`, `getThread`, `sendMessage`, `end`, `cancelStream`, `openInMainWindow`); new push channels `checkin:started`, `checkin:message`, `checkin:status-changed`, `navigate:checkin`; added `CheckInStatus`, `CheckIn`, `CheckInConfig`, `CheckInExtractionSummary` types; `AppConfig.checkin?: CheckInConfig`; `UsageSource` extended with `'checkin_chat'` and `'checkin_extract'`
+- 2026-06-16 — added `system.pickDirectory(multiple?)` IPC channel (`system:pick-directory`; uses `dialog.showOpenDialog` with `openDirectory`/`createDirectory`/`multiSelections` properties); `SetupHealthServer` gains `invalidArgs?: string[]` (path-type arg validation; populated by updated `setup:get-health` handler)
 - 2026-06-10 — added `system.factoryReset` channel; wipes config.json + data.db then relaunches via `app.relaunch()+app.exit(0)`; surfaced in Settings → Danger Zone card
 - 2026-06-08 — added `system.openExternal` method + `system:open-external` IPC handler (opens URL in default browser via `shell.openExternal`); added `plan:item-updated` push channel (broadcast to both windows when plan item status changes); both windows now have `will-navigate` + `setWindowOpenHandler` guards that redirect external URLs to the default browser
 - 2026-06-08 — added `plan.getItem`, `plan.openInMainWindow`; `routines.openRunInMainWindow`; new push channels `navigate:run-chat` and `navigate:plan-item`; `Intent` type gained `challenge_reason: string | null`

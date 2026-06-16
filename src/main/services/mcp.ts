@@ -1,7 +1,9 @@
+import { homedir } from 'os'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { readConfig, updateConfig } from './config'
 import type { McpServerConfig, McpTool, McpServerStatus, ResolvedOwnerHandles } from '@shared/types'
+import { MCP_CATALOG } from '@shared/mcp-catalog'
 
 interface ActiveServer {
   client: Client
@@ -25,6 +27,28 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
   }
 }
 
+/**
+ * For catalog entries that declare path-type argInputs (e.g. filesystem allowed
+ * directories), expand a leading `~` in each positional directory arg so the
+ * spawned subprocess receives a real absolute path.
+ *
+ * The stored config value is intentionally left unexpanded (portable between users),
+ * so expansion is done here at connect time rather than at save time.
+ */
+function expandTildeArgs(cfg: McpServerConfig): string[] {
+  const args = cfg.args ?? []
+  const entry = MCP_CATALOG.find((e) => e.id === cfg.name)
+  if (!entry?.argInputs?.some((a) => a.isPath)) return args
+
+  const baseCount = entry.baseArgs.length
+  const dirArgs = args.slice(baseCount).map((raw) => {
+    if (raw === '~') return homedir()
+    if (raw.startsWith('~/')) return homedir() + raw.slice(1)
+    return raw
+  })
+  return [...args.slice(0, baseCount), ...dirArgs]
+}
+
 export async function connectServer(cfg: McpServerConfig): Promise<McpTool[]> {
   await disconnectServer(cfg.name)
 
@@ -35,7 +59,7 @@ export async function connectServer(cfg: McpServerConfig): Promise<McpTool[]> {
   }
   const transport = new StdioClientTransport({
     command: cfg.command,
-    args: cfg.args ?? [],
+    args: expandTildeArgs(cfg),
     env: mergedEnv
   })
 
@@ -222,7 +246,7 @@ export async function testServer(
   try {
     transport = new StdioClientTransport({
       command: cfg.command,
-      args: cfg.args ?? [],
+      args: expandTildeArgs(cfg),
       env: { ...process.env, ...(cfg.env ?? {}) } as Record<string, string>
     })
     client = new Client({ name: 'mypa-test', version: '0.1.0' }, { capabilities: {} })

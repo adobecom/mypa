@@ -874,7 +874,12 @@ function HealthCard({
   const issues = health
     ? [
         !health.claudeCli,
-        ...health.servers.map((s) => s.missingEnvKeys.length > 0 || (s.oauthStaleDays ?? 0) > 60)
+        ...health.servers.map(
+          (s) =>
+            s.missingEnvKeys.length > 0 ||
+            (s.invalidArgs?.length ?? 0) > 0 ||
+            (s.oauthStaleDays ?? 0) > 60
+        )
       ].filter(Boolean)
     : []
 
@@ -922,10 +927,12 @@ function HealthCard({
           {health.servers.map((srv) => {
             const isStale = (srv.oauthStaleDays ?? 0) > 60
             const hasMissing = srv.missingEnvKeys.length > 0
-            const ok = !hasMissing && !isStale
+            const hasInvalidArgs = (srv.invalidArgs?.length ?? 0) > 0
+            const ok = !hasMissing && !hasInvalidArgs && !isStale
 
             let detail = 'Connected'
             if (hasMissing) detail = `Missing: ${srv.missingEnvKeys.join(', ')}`
+            else if (hasInvalidArgs) detail = `Invalid directories: ${srv.invalidArgs!.join('; ')}`
             else if (isStale) detail = `OAuth last connected ${srv.oauthStaleDays} days ago`
             else if (!srv.connected) detail = 'Disconnected'
 
