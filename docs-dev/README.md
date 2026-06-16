@@ -16,6 +16,7 @@ This folder contains the full reference documentation for mypa contributors and 
 | [mcp-and-oauth.md](mcp-and-oauth.md) | MCP client manager, built-in catalog, Claude-config import, OAuth flows |
 | [configuration.md](configuration.md) | `~/.mypa/config.json` shape, secret encryption, DB location, build targets |
 | [renderer.md](renderer.md) | UI map of both Electron windows and their React components |
+| [dependencies.md](dependencies.md) | Transitive npm deprecation warnings — why they appear and why they cannot be safely removed |
 
 ## Documentation maintenance convention
 
@@ -35,3 +36,4 @@ This table mirrors the rule in [CLAUDE.md](../CLAUDE.md#documentation-maintenanc
 ## Changelog
 
 - 2026-06-06 — initial documentation suite created
+- 2026-06-16 — added dependencies.md documenting the six transitive npm deprecation warnings
