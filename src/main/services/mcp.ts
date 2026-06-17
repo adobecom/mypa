@@ -14,6 +14,21 @@ interface ActiveServer {
 
 const servers = new Map<string, ActiveServer>()
 
+// Serialize all connection mutations (connectAllServers, reconnectServer) so that
+// two near-simultaneous config:update calls cannot race on the Map and disconnect
+// each other's live connections, which would surface as "Connection closed" errors.
+let connectQueue: Promise<void> = Promise.resolve()
+
+function runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+  const result = connectQueue.then(fn)
+  // Advance the queue regardless of success/failure so it never gets stuck
+  connectQueue = result.then(
+    () => {},
+    () => {}
+  )
+  return result
+}
+
 /** Races `promise` against a timeout. Rejects with a clear message on expiry. */
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>
@@ -118,33 +133,82 @@ export async function callTool(
     .join('\n')
 }
 
-export async function connectAllServers(): Promise<void> {
-  let cfg = readConfig()
+export function connectAllServers(): Promise<void> {
+  return runExclusive(async () => {
+    let cfg = readConfig()
 
-  // Migrate GITHUB_TOKEN → GITHUB_PERSONAL_ACCESS_TOKEN in stored config
-  const needsMigration = cfg.mcp_servers.some(
-    (s) => s.name === 'github' && s.env?.GITHUB_TOKEN && !s.env?.GITHUB_PERSONAL_ACCESS_TOKEN
-  )
-  if (needsMigration) {
-    updateConfig({
-      mcp_servers: cfg.mcp_servers.map((s) => {
-        if (s.name !== 'github' || !s.env?.GITHUB_TOKEN) return s
-        const { GITHUB_TOKEN, ...rest } = s.env
-        return { ...s, env: { ...rest, GITHUB_PERSONAL_ACCESS_TOKEN: GITHUB_TOKEN } }
+    // Migrate GITHUB_TOKEN → GITHUB_PERSONAL_ACCESS_TOKEN in stored config
+    const needsGithubMigration = cfg.mcp_servers.some(
+      (s) => s.name === 'github' && s.env?.GITHUB_TOKEN && !s.env?.GITHUB_PERSONAL_ACCESS_TOKEN
+    )
+    if (needsGithubMigration) {
+      updateConfig({
+        mcp_servers: cfg.mcp_servers.map((s) => {
+          if (s.name !== 'github' || !s.env?.GITHUB_TOKEN) return s
+          const { GITHUB_TOKEN, ...rest } = s.env
+          return { ...s, env: { ...rest, GITHUB_PERSONAL_ACCESS_TOKEN: GITHUB_TOKEN } }
+        })
       })
-    })
-    cfg = readConfig()
-    console.log('[mcp] migrated github: GITHUB_TOKEN → GITHUB_PERSONAL_ACCESS_TOKEN')
-  }
-
-  for (const srv of cfg.mcp_servers) {
-    try {
-      await connectServer(srv)
-      console.log(`[mcp] connected: ${srv.name}`)
-    } catch (err) {
-      console.error(`[mcp] failed to connect ${srv.name}:`, err)
+      cfg = readConfig()
+      console.log('[mcp] migrated github: GITHUB_TOKEN → GITHUB_PERSONAL_ACCESS_TOKEN')
     }
+
+    // Migrate stale Slack configs: old @modelcontextprotocol/server-slack entries and
+    // new slack-mcp-server entries that were saved without the required --transport stdio flag.
+    const needsSlackMigration = cfg.mcp_servers.some(
+      (s) => s.name === 'slack' && !(s.args ?? []).includes('--transport')
+    )
+    if (needsSlackMigration) {
+      updateConfig({
+        mcp_servers: cfg.mcp_servers.map((s) => {
+          if (s.name !== 'slack') return s
+          const oldEnv = s.env ?? {}
+          // Preserve xoxp token if already present; drop legacy bot token + team id
+          const newEnv: Record<string, string> = { SLACK_MCP_ADD_MESSAGE_TOOL: 'true' }
+          if (oldEnv.SLACK_MCP_XOXP_TOKEN) newEnv.SLACK_MCP_XOXP_TOKEN = oldEnv.SLACK_MCP_XOXP_TOKEN
+          return {
+            ...s,
+            args: ['-y', 'slack-mcp-server@latest', '--transport', 'stdio'],
+            env: newEnv
+          }
+        })
+      })
+      cfg = readConfig()
+      console.log('[mcp] migrated slack: updated to slack-mcp-server with --transport stdio')
+    }
+
+    for (const srv of cfg.mcp_servers) {
+      try {
+        await connectServer(srv)
+        console.log(`[mcp] connected: ${srv.name}`)
+      } catch (err) {
+        console.error(`[mcp] failed to connect ${srv.name}:`, err)
+      }
+    }
+  })
+}
+
+/**
+ * Reconnect a single named server from the current config and return its live status.
+ * This is the authoritative "Test connection" action — it uses the real connection Map
+ * so the dot/tool-count in the UI reflects exactly what routines and ambient will use.
+ */
+export async function reconnectServer(name: string): Promise<McpServerStatus> {
+  const cfg = readConfig()
+  const srv = cfg.mcp_servers.find((s) => s.name === name)
+  if (!srv) {
+    return { name, connected: false, tools: [] }
   }
+  return runExclusive(async () => {
+    try {
+      const tools = await connectServer(srv)
+      console.log(`[mcp] reconnected: ${name}`)
+      return { name, connected: true, tools }
+    } catch (err: any) {
+      console.error(`[mcp] reconnect failed: ${name}:`, err)
+      return { name, connected: false, tools: [], error: err?.message ?? String(err) }
+    }
+  })
 }
 
 export async function disconnectAllServers(): Promise<void> {
@@ -238,29 +302,3 @@ export async function resolveOwnerHandles(): Promise<ResolvedOwnerHandles> {
   return result
 }
 
-export async function testServer(
-  cfg: McpServerConfig
-): Promise<{ ok: boolean; tools: McpTool[]; error?: string }> {
-  let client: Client | null = null
-  let transport: StdioClientTransport | null = null
-  try {
-    transport = new StdioClientTransport({
-      command: cfg.command,
-      args: expandTildeArgs(cfg),
-      env: { ...process.env, ...(cfg.env ?? {}) } as Record<string, string>
-    })
-    client = new Client({ name: 'mypa-test', version: '0.1.0' }, { capabilities: {} })
-    await withTimeout(client.connect(transport), 30_000, `connect ${cfg.name}`)
-    const toolsResult = await withTimeout(client.listTools(), 30_000, `listTools ${cfg.name}`)
-    const tools: McpTool[] = (toolsResult.tools ?? []).map((t) => ({
-      name: t.name,
-      description: t.description ?? '',
-      inputSchema: (t.inputSchema as Record<string, unknown>) ?? {}
-    }))
-    return { ok: true, tools }
-  } catch (err: any) {
-    return { ok: false, tools: [], error: err?.message ?? String(err) }
-  } finally {
-    try { await client?.close() } catch {}
-  }
-}

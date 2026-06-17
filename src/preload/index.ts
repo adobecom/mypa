@@ -32,7 +32,8 @@ const api: IpcApi = {
   config: {
     get: () => ipcRenderer.invoke('config:get'),
     update: (config) => ipcRenderer.invoke('config:update', config),
-    testMcpServer: (cfg) => ipcRenderer.invoke('config:test-mcp-server', cfg),
+    reconnectMcpServer: (name) => ipcRenderer.invoke('config:reconnect-mcp-server', name),
+    reconnectAll: () => ipcRenderer.invoke('config:reconnect-all'),
     getMcpStatus: () => ipcRenderer.invoke('config:get-mcp-status'),
     getClaudeKey: () => ipcRenderer.invoke('config:get-claude-key'),
     setClaudeKey: (key) => ipcRenderer.invoke('config:set-claude-key', key)

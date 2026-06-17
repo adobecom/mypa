@@ -45,11 +45,11 @@ Manages stdio MCP server connections using `@modelcontextprotocol/sdk`. See [mcp
 |---|---|
 | `connectServer(cfg)` | Connect a single MCP server and cache it |
 | `disconnectServer(name)` | Gracefully disconnect and remove from cache |
-| `connectAllServers()` | Connect all enabled servers from config |
+| `connectAllServers()` | Connect all enabled servers from config; serialized via mutex |
+| `reconnectServer(name)` | Reconnect a named server under the mutex; returns `McpServerStatus`; used by Settings "Test connection" to update the live Map |
 | `disconnectAllServers()` | Disconnect all active connections |
 | `callTool(server, tool, params)` | Call a tool on a connected server |
-| `getServerStatus()` | Return `McpServerStatus[]` for all configured servers |
-| `testServer(cfg)` | Connect, list tools, disconnect — used by settings UI |
+| `getServerStatus()` | Return `McpServerStatus[]` from the in-memory Map (no reconnect) |
 
 ---
 
@@ -299,6 +299,7 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 
 ## Changelog
 
+- 2026-06-16 — **MCP connection reliability:** `mcp.ts` — added `runExclusive` promise-chain mutex; `connectAllServers` and new `reconnectServer(name)` route through it; added Slack stale-config migration in `connectAllServers`; removed `testServer` (replaced by `reconnectServer`). `ipc-handlers.ts` — `config:test-mcp-server` replaced by `config:reconnect-mcp-server` + `config:reconnect-all`.
 - 2026-06-16 — **Fix GitHub directedness, comment tool name, Jira/Slack parsers:** `ingestion.ts` — (1) GitHub `directed` computation extended: `assigned` and `mentioned` relations are now always `directed=1`, matching the Jira adapter's logic and the relation whitelist in `dbGetDirectedSignals`; previously only `review_requested` was unconditionally directed, so 123 `assigned` + 37 `involved` signals were invisible to the waiting trigger. (2) Jira adapter parser realigned to `mcp-atlassian`'s flat snake_case simplified dict: removed `i.fields` wrapper; reads are now `i.summary`, `i.updated`, `i.url`, `i.duedate`, `assignee.display_name`, `assignee.name`, `reporter.display_name`, and top-level `i.comments[]` (not `fields.comment.comments`); `comment.author.display_name` (snake_case). JQL simplified to `assignee = currentUser() OR reporter = currentUser()` — `watcher = currentUser()` dropped as it is often invalid on Jira Server/DC and causes the entire query to be rejected. (3) Slack `parseSlackCsv` now normalizes header keys to lowercase before indexing, so PascalCase Go field names from `slack-mcp-server` (`MsgID`, `Channel`, `UserName`, `UserID`, `ThreadTs`, `Text`, `Time`, `Permalink`) map correctly; all column reads updated to lowercase (`msgid`, `channel`, `username`, `userid`, `threadts`). `ambient.ts` — VERB_TO_TOOL GitHub `comment` mapping corrected from non-existent `create_issue_comment` → `add_issue_comment` (the correct tool name for `@modelcontextprotocol/server-github`).
 - 2026-06-16 — **Filesystem MCP hardening — tilde expansion + path-type argInputs:** `mcp.ts` — added `expandTildeArgs(cfg)` helper; imports `MCP_CATALOG` and `homedir`; looks up the server's catalog entry and, for entries with `isPath` argInputs, expands a leading `~` in each directory arg to `os.homedir()` before spawning; applied in both `connectServer` and `testServer`. The stored value in `~/.mypa/config.json` is left unexpanded (portable); expansion only occurs at connect time. `ipc-handlers.ts` — `setup:get-health` updated to validate path-type args using `existsSync`/`statSync`; added `system:pick-directory` handler (native directory-picker dialog).
 - 2026-06-16 — **Slack adapter rewritten for `slack-mcp-server`:** `ingestion.ts` — Slack adapter now calls `conversations_search_messages` (search by `to:<handle>` query; CSV response) and maps fields via new `parseCsvRow`/`parseSlackCsv` helpers. `ambient.ts` — Slack execution updated to `conversations_add_message` with `buildToolArgs` remapping `payload.message → text` and injecting `channel_id`/`thread_ts` from the focus node key. See `ambient-intelligence.md` and `mcp-and-oauth.md` changelogs for full detail.
