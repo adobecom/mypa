@@ -50,7 +50,7 @@ Data flow: `window.electron.plan.getAll()` on mount; push event `plan:item-messa
 | Component | Description |
 |---|---|
 | `DigestView` | Renders the latest `AmbientDigest` — three sections: did / watching / decisions |
-| `AmbientFeed` | Scrollable list of pending/surfaced intents |
+| `QueueView` | Scrollable list of pending/surfaced action intents and active plan items |
 | `IntentCard` | Single intent — rationale, proposed action, confidence badge, Approve / Dismiss / Challenge / Suggest controls; Suggest opens an embedded `ChatThread` for multi-round re-proposal |
 
 Data flow: `window.electron.ambient.getIntents()` + `getDigest()` on mount; push events `ambient:intent-created`, `ambient:intent-updated`, `ambient:intent-message`, `ambient:tray-state`, `ambient:digest-ready`.
@@ -147,17 +147,22 @@ Navigation:
 `InsightsPage` surfaces the agent's ambient intelligence in a structured layout:
 
 1. **Queue tab (first):** reuses the widget's `QueueView` component to render the full actionable queue — pending `action`-type intents ("Needs you") and active plan items — with working Approve / Dismiss / Challenge / Suggest actions. A count badge on the Queue tab reflects `pendingActionIntents + activePlanItems`. Plan items are fetched via `plan.getAll()` and kept live via `plan:item-updated` and `badge:updated` push events.
-2. **Daily Digest (always on in Observations):** `DigestView` sits at the top of the Observations tab, always visible, with its morning / midday / end-of-day slot selector. Any non-terminal `digest`-type intents are listed directly below it under "Recent digests".
-3. **History tab:** full history of terminal intents (executed, dismissed, challenged, failed, expired).
+2. **Daily Digest (always on):** `DigestView` sits above the tabs, always visible, with its morning / midday / end-of-day slot selector. Any non-terminal `digest`-type intents are listed directly below it under "Recent digests".
+3. **Observations tab:** non-terminal `flag`/`suggestion` intents.
+4. **History tab:** full history of terminal intents (executed, dismissed, challenged, failed, expired).
+5. **Activity tab:** chronological action log (`ambient.getLog`) — one row per event the agent recorded (surfacing, execution, approval, challenge, dismissal). Refreshes live on `ambient:action-executed`.
+
+**Poll now button:** a small ghost button in the page header calls `ambient.pollNow()` with idle → "Polling…" → "Polled" three-state feedback. `pollNow` awaits the full poll+inference cycle before resolving, so new signals and intents appear as soon as the button confirms.
 
 | Component | Description |
 |---|---|
-| `InsightsPage` | Outer shell: page header ("Insights"), Queue / Observations / History `<Tabs>` strip |
+| `InsightsPage` | Outer shell: page header with Poll now button, Queue / Observations / History / Activity `<Tabs>` strip, `ActivityLog` sub-component |
+| `ActivityLog` | Inline component rendering `ActionLogEntry[]` as a compact timestamp · event · action_type · tier grid |
 | `QueueView` | Shared widget+main component: "Needs you" action intents + active plan items + Done section; supports all four intent actions including Suggest |
 | `DigestView` | Self-contained: fetches and renders the `AmbientDigest` for the selected slot; has its own slot selector and re-fetches on `ambient:digest-ready` |
 | `IntentCard` | Single intent card with Approve / Dismiss / Challenge / Suggest actions; shared with widget |
 
-Data flow: `window.electron.ambient.getAllIntents(200)` + `window.electron.plan.getAll()` on mount; `ambient:intent-created`, `ambient:intent-updated`, `plan:item-updated`, `badge:updated` push events for live updates; `ambient:digest-ready` handled inside `DigestView`.
+Data flow: `window.electron.ambient.getAllIntents(200)` + `window.electron.plan.getAll()` + `window.electron.ambient.getLog(100)` on mount; `ambient:intent-created`, `ambient:intent-updated`, `plan:item-updated`, `badge:updated`, `ambient:action-executed` push events for live updates; `ambient:digest-ready` handled inside `DigestView`.
 
 #### Plan item detail
 
@@ -237,6 +242,8 @@ Located in `src/renderer/src/` (shared between widget and main window):
 | `components.css` | Shared component stylesheet imported by both renderer entry points before their window-specific `index.css`. Contains `.routine-card*`, `.intent-card*`, `.intent-detail*`, `.intent-chip*`, `.plan-review-card*`, `.review-field*`, `.section-header`, `.section-subheader`, `.tabs`, `.tab*`. |
 
 ## Changelog
+
+- 2026-06-16 — **InsightsPage: Activity tab + Poll now button:** `InsightsPage.tsx` gains a fourth **Activity** tab powered by `ambient.getLog(100)` — renders each `ActionLogEntry` as a compact timestamp / event / action_type / tier row; refreshes live on `ambient:action-executed`. A **Poll now** ghost button in the page header calls `ambient.pollNow()` with idle → "Polling…" → "Polled" state (`RefreshCw` / `CheckCircle` icons). Both backends were previously unreachable from any UI. `AmbientFeed.tsx` deleted (superseded by `QueueView`; was imported nowhere). Widget Ambient tab doc updated to reflect `QueueView` replacing `AmbientFeed`.
 
 - 2026-06-16 — **Onboarding wizard error handling + cross-platform install hint:** `OnboardingWizard.tsx` — all async handlers (`handleFinish`, `handleNext`, `checkCli`, `handleAutoFillOwner`, `handleAddServer`, `handleCredentialSave`) upgraded from `try/finally` to `try/catch/finally`; each failure now shows a `toast.error()` so the user gets actionable feedback instead of a silent no-op. `handleFinish` in particular can no longer leave the user permanently stuck on the final screen. Initial `api.config.get()` effect also gains `.catch` + toast. Install hint for claude-not-found changed from macOS-only `brew install anthropic/claude/claude` to the cross-platform `npm install -g @anthropic-ai/claude-code`, usable on macOS, Linux, and Windows.
 - 2026-06-15 — **Routines run-detail: Conversation tab first + action buttons:** `RunDetail` in `RunLogs.tsx` now defaults to the **Conversation** tab (was Raw output) and places it first in the tab bar. The Conversation tab gains **Dismiss** and **Mark resolved** buttons below the `ChatThread`, matching the widget's `RoutineCard` (minus the redundant "Open in main window" CTA). Status changes propagate back to the run row via a new `onRunChange` callback on `RunDetailProps`.

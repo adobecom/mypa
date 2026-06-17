@@ -743,16 +743,20 @@ export async function ambientSuggestIntent(
     const result = await reproposeIntent(intent, thread, userMessage)
     if (result) {
       assistantMessage = result.message
-      // Update the intent's proposal in-place (status stays non-terminal)
-      dbReproposeIntent(id, {
-        verb: result.intent.proposed_action.verb,
-        target: result.intent.proposed_action.target,
-        payload: result.intent.proposed_action.payload,
-        rationale: result.intent.rationale,
-        confidence: result.intent.confidence,
-        reversibility: result.intent.reversibility,
-        required_approval: result.intent.required_approval
-      })
+      // Only adopt the re-proposal when the inference layer returned a proposal
+      // (sub-floor proposals are dropped; the assistant message is still shown).
+      if (result.intent) {
+        // Update the intent's proposal in-place (status stays non-terminal)
+        dbReproposeIntent(id, {
+          verb: result.intent.proposed_action.verb,
+          target: result.intent.proposed_action.target,
+          payload: result.intent.proposed_action.payload,
+          rationale: result.intent.rationale,
+          confidence: result.intent.confidence,
+          reversibility: result.intent.reversibility,
+          required_approval: result.intent.required_approval
+        })
+      }
     }
   } catch (e) {
     console.error('[ambient] reproposeIntent error:', e)
@@ -812,7 +816,7 @@ export async function ambientGetDigest(slot?: DigestSlot): Promise<AmbientDigest
     .slice(0, 10)
 
   const decisions = recent
-    .filter((i) => i.status === 'pending' && i.required_approval)
+    .filter((i) => i.status === 'surfaced' && i.type === 'action' && i.required_approval)
     .map((i) => i.id)
     .slice(0, 5)
 
