@@ -259,7 +259,7 @@ Rules:
 - enforcement: set "hard" ONLY for rules/boundaries the manager stated in absolute terms (e.g. "only surface X", "never do Y", "always include Z"). Set "soft" for preferences, guidance, and advisory instructions. Default to "soft" when in doubt — hard should be rare.
 - scope_rules: ONLY when the manager states an absolute, unconditional restriction naming specific containers to focus on — e.g. "only surface work in the adobecom GitHub org", "just the WEB and PLAT Jira projects", "only the #eng-frontend Slack channel". surface must be one of: ${SCOPE_SURFACES.map((s) => `"${s.surface}" (${s.label.toLowerCase()})`).join(', ')}. identifiers are the org names / project keys / channel ids. Leave scope_rules empty when no such absolute restriction was stated — do NOT infer from casual org or project mentions.`
 
-  const raw = await runClaude(systemPrompt, userPrompt, 'checkin_extract')
+  const raw = await runClaude(systemPrompt, userPrompt, 'checkin_extract', 120_000, true)
 
   const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '')
   const jsonMatch = cleaned.match(/\{[\s\S]*\}/)

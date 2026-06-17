@@ -27,13 +27,36 @@ Priority order:
 
 ---
 
-## Model selection
+## Automatic model selection
 
-The model is read at every call from `readConfig().claude.model` (live — changes in Settings take effect immediately without restarting).
+mypa selects the Claude model for each task automatically — there is no user-facing model control. The logic lives in `src/main/services/model-router.ts`.
 
-Default: `claude-opus-4-8` (set in `DEFAULT_CONFIG`).
+### Tier ladder
 
-Model args: `['--model', model]` — omitted if the config value is empty/unset (CLI uses its own default).
+| Tier | Model ID |
+|---|---|
+| fast | `claude-haiku-4-5-20251001` |
+| balanced | `claude-sonnet-4-6` |
+| capable | `claude-opus-4-8` |
+
+### `selectModel(source, promptChars)`
+
+Maps each `UsageSource` label to a base tier, then bumps the tier up for large prompts:
+
+| source | base tier |
+|---|---|
+| `inference`, `plan_draft` | fast |
+| `routine_digest`, `routine_setup`, `routine_chat`, `plan_chat`, `checkin_chat`, `checkin_extract`, `memory`, `chat`, `other` | balanced |
+| `suggest` | capable |
+
+Size bumps (applied after the base tier):
+- prompt ≥ 12 000 chars → +1 tier
+- prompt ≥ 40 000 chars → +2 tiers
+- always clamped to `capable`
+
+### `escalate(modelId)`
+
+Returns the next-stronger model in the ladder, or `null` when already at `capable`. Used by `runClaude` and `streamChat` to retry failed/weak tasks with a stronger model.
 
 ---
 
@@ -43,18 +66,22 @@ Model args: `['--model', model]` — omitted if the config value is empty/unset 
 export async function runClaude(
   systemPrompt: string,
   userPrompt: string,
-  source?: UsageSource   // default 'other'
+  source?: UsageSource,   // default 'other'
+  timeoutMs?: number,     // default 120 000 ms
+  expectJson?: boolean    // default false
 ): Promise<string>
 ```
 
 - Concatenates system + user prompts into a single `-p` argument.
-- Flags: `--output-format json` (switched from `text` to capture token usage).
-- The CLI returns a single JSON object `{ result, usage, total_cost_usd, is_error }`. `result` is returned to the caller (existing callers regex-extract JSON from it unchanged).
-- After a successful call, `recordUsage(source, model, cliResult)` is called to persist a row in `usage_events`.
-- Hard timeout: **120 seconds** — kills the process and rejects if exceeded.
-- On JSON parse failure (unexpected CLI output format), falls back to returning raw `stdout.trim()`.
+- Selects the initial model via `selectModel(source, fullPrompt.length)`.
+- Flags: `--output-format json` (captures token usage in the JSON envelope).
+- The CLI returns `{ result, usage, total_cost_usd, is_error }`. `result` is returned to the caller.
+- After each attempt, `recordUsage(source, model, cliResult)` persists a row in `usage_events` (records the model that was actually used).
+- Hard timeout: **120 seconds** (overridable via `timeoutMs`).
+- **Automatic escalation:** if the call errors (`is_error`, non-zero exit, timeout, or a JSON-missing response when `expectJson=true`), the call is retried once at the next-stronger tier via `escalate()`. Gives up and rethrows at the top tier. Usage is recorded for each attempt.
+- Pass `expectJson=true` for structured tasks that require a JSON response body — a plain-text response triggers escalation rather than silently resolving.
 
-Used for: `generatePlanDraft` (`source='plan_draft'`), `generateRoutineDigest` (`'routine_digest'`), `generateRoutineSetup` (`'routine_setup'`), `inferIntent` in `inference.ts` (`'inference'`), `runMemorySummarization` in `memories.ts` (`'memory'`).
+Used for: `generatePlanDraft` (`source='plan_draft'`, `expectJson=true`), `generateRoutineDigest` (`'routine_digest'`), `generateRoutineSetup` (`'routine_setup'`, `expectJson=true`), `inferIntent` / `inferRoutineIntents` in `inference.ts` (`'inference'`, `expectJson=true`), `runMemorySummarization` in `memories.ts` (`'memory'`, `expectJson=true`), `extractCheckInKnowledge` in `checkin.ts` (`'checkin_extract'`, `expectJson=true`).
 
 ---
 
@@ -71,6 +98,8 @@ export async function streamChat(
   source?:     UsageSource   // default 'chat'
 ): Promise<void>
 ```
+
+The model is selected via `selectModel(source, approxLen)` where `approxLen` is the combined char count of the system prompt and all message contents. If the stream fails before any output reaches the client (`code !== 0 && !full`), it is retried once at the escalated tier. User-cancelled streams (`'Cancelled'` error) are never retried.
 
 The `source` param is threaded to `runClaudeStream`, which captures the `result` event from the CLI's NDJSON stream (the event carrying `usage` and `total_cost_usd`) and calls `recordUsage` on process exit.
 
@@ -197,9 +226,11 @@ This clause is appended in `inferIntent` (`inference.ts`) **after** `buildOwnerC
 
 `src/main/services/usage.ts` provides the `recordUsage(source, model, cliResult)` function imported by `claude.ts`. It calls `dbInsertUsage()` and swallows all errors so telemetry never disrupts an AI call.
 
-`UsageSource` labels: `'plan_draft'`, `'routine_digest'`, `'routine_setup'`, `'routine_chat'`, `'plan_chat'`, `'inference'`, `'memory'`, `'chat'`, `'other'`.
+`UsageSource` labels: `'plan_draft'`, `'routine_digest'`, `'routine_setup'`, `'routine_chat'`, `'plan_chat'`, `'checkin_chat'`, `'checkin_extract'`, `'inference'`, `'memory'`, `'suggest'`, `'chat'`, `'other'`.
 
 ## Changelog
+
+- 2026-06-17 — **Automatic model selection + escalation:** replaced the single user-configured model with `model-router.ts`. `selectModel(source, promptChars)` picks a tier (fast/balanced/capable) from the task's `UsageSource` and bumps it up for large prompts (≥ 12 k chars → +1, ≥ 40 k → +2). `escalate(modelId)` returns the next-stronger tier and is called by `runClaude` and `streamChat` on failure — one retry per escalation step, stopping at `capable`. `runClaude` gains an `expectJson` parameter; `true` triggers escalation when the response lacks JSON structure. Removed the model dropdown from `Settings.tsx` and the "Choose a model" step 3 from `OnboardingWizard.tsx` (renumbered to 5 steps). `DEFAULT_CONFIG.claude` no longer seeds a model. Added `'suggest'` to `UsageSource` (was missing, causing a latent type error).
 
 - 2026-06-16 — **Unified claude detection:** replaced the separate `execFileSync('/usr/bin/which', ['claude'])` calls in `setup:check-prerequisites` and `setup:get-health` with `detectClaudeBin()` (new export from `claude.ts`) so the wizard gate is identical to what the runtime uses. Broadened fallback candidate list to cover the official installer (`~/.claude/local/claude`), nvm node-version bin dirs (all versions, enumerated via `readdirSync`), `~/.npm-global/bin`, `~/.bun/bin`, and `~/.volta/bin`. `path-fix.ts` static dirs widened to match; `nvmBinDirs()` helper added there too. Failure is no longer cached — a null result leaves `_claudeBin` null so a post-launch install is picked up immediately.
 - 2026-06-15 — **Digest format overhaul:** `RoutineDigest` changed from `{ summary, items, proposed_actions }` to `{ summary, body }`; `generateRoutineDigest` now uses a line-delimited `SUMMARY: <headline>\n\n<markdown body>` format instead of a JSON schema, with a 240 s timeout (up from 120 s); on parse, extracts the `SUMMARY:` line as the notification headline and everything below as the full markdown body; on hard failure, logs to console and returns an honest error message rather than the silent `<name> completed` placeholder. `runClaude` gains an optional `timeoutMs` param (default 120 s unchanged for all other callers).
