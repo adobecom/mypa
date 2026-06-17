@@ -278,6 +278,9 @@ export function initSchema(db: Database.Database): void {
   // Used by revalidatePendingIntents() to detect when a work item disappears from active feeds (added 2026-06-15)
   tryExec('ALTER TABLE signals ADD COLUMN last_seen_at TEXT')
   tryExec('CREATE INDEX IF NOT EXISTS idx_signals_last_seen ON signals(surface, last_seen_at)')
+  // Work items detected in a routine run's raw MCP output (added 2026-06-17)
+  // JSON-encoded CoveredEntity[] — snapshot so display survives signal pruning.
+  tryExec('ALTER TABLE routine_runs ADD COLUMN covered_entities TEXT')
 
   // Migrate signals from old UNIQUE(surface, external_id, fingerprint) → UNIQUE(surface, external_id).
   // The 3-column constraint allowed duplicate (surface, external_id) rows to accumulate, causing

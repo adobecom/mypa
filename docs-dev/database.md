@@ -42,6 +42,7 @@ mypa uses SQLite via [`better-sqlite3`](https://github.com/WiseLibs/better-sqlit
 | `digest` | TEXT | JSON-serialized `RoutineDigest` |
 | `status` | TEXT | `RunStatus` value |
 | `error` | TEXT | Nullable |
+| `covered_entities` | TEXT | JSON-serialized `CoveredEntity[]` — work items detected in the MCP output; populated after digest generation (added 2026-06-17) |
 
 #### `routine_run_threads`
 
@@ -362,6 +363,8 @@ Vectors are stored as raw little-endian Float32 BLOBs and similarity search is p
 ---
 
 ## Changelog
+
+- 2026-06-17 — **Routine run entity linkage — `routine_runs.covered_entities`:** `routine_runs` table gains `covered_entities TEXT` (nullable) via additive `ALTER TABLE` migration. Stores a JSON-serialized `CoveredEntity[]` snapshot of work items (PRs, issues, Slack messages) detected in the run's raw MCP output. Populated by the new `entity-link.ts` service after digest generation. `deserializeRun` JSON-parses it (default `[]`). `dbUpdateRun` field type extended. New `dbGetRecentSignalsAllSurfaces(sinceIso, limit)` helper queries all signals across surfaces in a single SELECT for use by the entity-link scanner. `CoveredEntity` interface added to `src/shared/types.ts`; `RoutineRun.covered_entities: CoveredEntity[]` field added.
 
 - 2026-06-17 — **Resolution cooldown query — `dbGetResolvedIntentsSince`:** new read-only helper in `src/main/db/index.ts` that returns all terminal intents (`executed`, `dismissed`, `challenged`, `failed`, `expired`) whose `resolved_at` is at or after a given ISO cutoff. No schema change. Used by `suppressedFocusNodeIds()` in `ambient.ts` to suppress re-surfacing the same work item during a post-resolution cooldown window.
 

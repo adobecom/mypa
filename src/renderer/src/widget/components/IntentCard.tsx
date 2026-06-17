@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { GitBranch, SquareKanban, MessageSquare, ChevronDown, Lightbulb } from 'lucide-react'
-import type { Intent, ChatMessage } from '../../../../../../shared/types'
+import { GitBranch, SquareKanban, MessageSquare, ChevronDown, Lightbulb, Zap } from 'lucide-react'
+import type { Intent, ChatMessage, RoutineRun } from '../../../../../../shared/types'
 import MarkdownText from '@renderer/components/MarkdownText'
 import Tabs from '@renderer/components/Tabs'
 import ChatThread from './ChatThread'
@@ -9,6 +9,8 @@ import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 interface Props {
   intent: Intent
   onIntentChange: (updated: Intent) => void
+  /** Maps a work-item key to the routine runs that cover it. */
+  entityKeyToRuns?: Map<string, RoutineRun[]>
 }
 
 function SurfaceIcon({ surface }: { surface: string | null }): React.ReactElement {
@@ -90,7 +92,7 @@ function renderPayloadVal(v: unknown): React.ReactNode {
   return <span className="intent-detail__kv-val">{String(v)}</span>
 }
 
-export default function IntentCard({ intent, onIntentChange }: Props): React.ReactElement {
+export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: Props): React.ReactElement {
   // Auto-expand cards that have a draft body for the user to review before sending
   const hasDraft = ['body', 'text', 'comment', 'message'].some(
     (k) => typeof (intent.payload ?? {})[k] === 'string' && String((intent.payload ?? {})[k]).trim()
@@ -245,6 +247,25 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
   const recentSignals = safeArray(cp.recentSignals, isRecord)
   const focusNodes = safeArray(cp.focusNodes, isRecord)
 
+  // Derive the set of routine runs that cover at least one of this intent's focus nodes.
+  // Deduplicated by run id so each routine name appears at most once.
+  const linkedRuns: RoutineRun[] = (() => {
+    if (!entityKeyToRuns) return []
+    const seen = new Set<string>()
+    const result: RoutineRun[] = []
+    for (const node of focusNodes) {
+      if (!hasString(node, 'key')) continue
+      const runs = entityKeyToRuns.get(node.key) ?? []
+      for (const run of runs) {
+        if (!seen.has(run.id)) {
+          seen.add(run.id)
+          result.push(run)
+        }
+      }
+    }
+    return result
+  })()
+
   const detailTabItems = [
     { id: 'why', label: 'Why' },
     ...(recentSignals.length > 0 ? [{ id: 'activity', label: 'Activity' }] : []),
@@ -297,6 +318,17 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
             {intent.reversibility === 'irreversible' && (
               <span className="intent-chip intent-chip--warning">irreversible</span>
             )}
+            {linkedRuns.map((run) => (
+              <span
+                key={run.id}
+                className="intent-chip intent-chip--muted"
+                title={`Also in routine run: ${run.routine_name}`}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}
+              >
+                <Zap size={9} strokeWidth={2} />
+                {run.routine_name}
+              </span>
+            ))}
           </div>
         </div>
 

@@ -58,6 +58,22 @@ export interface RoutineSetupDraft {
 
 export type RunStatus = 'running' | 'pending_response' | 'in_progress' | 'resolved' | 'dismissed' | 'error'
 
+/**
+ * A work-item (PR, issue, Slack message) that was detected in a routine run's raw output.
+ * Snapshot so display works even after the underlying signal is pruned.
+ * The `key` field matches graph-node keys (`surface:kind:external_id`) and insight
+ * focus-node keys, enabling renderer-side linkage without extra IPC calls.
+ */
+export interface CoveredEntity {
+  /** Graph-node key — e.g. "github:pull_request:482". Matches intent focusNodes[].key. */
+  key: string
+  surface: string
+  kind: string
+  external_id: string
+  title: string
+  url: string
+}
+
 export interface RoutineRun {
   id: string
   routine_id: string
@@ -68,6 +84,8 @@ export interface RoutineRun {
   digest: string | null
   status: RunStatus
   error: string | null
+  /** Work items detected in the run's raw MCP output (populated after digest generation). */
+  covered_entities: CoveredEntity[]
 }
 
 // ─── Chat ────────────────────────────────────────────────────────────────────

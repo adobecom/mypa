@@ -99,9 +99,10 @@ Orchestrates the full MCP → Claude → notification pipeline for a routine run
 **Execution steps (Phase B):**
 1. Execute all MCP actions → collect `rawOutput`
 2. `generateRoutineDigest` → persist `{ summary, body }` digest + chat message (renders the full markdown body); on failure logs the error and stores an honest "could not generate" message
-3. `inferRoutineIntents(name, rawOutput)` → up to 3 `IntentObject`s
-4. `routeIntent(obj, 'routine', ...)` for each — tier resolution, DB persist, graph node, notify
-5. OS notification (digest `summary`) + push events to both windows
+3. `extractCoveredEntities(rawOutput)` (from `entity-link.ts`) → snapshot of detected work items; persisted as `covered_entities` on the run row
+4. `inferRoutineIntents(name, rawOutput)` → up to 3 `IntentObject`s
+5. `routeIntent(obj, 'routine', ...)` for each — tier resolution, DB persist, graph node, notify
+6. OS notification (digest `summary`) + push events to both windows
 
 ---
 
@@ -312,6 +313,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-06-17 — **Insight↔routine run linkage (`entity-link.ts`):** new service `src/main/services/entity-link.ts` exports `extractCoveredEntities(rawOutput): CoveredEntity[]`. Scans the routine's raw MCP output against recently-seen signals (14-day window, up to 200 rows from new `dbGetRecentSignalsAllSurfaces`) to find referenced work items. Matching strategy: URL substring (primary) then word-boundary `external_id` + surface-name guard (fallback). Returns snapshots of matched signals as `CoveredEntity` objects with the same `surface:kind:external_id` key used by graph nodes and insight focus nodes. Called from `routines.ts` `executeRoutine` after `rawOutput` is collected; result persisted as `covered_entities` on the run row. Zero LLM calls — pure text scan.
 
 - 2026-06-17 — **Automatic model selection:** added `model-router.ts` with `selectModel()` (task-source + prompt-size heuristics → tier) and `escalate()` (ladder traversal). `claude.ts` — `runClaude` uses `selectModel` for the initial model and an escalation loop on failure; new `expectJson` param triggers escalation on non-JSON responses. `runClaudeWithMcp` uses `selectModel('suggest', …)`. `runClaudeStream` / `streamChat` select the model from the source+size and escalate on pre-output failure.
 

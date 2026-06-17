@@ -1,11 +1,13 @@
 import React, { Fragment } from 'react'
 import { Zap, Settings } from 'lucide-react'
 import RoutineCard from './RoutineCard'
-import type { RoutineRun } from '../../../../../../shared/types'
+import type { RoutineRun, Intent } from '../../../../../../shared/types'
 
 interface Props {
   runs: RoutineRun[]
   onRunsChange: (runs: RoutineRun[]) => void
+  /** Maps a work-item key (e.g. "github:pull_request:482") to the most-recent intent for it. */
+  entityKeyToIntent?: Map<string, Intent>
 }
 
 function isSameDay(a: Date, b: Date): boolean {
@@ -26,7 +28,7 @@ function dateLabel(ts: string): string {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
-export default function RoutinesFeed({ runs, onRunsChange }: Props): React.ReactElement {
+export default function RoutinesFeed({ runs, onRunsChange, entityKeyToIntent }: Props): React.ReactElement {
   if (runs.length === 0) {
     return (
       <div className="empty-state">
@@ -70,7 +72,7 @@ export default function RoutinesFeed({ runs, onRunsChange }: Props): React.React
         <>
           <div className="section-header">Needs Attention</div>
           {needsAttention.map((run) => (
-            <RoutineCard key={run.id} run={run} onRunChange={handleRunChange} />
+            <RoutineCard key={run.id} run={run} onRunChange={handleRunChange} entityKeyToIntent={entityKeyToIntent} />
           ))}
         </>
       )}
@@ -85,7 +87,7 @@ export default function RoutinesFeed({ runs, onRunsChange }: Props): React.React
               <Fragment key={name}>
                 {showSubheaders && <div className="section-subheader">{name}</div>}
                 {byRoutine.get(name)!.map((run) => (
-                  <RoutineCard key={run.id} run={run} onRunChange={handleRunChange} collapsed />
+                  <RoutineCard key={run.id} run={run} onRunChange={handleRunChange} entityKeyToIntent={entityKeyToIntent} collapsed />
                 ))}
               </Fragment>
             ))}
