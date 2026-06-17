@@ -411,6 +411,10 @@ export interface AmbientConfig {
   waitingUrgencyFloor?: number       // lower urgency floor for waiting/staleness triggers — real-but-not-urgent items (default 0.25)
   synthesisIntervalMs?: number       // how often the synthesis heartbeat fires (default 30 min)
   synthesisInitialDelayMs?: number   // delay before the first heartbeat tick after boot (default 75 s)
+  // Per-resolution-status cooldown (ms) during which re-surfacing the same work item is suppressed.
+  // A newer signal fingerprint (new activity after resolution) breaks through the cooldown.
+  // Defaults: dismissed/challenged=7d, executed=3d, failed/expired=1d.
+  resolutionCooldownMs?: Partial<Record<'dismissed' | 'challenged' | 'executed' | 'failed' | 'expired', number>>
 }
 
 // ─── Check-ins ───────────────────────────────────────────────────────────────

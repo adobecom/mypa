@@ -11,13 +11,15 @@ export default function Tabs({
   items,
   active,
   onChange,
+  className,
 }: {
   items: TabItem[]
   active: string
   onChange: (id: string) => void
+  className?: string
 }): React.ReactElement {
   return (
-    <div className="tabs">
+    <div className={`tabs${className ? ` ${className}` : ''}`}>
       {items.map((item) => (
         <button
           key={item.id}

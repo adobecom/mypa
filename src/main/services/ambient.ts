@@ -4,6 +4,7 @@ import {
   dbCreateIntent,
   dbGetIntent,
   dbGetPendingIntents,
+  dbGetResolvedIntentsSince,
   dbGetAllIntents,
   dbUpdateIntentStatus,
   dbSetIntentChallengeReason,
@@ -53,6 +54,17 @@ let getWidgetWin: (() => BrowserWindow | null) | null = null
 const timeTriggerjobs = new Map<string, cron.ScheduledTask>()
 let inferenceQueue: Promise<void> = Promise.resolve()
 const MAX_INTENTS_PER_CYCLE = 3
+
+// Default cooldown windows (ms) during which a resolved intent suppresses the same
+// work item from re-surfacing. A signal fingerprint change after resolution breaks
+// through regardless of these windows.
+const DEFAULT_RESOLUTION_COOLDOWN_MS: Record<string, number> = {
+  dismissed:  7 * 24 * 60 * 60 * 1000,
+  challenged: 7 * 24 * 60 * 60 * 1000,
+  executed:   3 * 24 * 60 * 60 * 1000,
+  failed:     1 * 24 * 60 * 60 * 1000,
+  expired:    1 * 24 * 60 * 60 * 1000,
+}
 let synthesisIntervalId: ReturnType<typeof setInterval> | null = null
 let synthesisInitialTimeoutId: ReturnType<typeof setTimeout> | null = null
 let revalidationIntervalId: ReturnType<typeof setInterval> | null = null
@@ -141,14 +153,68 @@ function activeFocusNodeIds(): Set<string> {
   return ids
 }
 
+// Returns the set of focus-node ids that are currently in cooldown from a recently
+// resolved intent, suppressing re-surfacing of the same work item.
+//
+// Break-through rule: if the underlying signal's observed_at (a fingerprint-change
+// timestamp) is newer than the intent's resolved_at, the item has genuinely new
+// activity and is allowed through despite the cooldown.
+function suppressedFocusNodeIds(): Set<string> {
+  const ids = new Set<string>()
+  const cfg = readConfig()
+  const overrides = cfg.ambient?.resolutionCooldownMs ?? {}
+  const cooldowns: Record<string, number> = { ...DEFAULT_RESOLUTION_COOLDOWN_MS, ...overrides }
+
+  // Query only as far back as the longest cooldown window.
+  const maxCooldown = Math.max(...Object.values(cooldowns))
+  const cutoff = new Date(Date.now() - maxCooldown).toISOString()
+  const resolved = dbGetResolvedIntentsSince(cutoff)
+
+  for (const intent of resolved) {
+    const status = intent.status as string
+    const cooldownMs = cooldowns[status]
+    if (cooldownMs === undefined) continue
+    const resolvedAt = intent.resolved_at != null ? Date.parse(intent.resolved_at) : NaN
+    if (isNaN(resolvedAt) || Date.now() - resolvedAt >= cooldownMs) continue // cooldown already elapsed
+
+    const focusNodes = (intent.context_packet?.focusNodes ?? []) as Array<{
+      id?: string
+      key?: string
+      type?: string
+    }>
+    for (const node of focusNodes) {
+      if (!node.id) continue
+      // Break-through check for work-item nodes only — non-work-item nodes (person,
+      // repo, etc.) are always suppressed during cooldown.
+      const key = node.key ?? ''
+      const parts = key.split(':')
+      if (parts.length >= 3 && WORK_ITEM_NODE_TYPES.has(node.type ?? parts[1])) {
+        const surface = parts[0]
+        const externalId = parts.slice(2).join(':')
+        const signal = dbGetSignalByExternal(surface as IntentSurface, externalId)
+        if (signal && intent.resolved_at != null && signal.observed_at > intent.resolved_at) {
+          // The underlying work item has new activity since this intent was resolved —
+          // allow a fresh intent through.
+          continue
+        }
+      }
+      ids.add(node.id)
+    }
+  }
+  return ids
+}
+
 export async function runAmbientCycle(
   hits: ReturnType<typeof evalEventTriggers>
 ): Promise<void> {
   const win = getWidgetWin?.() ?? null
 
   // Phase A — infer ALL surviving hits (no early break), then rank
-  // Seed covered set from intents already visible to the user.
+  // Build two guard sets:
+  //   covered   — focus-node ids owned by a currently-pending/surfaced intent
+  //   suppressed — focus-node ids in a post-resolution cooldown window
   const covered = activeFocusNodeIds()
+  const suppressed = suppressedFocusNodeIds()
   const candidates: Array<{
     hit: ReturnType<typeof evalEventTriggers>[number]
     packet: Awaited<ReturnType<typeof assembleContextPacket>>
@@ -156,6 +222,7 @@ export async function runAmbientCycle(
   }> = []
 
   let skippedCovered = 0
+  let skippedCooldown = 0
   const dropCounts: Record<string, number> = {}
 
   for (const hit of hits) {
@@ -163,6 +230,12 @@ export async function runAmbientCycle(
     if (hit.focusNodeIds.length > 0 && hit.focusNodeIds.some((id) => covered.has(id))) {
       console.log(`[ambient] skipping ${hit.kind} hit — focus nodes already covered`)
       skippedCovered++
+      continue
+    }
+    // Skip hits whose focus nodes are within a post-resolution cooldown window.
+    if (hit.focusNodeIds.length > 0 && hit.focusNodeIds.some((id) => suppressed.has(id))) {
+      console.log(`[ambient] skipping ${hit.kind} hit — focus nodes in resolution cooldown`)
+      skippedCooldown++
       continue
     }
 
@@ -186,7 +259,7 @@ export async function runAmbientCycle(
     candidates.push({ hit, packet, obj: result.obj })
   }
 
-  console.log(`[ambient] cycle — ${hits.length} hit(s), ${skippedCovered} skipped (covered), ${candidates.length} inferred${Object.keys(dropCounts).length > 0 ? `, dropped: ${JSON.stringify(dropCounts)}` : ''}`)
+  console.log(`[ambient] cycle — ${hits.length} hit(s), ${skippedCovered} skipped (covered), ${skippedCooldown} skipped (cooldown), ${candidates.length} inferred${Object.keys(dropCounts).length > 0 ? `, dropped: ${JSON.stringify(dropCounts)}` : ''}`)
 
   // Phase B — rank by (urgency desc, confidence desc), take top MAX_INTENTS_PER_CYCLE
   candidates.sort((a, b) =>
@@ -460,14 +533,37 @@ function stopRevalidationTimer(): void {
 
 // ─── Intent routing by tier ───────────────────────────────────────────────────
 
+// Shared surfacing path for all tiers: mark surfaced, push to renderer, notify + badge
+// for actionable intents (flag/digest are informational — no interruption).
+function surfaceIntent(intentId: string, win: BrowserWindow | null): void {
+  dbUpdateIntentStatus(intentId, 'surfaced')
+  const updated = dbGetIntent(intentId)!
+  pushIntent(updated, win)
+
+  // Only notify and badge for actionable intents — informational ones (flag/digest)
+  // live in the main-window Activity page and should not interrupt the user.
+  if (updated.type === 'action') {
+    const notif = new Notification({
+      title: `mypa: ${updated.surface ?? 'ambient'}`,
+      body: (updated.rationale ?? '').slice(0, 120),
+      silent: !(readConfig().preferences.notification_sound ?? true)
+    })
+    notif.on('click', () => win?.show())
+    notif.show()
+
+    updateBadgeCount()
+  }
+
+  refreshTray(win)
+}
+
 async function handleIntent(intent: Intent, win: BrowserWindow | null): Promise<void> {
   const tier = intent.tier as Tier
 
   if (tier === 3) {
-    // Locked — log and surface as flag only, never execute
-    dbUpdateIntentStatus(intent.id, 'surfaced')
-    pushIntent(dbGetIntent(intent.id)!, win)
-    refreshTray(win)
+    // Locked — never auto-execute; surface with full notification + badge so the
+    // user is alerted even while the widget is hidden (tray-only mode).
+    surfaceIntent(intent.id, win)
     return
   }
 
@@ -484,25 +580,7 @@ async function handleIntent(intent: Intent, win: BrowserWindow | null): Promise<
   }
 
   // Tier 1, 2, or a tier-0 verb that isn't in the allowlist: surface for user attention
-  dbUpdateIntentStatus(intent.id, 'surfaced')
-  const updated = dbGetIntent(intent.id)!
-  pushIntent(updated, win)
-
-  // Only notify and badge for actionable intents — informational ones (flag/digest)
-  // live in the main-window Activity page and should not interrupt the user.
-  if (intent.type === 'action') {
-    const notif = new Notification({
-      title: `mypa: ${intent.surface ?? 'ambient'}`,
-      body: (intent.rationale ?? '').slice(0, 120),
-      silent: !(readConfig().preferences.notification_sound ?? true)
-    })
-    notif.on('click', () => win?.show())
-    notif.show()
-
-    updateBadgeCount()
-  }
-
-  refreshTray(win)
+  surfaceIntent(intent.id, win)
 }
 
 async function executeIntent(intent: Intent, win: BrowserWindow | null): Promise<void> {

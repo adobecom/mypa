@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { GitBranch, SquareKanban, MessageSquare, ChevronDown, Lightbulb } from 'lucide-react'
 import type { Intent, ChatMessage } from '../../../../../../shared/types'
 import MarkdownText from '@renderer/components/MarkdownText'
+import Tabs from '@renderer/components/Tabs'
 import ChatThread from './ChatThread'
 import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 
@@ -95,6 +96,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
     (k) => typeof (intent.payload ?? {})[k] === 'string' && String((intent.payload ?? {})[k]).trim()
   )
   const [expanded, setExpanded] = useState(hasDraft && intent.required_approval && !TERMINAL_STATUSES.includes(intent.status))
+  const [detailTab, setDetailTab] = useState('why')
   const [challenging, setChallenging] = useState(false)
   const [challengeReason, setChallengeReason] = useState('')
   const [loading, setLoading] = useState(false)
@@ -242,7 +244,15 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
   const memories = safeArray(cp.memories, isRecord)
   const recentSignals = safeArray(cp.recentSignals, isRecord)
   const focusNodes = safeArray(cp.focusNodes, isRecord)
-  const hasContext = memories.length > 0 || recentSignals.length > 0 || focusNodes.length > 0
+
+  const detailTabItems = [
+    { id: 'why', label: 'Why' },
+    ...(recentSignals.length > 0 ? [{ id: 'activity', label: 'Activity' }] : []),
+    ...(memories.length > 0 ? [{ id: 'facts', label: 'Facts' }] : []),
+    ...(focusNodes.length > 0 ? [{ id: 'focus', label: 'Focus' }] : []),
+  ]
+  // Fall back to 'why' if the active tab no longer has data (e.g. intent updated in-place)
+  const activeDetailTab = detailTabItems.some((t) => t.id === detailTab) ? detailTab : 'why'
 
   return (
     <div className={cardClass}>
@@ -299,13 +309,7 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
       {/* ── Expanded detail block ── */}
       {expanded && (
         <div className="routine-card__body intent-detail">
-          {/* Why this surfaced */}
-          <div className="intent-detail__section">
-            <div className="intent-detail__label">Why this surfaced</div>
-            <MarkdownText className="intent-detail__text">{intent.rationale}</MarkdownText>
-          </div>
-
-          {/* Proposed action */}
+          {/* Proposed action — always visible */}
           {(verbLabel || intent.target || payloadText || payloadExtra.length > 0) && (
             <div className="intent-detail__section">
               <div className="intent-detail__label">Proposed action</div>
@@ -347,48 +351,51 @@ export default function IntentCard({ intent, onIntentChange }: Props): React.Rea
             </div>
           )}
 
-          {/* Context */}
-          {hasContext && (
-            <div className="intent-detail__section">
-              <div className="intent-detail__label">Context</div>
-              {memories.length > 0 && (
-                <div className="intent-detail__ctx-group">
-                  <div className="intent-detail__ctx-heading">Known facts</div>
-                  {memories.slice(0, 4).map((m, i) => (
+          {/* Context tabs — Why / Activity / Facts / Focus */}
+          <div className="intent-detail__section">
+            <Tabs
+              items={detailTabItems}
+              active={activeDetailTab}
+              onChange={setDetailTab}
+              className="intent-detail__tabs"
+            />
+            {activeDetailTab === 'why' && (
+              <MarkdownText className="intent-detail__text">{intent.rationale}</MarkdownText>
+            )}
+            {activeDetailTab === 'activity' && (
+              <div className="intent-detail__ctx-group">
+                {recentSignals.slice(0, 5).map((s, i) => {
+                  const surface = hasString(s, 'surface') ? s.surface : ''
+                  const kind = hasString(s, 'kind') ? s.kind : ''
+                  const title = hasString(s, 'title') ? s.title : ''
+                  const prefix = [surface, kind].filter(Boolean).join(':')
+                  return (
                     <div key={i} className="intent-detail__ctx-row">
-                      · {hasString(m, 'content') ? m.content : JSON.stringify(m)}
+                      · {prefix ? <span style={{ color: 'var(--text-muted)' }}>[{prefix}]</span> : null} {title}
                     </div>
-                  ))}
-                </div>
-              )}
-              {recentSignals.length > 0 && (
-                <div className="intent-detail__ctx-group">
-                  <div className="intent-detail__ctx-heading">Recent activity</div>
-                  {recentSignals.slice(0, 5).map((s, i) => {
-                    const surface = hasString(s, 'surface') ? s.surface : ''
-                    const kind = hasString(s, 'kind') ? s.kind : ''
-                    const title = hasString(s, 'title') ? s.title : ''
-                    const prefix = [surface, kind].filter(Boolean).join(':')
-                    return (
-                      <div key={i} className="intent-detail__ctx-row">
-                        · {prefix ? <span style={{ color: 'var(--text-muted)' }}>[{prefix}]</span> : null} {title}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-              {focusNodes.length > 0 && (
-                <div className="intent-detail__ctx-group">
-                  <div className="intent-detail__ctx-heading">Focus</div>
-                  {focusNodes.slice(0, 3).map((n, i) => (
-                    <div key={i} className="intent-detail__ctx-row">
-                      · {hasString(n, 'label') ? n.label : JSON.stringify(n)}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+                  )
+                })}
+              </div>
+            )}
+            {activeDetailTab === 'facts' && (
+              <div className="intent-detail__ctx-group">
+                {memories.slice(0, 4).map((m, i) => (
+                  <div key={i} className="intent-detail__ctx-row">
+                    · {hasString(m, 'content') ? m.content : JSON.stringify(m)}
+                  </div>
+                ))}
+              </div>
+            )}
+            {activeDetailTab === 'focus' && (
+              <div className="intent-detail__ctx-group">
+                {focusNodes.slice(0, 3).map((n, i) => (
+                  <div key={i} className="intent-detail__ctx-row">
+                    · {hasString(n, 'label') ? n.label : JSON.stringify(n)}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
