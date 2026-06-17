@@ -75,13 +75,30 @@ export async function connectServer(cfg: McpServerConfig): Promise<McpTool[]> {
   const transport = new StdioClientTransport({
     command: cfg.command,
     args: expandTildeArgs(cfg),
-    env: mergedEnv
+    env: mergedEnv,
+    stderr: 'pipe'  // pipe instead of inherit so we can re-emit with a prefix and
+                    // keep a diagnostic tail for timeout error messages
   })
 
   const client = new Client(
     { name: 'mypa', version: '0.1.0' },
     { capabilities: {} }
   )
+
+  // Re-emit subprocess stderr line-by-line with a server-name prefix (preserves the
+  // visibility that 'inherit' provided) and keep a 30-line ring buffer so that a
+  // genuine timeout can report what the server last printed before stalling.
+  const stderrLines: string[] = []
+  transport.stderr?.on('data', (chunk: Buffer) => {
+    const text = chunk.toString('utf8')
+    for (const line of text.split('\n')) {
+      if (line) {
+        try { process.stderr.write(`[mcp:${cfg.name}] ${line}\n`) } catch {}
+        stderrLines.push(line)
+        if (stderrLines.length > 30) stderrLines.shift()
+      }
+    }
+  })
 
   // Wrap connect + listTools in a try/catch so that if either times out we
   // close the client (which terminates the spawned subprocess) before throwing.
@@ -100,8 +117,12 @@ export async function connectServer(cfg: McpServerConfig): Promise<McpTool[]> {
     servers.set(cfg.name, { client, transport, tools, config: cfg })
     return tools
   } catch (err) {
+    const tail = stderrLines.slice(-5).join('\n').trim()
+    const enriched = tail
+      ? new Error(`${(err as any)?.message ?? String(err)} — last server output:\n${tail}`)
+      : err
     try { await client.close() } catch {}
-    throw err
+    throw enriched
   }
 }
 
@@ -189,9 +210,13 @@ export function connectAllServers(): Promise<void> {
 }
 
 /**
- * Reconnect a single named server from the current config and return its live status.
+ * Test or restore a single named server's connection and return its live status.
  * This is the authoritative "Test connection" action — it uses the real connection Map
  * so the dot/tool-count in the UI reflects exactly what routines and ambient will use.
+ *
+ * Non-destructive when the server is already connected: probes the live client with a
+ * listTools call rather than tearing the connection down and rebuilding it. Only falls
+ * back to a full reconnect when the server is not in the Map or when the probe fails.
  */
 export async function reconnectServer(name: string): Promise<McpServerStatus> {
   const cfg = readConfig()
@@ -200,6 +225,30 @@ export async function reconnectServer(name: string): Promise<McpServerStatus> {
     return { name, connected: false, tools: [] }
   }
   return runExclusive(async () => {
+    // If the server is already connected, probe the live client with a listTools call.
+    // This is non-destructive — we don't kill the connection that routines/ambient use.
+    const active = servers.get(name)
+    if (active) {
+      try {
+        const toolsResult = await withTimeout(
+          active.client.listTools(),
+          30_000,
+          `listTools ${name}`
+        )
+        const tools: McpTool[] = (toolsResult.tools ?? []).map((t) => ({
+          name: t.name,
+          description: t.description ?? '',
+          inputSchema: (t.inputSchema as Record<string, unknown>) ?? {}
+        }))
+        active.tools = tools  // refresh cached tool list in place
+        console.log(`[mcp] tested: ${name} (${tools.length} tools)`)
+        return { name, connected: true, tools }
+      } catch {
+        // Probe failed — fall through to a full reconnect
+        console.warn(`[mcp] probe failed for ${name}, attempting full reconnect`)
+      }
+    }
+    // Not connected, or live probe failed: full disconnect + reconnect
     try {
       const tools = await connectServer(srv)
       console.log(`[mcp] reconnected: ${name}`)

@@ -211,18 +211,19 @@ function ConfigurePanel({
   const [error, setError] = useState('')
   const [inlineClientId, setInlineClientId] = useState('')
   const [inlineClientSecret, setInlineClientSecret] = useState('')
-  const [manifestCopied, setManifestCopied] = useState(false)
-  const [manifestCopyFailed, setManifestCopyFailed] = useState(false)
+  const [manifestCopyState, setManifestCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const manifestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleCopyManifest = async () => {
     if (!entry.appManifest) return
+    if (manifestTimerRef.current) clearTimeout(manifestTimerRef.current)
     try {
       await navigator.clipboard.writeText(JSON.stringify(entry.appManifest, null, 2))
-      setManifestCopied(true)
-      setTimeout(() => setManifestCopied(false), 2000)
+      setManifestCopyState('copied')
+      manifestTimerRef.current = setTimeout(() => setManifestCopyState('idle'), 2000)
     } catch {
-      setManifestCopyFailed(true)
-      setTimeout(() => setManifestCopyFailed(false), 2000)
+      setManifestCopyState('failed')
+      manifestTimerRef.current = setTimeout(() => setManifestCopyState('idle'), 2000)
     }
   }
 
@@ -455,8 +456,8 @@ function ConfigurePanel({
             style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
             onClick={handleCopyManifest}
           >
-            {manifestCopied ? <Check size={13} /> : <Copy size={13} />}
-            {manifestCopied ? 'Copied!' : manifestCopyFailed ? 'Copy failed' : 'Copy manifest'}
+            {manifestCopyState === 'copied' ? <Check size={13} /> : <Copy size={13} />}
+            {manifestCopyState === 'copied' ? 'Copied!' : manifestCopyState === 'failed' ? 'Copy failed' : 'Copy manifest'}
           </button>
         </div>
       )}
