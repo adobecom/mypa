@@ -152,6 +152,7 @@ export function dbUpdateRun(
     digest: string
     status: RunStatus
     error: string
+    covered_entities: string
   }>
 ): void {
   const sets = Object.keys(fields)
@@ -178,7 +179,10 @@ export function dbGetAllRuns(limit = 50): RoutineRun[] {
 }
 
 function deserializeRun(row: any): RoutineRun {
-  return { ...row }
+  return {
+    ...row,
+    covered_entities: row.covered_entities ? JSON.parse(row.covered_entities) : []
+  }
 }
 
 // ─── Threads ──────────────────────────────────────────────────────────────────
@@ -451,6 +455,13 @@ export function dbGetRecentSignals(surface: string, sinceIso: string, limit = 50
   const rows = getDb()
     .prepare('SELECT * FROM signals WHERE surface = ? AND observed_at >= ? ORDER BY observed_at DESC LIMIT ?')
     .all(surface, sinceIso, limit) as any[]
+  return rows.map(deserializeSignal)
+}
+
+export function dbGetRecentSignalsAllSurfaces(sinceIso: string, limit = 200): Signal[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM signals WHERE observed_at >= ? ORDER BY observed_at DESC LIMIT ?')
+    .all(sinceIso, limit) as any[]
   return rows.map(deserializeSignal)
 }
 

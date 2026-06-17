@@ -1,12 +1,31 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { ChevronDown, Settings, ExternalLink } from 'lucide-react'
+import { ChevronDown, Settings, ExternalLink, GitBranch, SquareKanban, MessageSquare } from 'lucide-react'
 import ChatThread from './ChatThread'
-import type { RoutineRun, ChatMessage } from '../../../../../../shared/types'
+import type { RoutineRun, ChatMessage, CoveredEntity, Intent } from '../../../../../../shared/types'
 
 interface Props {
   run: RoutineRun
   onRunChange: (run: RoutineRun) => void
   collapsed?: boolean
+  /** Maps a work-item key to the most-recent intent for that entity (from App-level state). */
+  entityKeyToIntent?: Map<string, Intent>
+}
+
+function EntityIcon({ surface }: { surface: string }): React.ReactElement {
+  const size = 11
+  if (surface === 'github') return <GitBranch size={size} strokeWidth={2} />
+  if (surface === 'jira') return <SquareKanban size={size} strokeWidth={2} />
+  return <MessageSquare size={size} strokeWidth={2} />
+}
+
+function entityStatusLabel(intent: Intent | undefined): { label: string; color: string } {
+  if (!intent) return { label: 'Tracked', color: 'var(--text-muted)' }
+  const s = intent.status
+  if (s === 'executed' || s === 'approved') return { label: 'Handled', color: 'var(--green)' }
+  if (s === 'dismissed' || s === 'challenged') return { label: 'Dismissed', color: 'var(--text-muted)' }
+  if (s === 'expired' || s === 'failed') return { label: 'Expired', color: 'var(--text-muted)' }
+  // pending / surfaced — live insight
+  return { label: 'Insight active', color: 'var(--accent)' }
 }
 
 function parseDigest(digest: string | null): { summary: string; body: string } | null {
@@ -19,7 +38,7 @@ function formatTime(ts: string): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-export default function RoutineCard({ run, onRunChange, collapsed }: Props): React.ReactElement {
+export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIntent }: Props): React.ReactElement {
   const [expanded, setExpanded] = useState(!collapsed && (run.status === 'pending_response' || run.status === 'in_progress'))
   const [thread, setThread] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState(false)
@@ -141,6 +160,29 @@ export default function RoutineCard({ run, onRunChange, collapsed }: Props): Rea
 
       {!collapsed && expanded && (
         <div className="routine-card__body">
+          {/* Tracked items — work items detected in the run's MCP output */}
+          {run.covered_entities && run.covered_entities.length > 0 && (
+            <div className="routine-card__tracked">
+              <div className="routine-card__tracked-label">Tracked items</div>
+              {run.covered_entities.map((entity: CoveredEntity) => {
+                const intent = entityKeyToIntent?.get(entity.key)
+                const { label: statusLabel, color: statusColor } = entityStatusLabel(intent)
+                return (
+                  <div key={entity.key} className="routine-card__tracked-row">
+                    <span className="routine-card__tracked-icon">
+                      <EntityIcon surface={entity.surface} />
+                    </span>
+                    <span className="routine-card__tracked-title" title={entity.url || undefined}>
+                      {entity.title || entity.external_id}
+                    </span>
+                    <span className="routine-card__tracked-status" style={{ color: statusColor }}>
+                      {statusLabel}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
           <ChatThread
             messages={thread}
             streaming={streaming}

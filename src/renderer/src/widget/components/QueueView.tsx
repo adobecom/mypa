@@ -2,7 +2,7 @@ import React, { Fragment } from 'react'
 import { Inbox } from 'lucide-react'
 import IntentCard from './IntentCard'
 import PlanItemCard from './PlanItemCard'
-import type { Intent, PlanItem, PlanItemTiming } from '../../../../../../shared/types'
+import type { Intent, PlanItem, PlanItemTiming, RoutineRun } from '../../../../../../shared/types'
 
 const TERMINAL: Intent['status'][] = ['executed', 'dismissed', 'challenged', 'failed', 'expired']
 const TIMING_ORDER: PlanItemTiming[] = ['now', 'morning', 'afternoon', 'evening', 'anytime']
@@ -20,6 +20,8 @@ interface Props {
   items: PlanItem[]
   onStatusChange: (id: string, status: PlanItem['status']) => void
   onItemsChange: (items: PlanItem[]) => void
+  /** Maps a work-item key to the list of routine runs that cover it. */
+  entityKeyToRuns?: Map<string, RoutineRun[]>
 }
 
 export default function QueueView({
@@ -27,7 +29,8 @@ export default function QueueView({
   onIntentsChange,
   items,
   onStatusChange,
-  onItemsChange
+  onItemsChange,
+  entityKeyToRuns
 }: Props): React.ReactElement {
   // "Needs you" — pending actionable intents awaiting approval
   const pendingIntents = intents.filter(
@@ -98,7 +101,7 @@ export default function QueueView({
             Needs you
           </div>
           {pendingIntents.map((intent) => (
-            <IntentCard key={intent.id} intent={intent} onIntentChange={handleIntentChange} />
+            <IntentCard key={intent.id} intent={intent} onIntentChange={handleIntentChange} entityKeyToRuns={entityKeyToRuns} />
           ))}
         </>
       )}
@@ -145,7 +148,7 @@ export default function QueueView({
             Recently resolved
           </div>
           {recentlyResolved.map((intent) => (
-            <IntentCard key={intent.id} intent={intent} onIntentChange={handleIntentChange} />
+            <IntentCard key={intent.id} intent={intent} onIntentChange={handleIntentChange} entityKeyToRuns={entityKeyToRuns} />
           ))}
         </>
       )}

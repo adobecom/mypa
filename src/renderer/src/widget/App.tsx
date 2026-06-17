@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import TabStrip, { type Tab } from './components/TabStrip'
 import RoutinesFeed from './components/RoutinesFeed'
 import QueueView from './components/QueueView'
@@ -110,6 +110,39 @@ export default function App(): React.ReactElement {
     [api]
   )
 
+  // ── Entity linkage indexes (memoized) ────────────────────────────────────────
+  // entityKeyToIntent: maps a work-item key (e.g. "github:pull_request:482") to the
+  //   most-recent intent whose focus nodes include that key.
+  // entityKeyToRuns: maps the same key to the list of runs that cover that entity.
+  // Both are built from already-loaded state — no extra IPC calls needed.
+
+  const entityKeyToIntent = useMemo((): Map<string, Intent> => {
+    const map = new Map<string, Intent>()
+    for (const intent of intents) {
+      const focusNodes = (intent.context_packet?.focusNodes ?? []) as Array<{ key?: string }>
+      for (const node of focusNodes) {
+        if (!node.key) continue
+        // Keep the most-recent intent for each key (intents are newest-first from getIntents)
+        if (!map.has(node.key)) {
+          map.set(node.key, intent)
+        }
+      }
+    }
+    return map
+  }, [intents])
+
+  const entityKeyToRuns = useMemo((): Map<string, RoutineRun[]> => {
+    const map = new Map<string, RoutineRun[]>()
+    for (const run of runs) {
+      for (const entity of run.covered_entities ?? []) {
+        if (!entity.key) continue
+        if (!map.has(entity.key)) map.set(entity.key, [])
+        map.get(entity.key)!.push(run)
+      }
+    }
+    return map
+  }, [runs])
+
   const needsSetup = config !== null && !config.onboarding_complete
 
   return (
@@ -148,6 +181,7 @@ export default function App(): React.ReactElement {
               items={planItems}
               onStatusChange={handleStatusChange}
               onItemsChange={setPlanItems}
+              entityKeyToRuns={entityKeyToRuns}
             />
           )}
 
@@ -155,6 +189,7 @@ export default function App(): React.ReactElement {
             <RoutinesFeed
               runs={runs}
               onRunsChange={setRuns}
+              entityKeyToIntent={entityKeyToIntent}
             />
           )}
         </div>

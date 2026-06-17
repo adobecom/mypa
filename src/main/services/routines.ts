@@ -12,6 +12,7 @@ import { callTool } from './mcp'
 import { generateRoutineDigest, streamChat } from './claude'
 import { inferRoutineIntents } from './inference'
 import { routeIntent } from './ambient'
+import { extractCoveredEntities } from './entity-link'
 import { broadcast, updateBadgeCount } from '../windows'
 import type { Routine, RunStatus } from '@shared/types'
 
@@ -55,12 +56,17 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
     const summary = digestResult.summary
     dbAddRunMessage(run.id, 'assistant', buildDigestMessage(digestResult))
 
+    // Detect work items referenced in the raw MCP output and snapshot them onto the run.
+    // This is a lightweight, synchronous text-match scan — it never calls Claude.
+    const coveredEntities = extractCoveredEntities(rawOutput)
+
     // Update run record
     dbUpdateRun(run.id, {
       completed_at: new Date().toISOString(),
       raw_output: rawOutput,
       digest,
-      status: 'pending_response'
+      status: 'pending_response',
+      covered_entities: JSON.stringify(coveredEntities)
     })
 
     // Step 3: OS notification + push events — fire immediately after the digest so the

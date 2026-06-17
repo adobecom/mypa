@@ -183,6 +183,51 @@
   padding: 10px 12px;
 }
 
+/* ─── Routine card: tracked items ───────────────────────────────────────────── */
+
+.routine-card__tracked {
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.routine-card__tracked-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.routine-card__tracked-row {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.routine-card__tracked-icon {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.routine-card__tracked-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.routine-card__tracked-status {
+  font-size: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* ─── Plan Review Card ──────────────────────────────────────────────────────── */
 
 .plan-review-card {
