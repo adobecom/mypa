@@ -513,6 +513,17 @@
   padding-left: 2px;
 }
 
+/* Compact tab bar used inside intent cards (overrides size, keeps active styling) */
+.intent-detail__tabs {
+  margin-top: 4px;
+  margin-bottom: 6px;
+  gap: 2px;
+}
+.intent-detail__tabs .tab {
+  font-size: 10.5px;
+  padding: 2px 8px;
+}
+
 /* ─── Tabs ──────────────────────────────────────────────────────────────────── */
 
 .tabs {

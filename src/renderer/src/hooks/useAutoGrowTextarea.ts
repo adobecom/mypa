@@ -30,11 +30,18 @@ export function useAutoGrowTextarea(value: string, maxRows = 4): React.RefObject
         : parseFloat(lhRaw)
     const padTop = parseFloat(cs.paddingTop) || 0
     const padBot = parseFloat(cs.paddingBottom) || 0
-    // Add 2px for borders so the last line of text is fully visible
-    const maxH = lhPx * maxRows + padTop + padBot + 2
+    // Account for actual border widths (handles both content-box and border-box)
+    const borderV =
+      (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0)
+    const isBorderBox = cs.boxSizing === 'border-box'
+
+    // maxH is always the total CSS height we will set on the element
+    const maxH = lhPx * maxRows + padTop + padBot + borderV
 
     el.style.height = 'auto'
-    const natural = el.scrollHeight
+    // scrollHeight = content + padding (no border).
+    // Under border-box the CSS height must include borders, so add them back.
+    const natural = el.scrollHeight + (isBorderBox ? borderV : 0)
     el.style.height = Math.min(natural, maxH) + 'px'
     el.style.overflowY = natural > maxH ? 'auto' : 'hidden'
   }, [value, maxRows])
