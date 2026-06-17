@@ -271,7 +271,7 @@ The always-on pipeline emits diagnostic output at multiple levels to make stalls
 |---|---|---|
 | `ingestion.ts runAdapterPoll` | `[ingestion:github] poll complete — N seen, M new` (or `(truncated)`) | Whether each surface is actually polling and producing signals |
 | `ambient.ts onNewSignals` | `[ambient] N new signal(s) — no trigger hits` | When new signals arrive but none fire a trigger |
-| `ambient.ts runAmbientCycle` | `[ambient] cycle — H hit(s), C skipped (covered), I inferred, dropped: {...}` | Where the cycle ends: covered-node suppression vs. inference drops |
+| `ambient.ts runAmbientCycle` | `[ambient] cycle — H hit(s), C skipped (covered), D skipped (cooldown), I inferred, dropped: {...}` | Where the cycle ends: pending-covered suppression, resolution-cooldown suppression, and inference drops |
 | `inference.ts inferIntent` | `[inference] dropped — below-confidence/below-urgency/verb-none` with `{conf, urg, kind}` | Exactly why each candidate was dropped |
 | `ambient.ts runSynthesisHeartbeat` | `[ambient] synthesis heartbeat — N directed signal(s), W waiting hit(s), S stale hit(s), C coalesced hit(s)` | Census at every heartbeat tick |
 
@@ -286,10 +286,12 @@ These rows appear in `ambient.getLog()` interleaved with real `emitted`/`execute
 
 - `directedSignals: 0` despite open review-requests ⇒ adapter `directed` flag is not being set correctly (adapter bug in `ingestion.ts`)
 - `directedSignals: N > 0, waitingHits: 0` ⇒ `buildWaitingHit` / `coalesceHits` issue in `triggers.ts`
-- `waitingHits: N > 0, totalHits: 0` ⇒ all hits were skipped (covered-node check in `runAmbientCycle`)
+- `waitingHits: N > 0, totalHits: 0` ⇒ all hits were skipped — either by the pending-covered check or the resolution-cooldown check in `runAmbientCycle`; look at the `C skipped (covered)` and `D skipped (cooldown)` counts in the cycle log to distinguish
 - `totalHits: N > 0` but no `emitted` row follows ⇒ inference dropped every candidate; see the `dropped:` breakdown in the cycle console log
 
 ## Changelog
+
+- 2026-06-17 — **Fix: resolved intents re-surfaced on every synthesis heartbeat.** Root cause: `activeFocusNodeIds()` seeded the covered set only from `dbGetPendingIntents()` (status `pending`/`surfaced`). Once a user resolved an intent (challenged/executed/dismissed), its focus nodes dropped out of the covered set, so the 30-min heartbeat or any signal fingerprint change re-created a fresh intent for the same work item. Fixed: new `suppressedFocusNodeIds()` function queries terminal intents via `dbGetResolvedIntentsSince(cutoff)` and adds their focus-node ids to the covered set for a **tiered cooldown**: dismissed/challenged → 7 days, executed → 3 days, failed/expired → 1 day. **Break-through rule**: if the underlying signal's `observed_at` is newer than the intent's `resolved_at` (genuinely new activity arrived after resolution), the item is allowed through regardless of the cooldown window. Cooldowns are overridable via `AmbientConfig.resolutionCooldownMs` in `~/.mypa/config.json`. The cycle log now emits two skip counters: `C skipped (covered)` for pending-intent suppression and `D skipped (cooldown)` for resolution-cooldown suppression. No schema change.
 
 - 2026-06-17 — **Fix: tier-3 intents surfaced silently (no notification or badge).** `handleIntent` had an early-return path for tier 3 that called `pushIntent` but exited before the `Notification` + `updateBadgeCount()` block. Because the widget is hidden by default (tray app), tier-3 action intents were never seen in real time — only discovered on relaunch or when something else (a routine) prompted opening the widget. Fixed: extracted a shared `surfaceIntent(intentId, win)` helper that covers status-update, push, notification, badge, and tray refresh; both the tier-3 branch and the tier-1/2 fall-through now call it.
 

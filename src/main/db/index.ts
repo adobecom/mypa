@@ -760,6 +760,18 @@ export function dbGetPendingIntents(): Intent[] {
   return rows.map(deserializeIntent)
 }
 
+export function dbGetResolvedIntentsSince(cutoffIso: string): Intent[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT * FROM intents
+        WHERE status IN ('executed','dismissed','challenged','failed','expired')
+          AND resolved_at IS NOT NULL AND resolved_at >= ?
+        ORDER BY resolved_at DESC`
+    )
+    .all(cutoffIso) as any[]
+  return rows.map(deserializeIntent)
+}
+
 export function dbGetAllIntents(limit = 50): Intent[] {
   const rows = getDb()
     .prepare('SELECT * FROM intents ORDER BY created_at DESC LIMIT ?')
