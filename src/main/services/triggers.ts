@@ -6,7 +6,6 @@ import {
   dbGetDirectedSignals
 } from '../db/index'
 import { getStaleCandidates, kindToNodeType } from './memory-graph'
-import { getOwnerHandles } from './config'
 import type { Signal, TriggerKind } from '@shared/types'
 
 export interface TriggerHit {
@@ -95,9 +94,6 @@ export function evalStaleAndMine(): TriggerHit[] {
     }
   ]
 }
-
-// Keep the old name as an alias used by the synthesis heartbeat path for backward compat
-export const evalStaleness = evalStaleAndMine
 
 // ─── Waiting-on-me trigger ────────────────────────────────────────────────────
 // Fires when signals are structurally directed at the owner:
@@ -220,28 +216,6 @@ export function evalDependency(newSignals: Signal[]): TriggerHit[] {
   return hits
 }
 
-// ─── Threshold trigger ────────────────────────────────────────────────────────
-// Fires when top nodes cross a weight ceiling, suggesting significant activity.
-
-const THRESHOLD_WEIGHT = 10.0
-const MAX_THRESHOLD_HITS = 2
-
-export function evalThreshold(): TriggerHit[] {
-  const top = dbGetTopNodesByWeight(5)
-  const over = top.filter((n) => n.weight >= THRESHOLD_WEIGHT)
-  if (over.length === 0) return []
-  return [
-    {
-      kind: 'threshold',
-      focusNodeIds: over.slice(0, MAX_THRESHOLD_HITS).map((n) => n.id),
-      reason: `High-activity items: ${over
-        .slice(0, 2)
-        .map((n) => `${n.label} (${n.weight.toFixed(0)})`)
-        .join(', ')}`
-    }
-  ]
-}
-
 // ─── Time trigger ─────────────────────────────────────────────────────────────
 // Fires for scheduled synthesis (morning / midday / eod).
 
@@ -259,8 +233,8 @@ export function evalTime(slot: 'morning' | 'midday' | 'eod'): TriggerHit[] {
 // ─── Convenience: all event triggers ─────────────────────────────────────────
 // Event-driven path: fires when new signals arrive. evalWaitingOnMe is the primary
 // consequence-based trigger; evalDependency covers blocked/related items; evalSpike
-// handles activity bursts. Staleness and threshold are now driven by the synthesis
-// heartbeat (ambient.ts) rather than being gated behind a per-poll counter here.
+// handles activity bursts. Staleness is driven by the synthesis heartbeat (ambient.ts)
+// via evalStaleAndMine + evalWaitingOnMeFromGraph.
 
 export function evalEventTriggers(newSignals: Signal[]): TriggerHit[] {
   return [

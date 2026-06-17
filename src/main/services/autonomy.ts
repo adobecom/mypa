@@ -89,7 +89,7 @@ export function recordApproval(actionType: string): void {
   if (policy.consecutive_approvals >= CONSECUTIVE_APPROVALS_TO_LOWER) {
     const newTier = Math.max(AUTO_DECAY_FLOOR, policy.tier - 1) as Tier
     dbUpsertPolicy(actionType, { tier: newTier, consecutive_approvals: 0 })
-    console.log(`[autonomy] trust raised for ${actionType}: tier ${policy.tier} → ${newTier}`)
+    console.log(`[autonomy] trust raised for ${actionType}: tier ${policy.tier} → ${newTier} (lower number = more trust)`)
   }
 }
 
@@ -100,7 +100,7 @@ export function recordChallenge(actionType: string, feedback: string): void {
   if (!policy.tier_locked && policy.tier < 3) {
     const newTier = Math.min(3, policy.tier + 1) as Tier
     dbUpsertPolicy(actionType, { tier: newTier })
-    console.log(`[autonomy] trust lowered for ${actionType}: tier ${policy.tier} → ${newTier}`)
+    console.log(`[autonomy] trust lowered for ${actionType}: tier ${policy.tier} → ${newTier} (higher number = less trust)`)
   }
 
   // Write the feedback as a preference signal into the memory graph

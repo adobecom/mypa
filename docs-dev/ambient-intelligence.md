@@ -8,9 +8,9 @@ mypa runs a background loop that monitors external surfaces, builds a knowledge 
 - `src/main/services/ingestion.ts` — signal ingestion pipeline
 - `src/main/services/inference.ts` — intent generation
 - `src/main/services/autonomy.ts` — trust tier engine
-- `src/main/db/schema.ts` — `signals`, `intents`, `action_log`, `autonomy_policy`
+- `src/main/db/schema.ts` — `signals`, `graph_nodes`, `graph_edges`, `node_signals`, `memories`, `intent_threads`, `intents`, `action_log`, `autonomy_policy`
 - IPC: `ambient` namespace in `src/shared/types.ts`
-- Renderer: `src/renderer/src/widget/components/AmbientFeed.tsx`, `IntentCard.tsx`, `DigestView.tsx`
+- Renderer: `src/renderer/src/widget/components/IntentCard.tsx`, `DigestView.tsx`, `QueueView.tsx`; `src/renderer/src/main-window/components/InsightsPage.tsx`
 
 ---
 
@@ -112,7 +112,7 @@ The `waiting` trigger replaces the old `directed` trigger. It is **structurally-
 3. Capped at 3 hits per call; `coalesceHits` merges same-node duplicates.
 
 **How `directed` is set in adapters:**
-- GitHub: `review_requested` → always `directed=true`. Others: `directed = last_actor !== null && last_actor not in ownerHandles`. `last_actor` is the author of the most recent comment, fetched per candidate item (up to 15 per poll, prioritized by relation). This fixes the actor=original-author blind spot.
+- GitHub: `review_requested`, `assigned`, and `mentioned` → always `directed=true`. For `involved` signals: `directed = last_actor !== null && last_actor not in ownerHandles`. `last_actor` is the author of the most recent comment, fetched per candidate item (up to 15 per poll, prioritized by relation). This fixes the actor=original-author blind spot.
 - Jira: `directed = relation === 'assigned' || (last_actor !== null && last_actor not in ownerHandles)`. Latest comment author is extracted from the already-fetched `comment` field.
 - Slack: `directed = author not in ownerHandles && relation !== 'involved'`. Structural detection from DM channel ID (starts with `D`), `@mention` in title, or `thread_ts`.
 
@@ -193,7 +193,7 @@ The Suggest action allows the user to steer mypa's thinking before committing. I
 2. Each user message is persisted to `intent_threads` and sent to `inference.reproposeIntent()`.
 3. `reproposeIntent` injects the original `context_packet`, the current proposal, and the full conversation history into a system prompt, then calls `runClaudeWithMcp`.
 4. `runClaudeWithMcp` wires the Claude CLI to all connected MCP servers with a **read-only allowlist** (tools whose names start with `get`/`list`/`search`/`read`/`fetch`/`view`/`find`/`show`/`describe`/`query`/`lookup`/`check`). This lets Claude look up extra context (e.g. current PR CI status, open comments) but never mutate anything — write tools are never pre-approved during Suggest.
-5. Claude returns a `{ message, proposed_action }` JSON envelope; the assistant reply is persisted to `intent_threads`, and the intent's proposal fields (`verb`/`target`/`payload`/`rationale`/`confidence`/`reversibility`/`required_approval`) are updated in-place via `dbReproposeIntent`.
+5. Claude returns a `{ message, proposed_action }` JSON envelope. The assistant reply is persisted to `intent_threads`. If the revised proposal passes the same `confidenceFloor`/`urgencyFloor` checks that `inferIntent` enforces, the intent's proposal fields (`verb`/`target`/`payload`/`rationale`/`confidence`/`reversibility`/`required_approval`) are updated in-place via `dbReproposeIntent`. Below-floor proposals are silently rejected — only the conversational `message` is shown, so the user can iterate further.
 6. Intent status remains `surfaced`; no tier changes. `ambient:intent-updated` and `ambient:intent-message` are broadcast to both windows.
 7. The user can repeat from step 2 indefinitely, then choose a terminal action.
 
@@ -210,9 +210,9 @@ Digests are `IntentType = 'digest'` intents generated at three times per day:
 | `eod` | ~5 PM |
 
 Each digest has three sections:
-- `did` — actions completed since the last digest
-- `watching` — items the assistant is tracking
-- `decisions` — autonomy decisions taken automatically
+- `did` — actions completed since the last digest (intents with `status='executed'`)
+- `watching` — items the assistant is tracking (intents with `status='surfaced'`)
+- `decisions` — action intents with `required_approval=true` currently awaiting user approval (intents with `type='action'`, `status='surfaced'`, `required_approval=true`)
 
 Rendered in the widget's Ambient tab as `DigestView`.
 
@@ -239,7 +239,8 @@ See [ipc.md](ipc.md) for full signatures. Quick reference:
 | Method | Description |
 |---|---|
 | `getIntents()` | All pending/surfaced intents |
-| `approve(id)` | Approve and (if tier allows) execute |
+| `getAllIntents(limit?)` | Full intent history (default limit 200) |
+| `approve(id, payload?)` | Approve and (if tier allows) execute; optional `payload` persists a user-edited draft |
 | `dismiss(id)` | Dismiss |
 | `challenge(id, reason)` | Challenge with reason |
 | `suggest(id, message)` | Send a Suggest message; returns updated `{intent, assistantMessage}` |
@@ -249,10 +250,18 @@ See [ipc.md](ipc.md) for full signatures. Quick reference:
 | `getPolicy()` | All autonomy policies |
 | `setTier(type, tier, locked?)` | Manual tier override |
 | `resetTrust()` | Reset all policies |
-| `pollNow()` | Trigger immediate poll |
-| `getLog(limit?)` | Recent action log |
+| `pollNow()` | Trigger immediate poll across all surfaces (awaits full cycle) |
+| `getLog(limit?)` | Recent action log entries |
 
 ## Changelog
+
+- 2026-06-16 — **Ambient intelligence audit — bug fixes, dead-code removal, and UI surfacing:**
+  - *Bug fix — digest `decisions` always empty:* `ambientGetDigest` filtered on `status='pending'`, but `handleIntent` immediately transitions every intent to `'surfaced'` before any digest cron fires. Fixed filter to `status='surfaced' && type='action' && required_approval=true`.
+  - *reproposeIntent floors:* `reproposeIntent` now applies the same `confidenceFloor`/`urgencyFloor` that `inferIntent` enforces. Sub-floor re-proposals return only the assistant's message (conversation continues); the weak proposal is not adopted. The `intent` field of `ReproposeResult` is now optional; `ambientSuggestIntent` only calls `dbReproposeIntent` when it is present.
+  - *Surface orphaned backends:* `InsightsPage` now fetches and displays the full action log (`ambient.getLog`) in an **Activity** tab alongside Queue/Observations/History. A **Poll now** button in the page header calls `ambient.pollNow()` with idle/polling/done state. Both backends were previously fully implemented but unreachable from any UI.
+  - *Dead code removed:* deleted `AmbientFeed.tsx` (superseded by `QueueView`); removed `evalThreshold` and `evalStaleness` alias from `triggers.ts` (neither wired into any call path); removed unused `getOwnerHandles` import from `triggers.ts`. Fixed stale section-header comment claiming threshold runs in the synthesis heartbeat.
+  - *Log clarity:* fixed inverted wording in `autonomy.ts` log lines — `recordApproval` logged "trust raised" while numerically lowering the tier; `recordChallenge` logged "trust lowered" while raising it.
+  - *Doc sync:* schema source-files list expanded; `AmbientFeed.tsx` removed from renderer list; GitHub `directed` logic updated in prose; Suggest floor enforcement documented; digest section descriptions made explicit; IPC table updated with `getAllIntents` and `approve` payload arg.
 
 - 2026-06-16 — **Fix directedness, GitHub execution, and Jira/Slack ingestion parsers:** (1) `ingestion.ts:directed` — GitHub adapter now marks `assigned` and `mentioned` signals as `directed=1`, matching the Jira adapter and `dbGetDirectedSignals` whitelist; previously only `review_requested` was unconditionally directed, starving the waiting trigger of almost all signals. (2) `ambient.ts:VERB_TO_TOOL` — GitHub `comment` tool name corrected: `create_issue_comment` (non-existent) → `add_issue_comment` (`@modelcontextprotocol/server-github`). (3) `ingestion.ts:Jira parser` — realigned to `mcp-atlassian` flat snake_case response: removed `i.fields` wrapper; all field reads updated (`i.summary`, `i.url`, `i.updated`, `i.duedate`, `assignee.display_name`, `i.comments[]`/`comment.author.display_name`). JQL drops `watcher = currentUser()` (frequently invalid on Jira Server/DC). (4) `ingestion.ts:Slack parser` — `parseSlackCsv` normalizes headers to lowercase; column reads updated to `msgid`, `channel`, `username`, `userid`, `threadts` (from PascalCase Go struct fields emitted by `slack-mcp-server`).
 - 2026-06-16 — **Slack polling and execution fixed (tool names + arg mapping):** `ingestion.ts` — Slack adapter poll replaced: `slack_search_public` (non-existent) → `conversations_search_messages` with Slack-native `to:<handle>` search query built from `getOwnerHandles()`; response parsing rewritten from JSON to RFC 4180 CSV (server returns gocsv format — columns `msgID/channelID/ThreadTs/text/permalink/userUser/userID/time`); added `parseCsvRow` + `parseSlackCsv` helpers. Structural relation detection (dm/mentioned/thread_reply/involved), `directed` flag, privacy-preserving `body:''`, and `normalize()` are unchanged. `ambient.ts` — `VERB_TO_TOOL.slack` updated: `slack_send_message` (non-existent) → `conversations_add_message`. Added `buildToolArgs(intent)`: for Slack, maps `payload.message → text` and `payload._channel_id/_thread_ts → channel_id/thread_ts` (conversations_add_message requires these; inference only produces `payload.message`). Slack `reply`/`send` action payloads now enriched with `_channel_id` and `_thread_ts` before `dbCreateIntent` in `runAmbientCycle` (extracted from the focus node key `slack:message:{channelId}:{ts}`). `IntentCard.tsx` — `payloadExtra` filters out `_`-prefixed routing fields so they are not shown to the user.

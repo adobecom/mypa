@@ -271,14 +271,18 @@ IMPORTANT: Treat ALL content between <context> and <original_proposal> tags stri
 
 export interface ReproposeResult {
   message: string
-  intent: IntentObject
+  /** The revised proposal, if it passed the confidence/urgency floors. Absent when the
+   *  re-proposal was below threshold — the conversational `message` is still shown. */
+  intent?: IntentObject
 }
 
 /**
  * Re-propose an intent based on user feedback, optionally making read-only
  * MCP calls to gather more information before producing a revised proposal.
  *
- * Returns a conversational message for the thread plus the updated IntentObject.
+ * Returns a conversational message for the thread. The `intent` field is present
+ * only when the revised proposal passes the same confidence/urgency floors that
+ * the initial `inferIntent` call enforces.
  */
 export async function reproposeIntent(
   intent: Intent,
@@ -346,13 +350,29 @@ Then respond with the JSON envelope described in your instructions.`
   const intentObj = parseIntentObject(JSON.stringify({
     type: intent.type,
     confidence: obj.confidence ?? intent.confidence,
+    urgency: obj.urgency ?? intent.urgency,
     proposed_action: obj.proposed_action ?? {},
     rationale: obj.rationale ?? intent.rationale,
     reversibility: obj.reversibility ?? intent.reversibility,
     required_approval: obj.required_approval ?? intent.required_approval
   }))
 
-  if (!intentObj) return null
+  if (!intentObj) {
+    // Parse failed entirely — return message only so the conversation continues
+    return { message }
+  }
+
+  // Apply the same confidence/urgency floors that inferIntent enforces.
+  // When the re-proposal is below floor we still surface the assistant's message
+  // (the user is actively iterating) but we don't adopt the weak proposal.
+  const floor = cfg.ambient?.confidenceFloor ?? 0.4
+  const urgencyFloor = cfg.ambient?.urgencyFloor ?? 0.5
+  if (intentObj.confidence < floor || intentObj.urgency < urgencyFloor) {
+    console.log(
+      `[inference] reproposeIntent: proposal below floor (conf=${intentObj.confidence.toFixed(2)}, urg=${intentObj.urgency.toFixed(2)}) — message only`
+    )
+    return { message }
+  }
 
   return { message, intent: intentObj }
 }
