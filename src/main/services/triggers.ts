@@ -165,11 +165,14 @@ export function evalWaitingOnMe(newSignals: Signal[]): TriggerHit[] {
 /**
  * Heartbeat variant — queries persisted directed signals to re-surface items
  * that are still waiting on the owner even during quiet periods (no new arrivals).
+ *
+ * Accepts an optional pre-fetched `directed` array to avoid a redundant DB query
+ * when the caller (runSynthesisHeartbeat) already has the result.
  */
-export function evalWaitingOnMeFromGraph(): TriggerHit[] {
-  const directed = dbGetDirectedSignals()
+export function evalWaitingOnMeFromGraph(directed?: ReturnType<typeof dbGetDirectedSignals>): TriggerHit[] {
+  const signals = directed ?? dbGetDirectedSignals()
   const hits: TriggerHit[] = []
-  for (const sig of directed) {
+  for (const sig of signals) {
     const hit = buildWaitingHit(sig)
     if (hit) hits.push(hit)
     if (hits.length >= 5) break

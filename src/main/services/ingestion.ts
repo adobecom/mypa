@@ -585,9 +585,11 @@ async function runAdapterPoll(adapter: SurfaceAdapter): Promise<Signal[]> {
   if (!adapter.isAvailable()) return []
   const newSignals: Signal[] = []
   let pollComplete = false
+  let seenCount = 0
   try {
     const { observations, complete } = await adapter.poll()
     pollComplete = complete
+    seenCount = observations.length
     for (const obs of observations) {
       const input = adapter.normalize(obs)
       const { inserted, id } = dbInsertSignal(input)
@@ -609,8 +611,10 @@ async function runAdapterPoll(adapter: SurfaceAdapter): Promise<Signal[]> {
     // revalidatePendingIntents() uses this to safely infer item disappearance.
     lastCompletePollAt.set(adapter.surface, new Date().toISOString())
   }
+  // Always log poll completion so we can see which surfaces are actually polling
+  // and how many signals are seen vs. new (newly fingerprint-changed).
+  console.log(`[ingestion:${adapter.surface}] poll complete — ${seenCount} seen, ${newSignals.length} new${pollComplete ? '' : ' (truncated)'}`)
   if (newSignals.length > 0) {
-    console.log(`[ingestion:${adapter.surface}] ${newSignals.length} new signal(s)`)
     newSignalCallback?.(newSignals)
   }
   return newSignals

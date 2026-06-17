@@ -191,7 +191,7 @@ Takes a `ContextPacket` (assembled by `memory-graph.ts`) and produces scored `In
 
 | Export | Description |
 |---|---|
-| `inferIntent(hit, packet?)` | Single-intent inference from a `TriggerHit`; returns one `IntentObject` or null |
+| `inferIntent(hit, packet?)` | Single-intent inference from a `TriggerHit`; returns `InferIntentResult { obj, dropReason? }`. Urgency floor is now per-kind: `waiting`/`staleness` → `waitingUrgencyFloor` (default 0.25); others → `urgencyFloor` (default 0.5). |
 | `inferRoutineIntents(name, rawOutput, maxIntents?)` | Multi-intent inference over routine MCP output; returns up to `maxIntents` (default 3) `IntentObject`s as a JSON array parsed from one Claude call |
 | `reproposeIntent(intent, thread, userMessage)` | Re-proposal with live read-only MCP: injects the original `context_packet`, the current proposal, and the full conversation history into a prompt, calls `runClaudeWithMcp`, and returns `{ message: string, intent: IntentObject }` parsed from a JSON envelope |
 | `parseIntentObject(text)` | Parse + validate a raw JSON string into an `IntentObject`; clamps unknown verbs to `'none'` |
@@ -298,6 +298,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-06-17 — **Durable fix: ambient always-on path was throttled into silence:** `ambient.ts` — `startSynthesisTimer` now fires an initial heartbeat tick ~75 s after boot (`synthesisInitialDelayMs`) before the recurring interval, so items already waiting on the user surface at startup instead of waiting 30 min. `runSynthesisHeartbeat` lifts `dbGetDirectedSignals()` to avoid a duplicate query and writes one `diag` action-log row per tick (readable via `ambient.getLog()`). `runAmbientCycle` now aggregates `skippedCovered` counts and inference drop-reason summaries into a single summary console log per cycle. `onNewSignals` logs when `evalEventTriggers` produces 0 hits. `inference.ts` — `inferIntent` now returns `InferIntentResult { obj, dropReason? }` so callers can aggregate drop reasons; urgency floor is per-kind (`waiting`/`staleness` → `waitingUrgencyFloor` default 0.25, others unchanged). Drop-reason `console.log` added at each drop point in both `inferIntent` and `inferRoutineIntents`. `ingestion.ts` — `runAdapterPoll` now always logs poll completion (seen count, new count, truncation flag) regardless of whether new signals were found. `triggers.ts` — `evalWaitingOnMeFromGraph` accepts an optional pre-fetched directed-signals array. `types.ts` — new `AmbientConfig` fields `synthesisInitialDelayMs` (default 75 s) and `waitingUrgencyFloor` (default 0.25).
 
 - 2026-06-17 — **Fix "Test connection" false-negative + stderr diagnostics:** `mcp.ts` — `reconnectServer` now probes the live `listTools` on the already-connected client instead of tearing it down and rebuilding; only falls back to a full reconnect when the server is not in the Map or when the probe fails. `connectServer` changed `stderr` from `'inherit'` to `'pipe'`; a data listener re-emits each line to `process.stderr` with a `[mcp:<name>]` prefix (preserving visibility) and keeps a 30-line ring buffer; genuine `connect`/`listTools` timeouts now append the last 5 buffered lines to the error message returned to the UI.
 

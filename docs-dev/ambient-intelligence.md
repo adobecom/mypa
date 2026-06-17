@@ -70,8 +70,10 @@ Stored in `AppConfig.ambient` (in `~/.mypa/config.json`):
 | `pollIntervalMs` | `300000` (5 min) | How often to poll external surfaces |
 | `decayHalfLifeDays` | `7` | Weight decay half-life for graph nodes and edges |
 | `confidenceFloor` | `0.4` | Minimum confidence to surface an intent |
-| `urgencyFloor` | `0.5` | Minimum urgency to surface an intent (separate from confidence; see urgency axis below) |
-| `synthesisIntervalMs` | `1800000` (30 min) | How often the synthesis heartbeat re-evaluates "still waiting on me" items |
+| `urgencyFloor` | `0.5` | Minimum urgency for `spike`/`dependency`/`time` triggers (see per-kind floor below) |
+| `waitingUrgencyFloor` | `0.25` | Minimum urgency for `waiting`/`staleness` triggers — these items are real-but-not-urgent by design |
+| `synthesisIntervalMs` | `1800000` (30 min) | How often the synthesis heartbeat repeats after the first tick |
+| `synthesisInitialDelayMs` | `75000` (75 s) | Delay before the **first** heartbeat tick after boot (lands after all three adapter stagger offsets settle) |
 
 ---
 
@@ -124,7 +126,11 @@ The `staleness` trigger now restricts to items the owner **owns** (assigned or r
 
 ### Synthesis heartbeat
 
-Staleness and waiting-on-me from the heartbeat path re-evaluate the **current state of persisted signals** (`dbGetDirectedSignals`) every `synthesisIntervalMs` (default 30 min), not just on new arrivals. This ensures items like a PR waiting on your review for 3 days resurface even when GitHub is quiet (no new signals arriving). The heartbeat uses the same `inferenceQueue` serialization as all other paths, so it never races with poll-driven cycles.
+Staleness and waiting-on-me from the heartbeat path re-evaluate the **current state of persisted signals** (`dbGetDirectedSignals`) at two intervals:
+- **Initial tick:** ~75 s after boot (`synthesisInitialDelayMs`), landing after all three adapter stagger offsets complete (+3 s github / +23 s jira / +43 s slack), so the DB is populated before the first evaluation. This surfaces items already waiting on the user immediately at startup rather than after the full 30-min interval.
+- **Recurring ticks:** every `synthesisIntervalMs` (default 30 min) thereafter.
+
+The heartbeat uses the same `inferenceQueue` serialization as all other paths, so it never races with poll-driven cycles. It also writes one `diag` action-log row per tick (see **Observability** below), so the user can query the pipeline state via `ambient.getLog()` without grepping console output.
 
 ---
 
@@ -141,7 +147,7 @@ An **intent** is a proposed action derived from trigger evaluation. Types:
 
 Each intent has:
 - `confidence` — 0–1: how certain the LLM is this signal is real and worth attention; filtered against `confidenceFloor`.
-- `urgency` — 0–1: how consequential it is that the user acts **now** (separate axis from confidence). Considers: someone is blocked/waiting on the user, deadline proximity (due_at), cost of delay, irreversibility. Filtered against `urgencyFloor`. Used to rank within a cycle so the most consequential item surfaces first.
+- `urgency` — 0–1: how consequential it is that the user acts **now** (separate axis from confidence). Considers: someone is blocked/waiting on the user, deadline proximity (due_at), cost of delay, irreversibility. Filtered against a **per-kind urgency floor**: `waiting`/`staleness` triggers use `waitingUrgencyFloor` (default 0.25, lenient — these items are real but not time-critical by design); `spike`/`dependency`/`time` triggers use `urgencyFloor` (default 0.5, stricter — activity bursts should clear a higher bar). Used to rank within a cycle so the most consequential item surfaces first.
 - `reversibility` — `reversible` or `irreversible`; irreversible intents always require approval.
 - `tier` — the trust tier at the time it was created (affects whether it runs automatically).
 - `status` lifecycle: `pending → surfaced → approved / dismissed / challenged → executed / failed / expired`.
@@ -253,7 +259,43 @@ See [ipc.md](ipc.md) for full signatures. Quick reference:
 | `pollNow()` | Trigger immediate poll across all surfaces (awaits full cycle) |
 | `getLog(limit?)` | Recent action log entries |
 
+---
+
+## Observability
+
+The always-on pipeline emits diagnostic output at multiple levels to make stalls visible without requiring code changes.
+
+### Console logs (always emitted)
+
+| Location | Format | What it tells you |
+|---|---|---|
+| `ingestion.ts runAdapterPoll` | `[ingestion:github] poll complete — N seen, M new` (or `(truncated)`) | Whether each surface is actually polling and producing signals |
+| `ambient.ts onNewSignals` | `[ambient] N new signal(s) — no trigger hits` | When new signals arrive but none fire a trigger |
+| `ambient.ts runAmbientCycle` | `[ambient] cycle — H hit(s), C skipped (covered), I inferred, dropped: {...}` | Where the cycle ends: covered-node suppression vs. inference drops |
+| `inference.ts inferIntent` | `[inference] dropped — below-confidence/below-urgency/verb-none` with `{conf, urg, kind}` | Exactly why each candidate was dropped |
+| `ambient.ts runSynthesisHeartbeat` | `[ambient] synthesis heartbeat — N directed signal(s), W waiting hit(s), S stale hit(s), C coalesced hit(s)` | Census at every heartbeat tick |
+
+### Diagnostic action-log rows
+
+`runSynthesisHeartbeat` writes one `event: 'diag', action_type: 'heartbeat'` row to the action log per tick. The `detail` object contains:
+```json
+{ "directedSignals": N, "waitingHits": W, "staleHits": S, "totalHits": T }
+```
+
+These rows appear in `ambient.getLog()` interleaved with real `emitted`/`executed` events. Reading the last few rows tells you:
+
+- `directedSignals: 0` despite open review-requests ⇒ adapter `directed` flag is not being set correctly (adapter bug in `ingestion.ts`)
+- `directedSignals: N > 0, waitingHits: 0` ⇒ `buildWaitingHit` / `coalesceHits` issue in `triggers.ts`
+- `waitingHits: N > 0, totalHits: 0` ⇒ all hits were skipped (covered-node check in `runAmbientCycle`)
+- `totalHits: N > 0` but no `emitted` row follows ⇒ inference dropped every candidate; see the `dropped:` breakdown in the cycle console log
+
 ## Changelog
+
+- 2026-06-17 — **Durable fix: ambient always-on path was throttled into near-silence (not broken).** Root cause established by reading the full pipeline — three compounding issues, all addressed in this pass:
+  - *Synthesis heartbeat first-tick deferral (primary cause):* `startSynthesisTimer` used a bare `setInterval`, so the first heartbeat — the only mechanism to re-surface persisted "waiting on me" items during quiet periods — fired 30 min after boot. In normal steady state, the continuous poller only forwards *newly-fingerprint-changed* signals, so almost all re-surfacing depends on the heartbeat. Fixed: `startSynthesisTimer` now fires an initial tick ~75 s after boot (`synthesisInitialDelayMs`, configurable), landing after all three adapter stagger offsets complete so `dbGetDirectedSignals` has populated rows.
+  - *Urgency-floor over-suppression:* the system prompt explicitly instructs the model that "a clearly-real but low-stakes item should have high confidence and low urgency", so a PR waiting days for your review routinely scores urgency < 0.5 and is dropped by `inferIntent`. The routine path (`inferRoutineIntents`) bypasses covered-node suppression and feeds findings framed as fresh — so it reliably clears the floor. This asymmetry made it *look* like ambient only fires when routines run. Fixed: per-kind urgency floor in `inferIntent` — `waiting`/`staleness` triggers use `waitingUrgencyFloor` (default 0.25); `spike`/`dependency`/`time` keep the existing `urgencyFloor` (0.5).
+  - *Observability gap:* the pipeline had no visibility into where it stalled — polls silently produced 0 new signals with no log, inferIntent silently dropped candidates, and the synthesis heartbeat produced no diagnostic output. Fixed: per-surface always-on poll completion log, per-cycle drop-reason aggregation, heartbeat directed-signal census (console + `diag` action-log row via `ambient.getLog()`), and structured `InferIntentResult` return from `inferIntent` with drop reasons. See **Observability** section above.
+  - New config fields: `synthesisInitialDelayMs` (default 75 s) and `waitingUrgencyFloor` (default 0.25).
 
 - 2026-06-16 — **Ambient intelligence audit — bug fixes, dead-code removal, and UI surfacing:**
   - *Bug fix — digest `decisions` always empty:* `ambientGetDigest` filtered on `status='pending'`, but `handleIntent` immediately transitions every intent to `'surfaced'` before any digest cron fires. Fixed filter to `status='surfaced' && type='action' && required_approval=true`.

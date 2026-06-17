@@ -19,6 +19,7 @@ import {
   dbReproposeIntent,
   dbGetNodeById,
   dbGetSignalByExternal,
+  dbGetDirectedSignals,
 } from '../db/index'
 import { readConfig } from './config'
 import { violatesScope } from './scope'
@@ -27,6 +28,7 @@ import { startIngestion, stopIngestion, pollOnce, getLastCompletePollAt } from '
 import { ingestSignalIntoGraph, assembleContextPacket, startDecayTimer, stopDecayTimer } from './memory-graph'
 import { evalEventTriggers, evalTime, coalesceHits, evalWaitingOnMeFromGraph, evalStaleAndMine } from './triggers'
 import { inferIntent, reproposeIntent } from './inference'
+import type { InferIntentResult } from './inference'
 import { enqueueEmbeddings, enqueueBackfill, enqueueMemoryBackfill } from './embeddings'
 import { runMemorySummarization } from './memories'
 import {
@@ -52,6 +54,7 @@ const timeTriggerjobs = new Map<string, cron.ScheduledTask>()
 let inferenceQueue: Promise<void> = Promise.resolve()
 const MAX_INTENTS_PER_CYCLE = 3
 let synthesisIntervalId: ReturnType<typeof setInterval> | null = null
+let synthesisInitialTimeoutId: ReturnType<typeof setTimeout> | null = null
 let revalidationIntervalId: ReturnType<typeof setInterval> | null = null
 // Tracks how many consecutive complete polls each intent's work-item signals were absent.
 // Reset to 0 when the item reappears. Cleared when the intent is expired.
@@ -112,7 +115,10 @@ function onNewSignals(signals: Signal[]): void {
 
   // Evaluate event triggers
   const hits = coalesceHits(evalEventTriggers(signals))
-  if (hits.length === 0) return
+  if (hits.length === 0) {
+    console.log(`[ambient] ${signals.length} new signal(s) — no trigger hits`)
+    return
+  }
 
   // Run the inference cycle asynchronously, serialized
   inferenceQueue = inferenceQueue
@@ -149,27 +155,38 @@ export async function runAmbientCycle(
     obj: IntentObject
   }> = []
 
+  let skippedCovered = 0
+  const dropCounts: Record<string, number> = {}
+
   for (const hit of hits) {
     // Skip hits whose focus nodes are already covered by a pending intent.
     if (hit.focusNodeIds.length > 0 && hit.focusNodeIds.some((id) => covered.has(id))) {
       console.log(`[ambient] skipping ${hit.kind} hit — focus nodes already covered`)
+      skippedCovered++
       continue
     }
 
     const packet = await assembleContextPacket(hit.kind, hit.focusNodeIds)
-    let obj: IntentObject | null
+    let result: InferIntentResult
     try {
-      obj = await inferIntent(hit, packet)
+      result = await inferIntent(hit, packet)
     } catch (e) {
       console.error('[ambient] inference error:', e)
+      dropCounts.error = (dropCounts.error ?? 0) + 1
       continue
     }
-    if (!obj) continue
+    if (!result.obj) {
+      const reason = result.dropReason ?? 'unknown'
+      dropCounts[reason] = (dropCounts[reason] ?? 0) + 1
+      continue
+    }
 
     // Mark focus nodes covered within this cycle to prevent same-cycle duplicates
     for (const id of hit.focusNodeIds) covered.add(id)
-    candidates.push({ hit, packet, obj })
+    candidates.push({ hit, packet, obj: result.obj })
   }
+
+  console.log(`[ambient] cycle — ${hits.length} hit(s), ${skippedCovered} skipped (covered), ${candidates.length} inferred${Object.keys(dropCounts).length > 0 ? `, dropped: ${JSON.stringify(dropCounts)}` : ''}`)
 
   // Phase B — rank by (urgency desc, confidence desc), take top MAX_INTENTS_PER_CYCLE
   candidates.sort((a, b) =>
@@ -255,10 +272,30 @@ export async function runAmbientCycle(
 // during quiet periods (no new signal arrivals). Decoupled from the poll callback.
 
 function runSynthesisHeartbeat(): void {
-  const waitingHits = evalWaitingOnMeFromGraph()
+  // Lift the directed-signals query so we can log the count before passing it in,
+  // avoiding a redundant DB query inside evalWaitingOnMeFromGraph.
+  const directed = dbGetDirectedSignals()
+  const waitingHits = evalWaitingOnMeFromGraph(directed)
   const staleHits = evalStaleAndMine()
   const hits = coalesceHits([...waitingHits, ...staleHits])
-  console.log(`[ambient] synthesis heartbeat — ${hits.length} hit(s)`)
+  console.log(`[ambient] synthesis heartbeat — ${directed.length} directed signal(s), ${waitingHits.length} waiting hit(s), ${staleHits.length} stale hit(s), ${hits.length} coalesced hit(s)`)
+
+  // Write a diagnostic action-log row so the user can query the ambient pipeline
+  // state via ambient:get-log without needing to grep console output.
+  dbAppendActionLog({
+    intent_id: null, // diagnostic row — not tied to a specific intent
+    event: 'diag',
+    action_type: 'heartbeat',
+    tier: 1,
+    detail: {
+      directedSignals: directed.length,
+      waitingHits: waitingHits.length,
+      staleHits: staleHits.length,
+      totalHits: hits.length,
+    },
+    created_at: new Date().toISOString()
+  })
+
   if (hits.length === 0) return
   inferenceQueue = inferenceQueue
     .then(() => runAmbientCycle(hits))
@@ -269,11 +306,25 @@ function startSynthesisTimer(): void {
   if (synthesisIntervalId) return
   const cfg = readConfig()
   const intervalMs = cfg.ambient?.synthesisIntervalMs ?? 30 * 60 * 1000
-  // Defer first tick by one full interval (avoids colliding with startup stagger + backfill)
+  const initialDelayMs = cfg.ambient?.synthesisInitialDelayMs ?? 75_000
+
+  // Fire an initial heartbeat tick after a short delay so items already waiting
+  // on the user surface promptly after boot, instead of waiting the full interval
+  // (default 30 min). The delay (~75 s) lands after the ingestion stagger completes
+  // (github+3s, jira+23s, slack+43s) so the DB has up-to-date directed signals.
+  synthesisInitialTimeoutId = setTimeout(() => {
+    synthesisInitialTimeoutId = null
+    runSynthesisHeartbeat()
+  }, initialDelayMs)
+
   synthesisIntervalId = setInterval(runSynthesisHeartbeat, intervalMs)
 }
 
 function stopSynthesisTimer(): void {
+  if (synthesisInitialTimeoutId) {
+    clearTimeout(synthesisInitialTimeoutId)
+    synthesisInitialTimeoutId = null
+  }
   if (synthesisIntervalId) clearInterval(synthesisIntervalId)
   synthesisIntervalId = null
 }

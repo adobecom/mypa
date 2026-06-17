@@ -212,7 +212,9 @@ export const DEFAULT_CONFIG: AppConfig = {
     decayHalfLifeDays: 7,
     confidenceFloor: 0.4,
     urgencyFloor: 0.5,
-    synthesisIntervalMs: 30 * 60 * 1000
+    waitingUrgencyFloor: 0.25,
+    synthesisIntervalMs: 30 * 60 * 1000,
+    synthesisInitialDelayMs: 75_000
   },
   checkin: {
     scheduleEnabled: false
@@ -405,8 +407,10 @@ export interface AmbientConfig {
   pollIntervalMs: number
   decayHalfLifeDays: number
   confidenceFloor: number
-  urgencyFloor?: number        // intents below this urgency are dropped (default 0.5)
-  synthesisIntervalMs?: number // how often the synthesis heartbeat fires (default 30 min)
+  urgencyFloor?: number              // intents below this urgency are dropped for spike/dependency/time triggers (default 0.5)
+  waitingUrgencyFloor?: number       // lower urgency floor for waiting/staleness triggers — real-but-not-urgent items (default 0.25)
+  synthesisIntervalMs?: number       // how often the synthesis heartbeat fires (default 30 min)
+  synthesisInitialDelayMs?: number   // delay before the first heartbeat tick after boot (default 75 s)
 }
 
 // ─── Check-ins ───────────────────────────────────────────────────────────────
