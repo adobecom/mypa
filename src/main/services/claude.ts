@@ -6,6 +6,7 @@ import cron from 'node-cron'
 import { readConfig, buildOwnerClause } from './config'
 import { recordUsage } from './usage'
 import { getServerStatus } from './mcp'
+import { selectModel, escalate } from './model-router'
 import type { PlanDraft, PlanItemTiming, ChatMessage, McpServerStatus, RoutineAction, RoutineSetupDraft, UsageSource } from '@shared/types'
 
 
@@ -90,9 +91,8 @@ function getClaude(): string {
 
 const activeStreams = new Map<string, { proc: import('child_process').ChildProcess; killed: boolean }>()
 
-function modelArgs(model?: string): string[] {
-  const m = model ?? readConfig().claude.model
-  return m ? ['--model', m] : []
+function modelArgs(model: string): string[] {
+  return model ? ['--model', model] : []
 }
 
 function claudeEnv(key?: string): NodeJS.ProcessEnv {
@@ -100,20 +100,22 @@ function claudeEnv(key?: string): NodeJS.ProcessEnv {
   return k ? { ...process.env, ANTHROPIC_API_KEY: k } : process.env
 }
 
-export async function runClaude(
-  systemPrompt: string,
-  userPrompt: string,
-  source: UsageSource = 'other',
-  timeoutMs: number = 120_000
+/**
+ * Single-attempt one-shot Claude call. Public callers go through runClaude(),
+ * which wraps this with automatic model selection and escalation on failure.
+ */
+async function runClaudeOnce(
+  model: string,
+  fullPrompt: string,
+  source: UsageSource,
+  timeoutMs: number,
+  expectJson: boolean
 ): Promise<string> {
-  const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
-  const cfg = readConfig().claude
-  const model = cfg.model ?? ''
   return new Promise((resolve, reject) => {
     const proc = spawn(
       getClaude(),
-      ['-p', fullPrompt, '--output-format', 'json', ...modelArgs(cfg.model)],
-      { stdio: ['ignore', 'pipe', 'pipe'], env: claudeEnv(cfg.apiKey) }
+      ['-p', fullPrompt, '--output-format', 'json', ...modelArgs(model)],
+      { stdio: ['ignore', 'pipe', 'pipe'], env: claudeEnv() }
     )
     let stdout = ''
     let stderr = ''
@@ -139,14 +141,59 @@ export async function runClaude(
           reject(new Error('Claude returned unexpected result format'))
           return
         }
+        // When the caller expects a JSON payload and the response contains none,
+        // treat it as a weak output and trigger escalation.
+        if (expectJson && !parsed.result.includes('{') && !parsed.result.includes('[')) {
+          reject(new Error('Claude returned non-JSON response when JSON was expected'))
+          return
+        }
         resolve(parsed.result)
       } catch {
-        // If the output isn't JSON (unexpected CLI version/mode), fall back to raw stdout
-        resolve(stdout.trim())
+        // If the outer envelope isn't JSON (unexpected CLI version/mode)
+        if (expectJson) {
+          reject(new Error('Claude output could not be parsed'))
+        } else {
+          resolve(stdout.trim())
+        }
       }
     })
     proc.on('error', (err) => { clearTimeout(timer); reject(err) })
   })
+}
+
+/**
+ * One-shot Claude call with automatic model selection and failure escalation.
+ *
+ * The model is chosen by selectModel() based on the task's source and prompt
+ * length. If the call fails (error, is_error, bad JSON when expectJson=true),
+ * the call is automatically retried once at the next-stronger model tier.
+ * No further escalation is attempted once the top tier is reached.
+ *
+ * Pass expectJson=true for tasks that require a valid JSON response body —
+ * a non-JSON result will trigger escalation rather than silently resolving.
+ */
+export async function runClaude(
+  systemPrompt: string,
+  userPrompt: string,
+  source: UsageSource = 'other',
+  timeoutMs: number = 120_000,
+  expectJson: boolean = false
+): Promise<string> {
+  const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
+  let model = selectModel(source, fullPrompt.length)
+  while (true) {
+    try {
+      return await runClaudeOnce(model, fullPrompt, source, timeoutMs, expectJson)
+    } catch (err) {
+      // Timeouts are a resource/latency constraint, not a capability gap — escalating to
+      // a slower model with the same budget would just repeat the timeout. Fail fast.
+      if ((err as Error).message === 'Claude timed out') throw err
+      const next = escalate(model)
+      if (!next) throw err
+      console.log(`[claude] escalating ${model} → ${next} (${source}): ${(err as Error).message}`)
+      model = next
+    }
+  }
 }
 
 function parseStreamEvent(
@@ -194,21 +241,20 @@ async function runClaudeStream(
   systemPrompt: string,
   messages: { role: string; content: string }[],
   onChunk: (chunk: string) => void,
-  streamId?: string,
-  source: UsageSource = 'chat'
+  streamId: string | undefined,
+  source: UsageSource,
+  model: string
 ): Promise<string> {
   const history = messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')
   const fullPrompt = `${systemPrompt}\n\n${history}`
-  const cfg = readConfig().claude
-  const model = cfg.model ?? ''
 
   return new Promise((resolve, reject) => {
     const proc = spawn(getClaude(), [
       '-p', fullPrompt,
       '--output-format', 'stream-json',
       '--verbose',
-      ...modelArgs(cfg.model)
-    ], { env: claudeEnv(cfg.apiKey) })
+      ...modelArgs(model)
+    ], { env: claudeEnv() })
     proc.stdin?.end()
     let full = ''
     let buf = ''
@@ -284,7 +330,9 @@ Schema:
 Timing guide: morning=before noon, afternoon=noon-5pm, evening=after 5pm.
 If the intent says "before standup", "this morning", "now", "ASAP" → "now" or "morning".
 If no time hint → "anytime".`,
-    'plan_draft'
+    'plan_draft',
+    120_000,
+    true
   )
 
   const jsonMatch = text.match(/\{[\s\S]*\}/)
@@ -414,7 +462,9 @@ Cron rules:
 - All days: use "*" for dow; weekdays only: use "1-5"
 - Hours are 0-23 (9=9AM, 17=5PM). "twice daily" or "9 and 5" → "0 9,17 * * *"
 - Only server/tool names verbatim from above. params must be a JSON object, never null or an array.`,
-    'routine_setup'
+    'routine_setup',
+    120_000,
+    true
   )
 
   const jsonMatch = text.match(/\{[\s\S]*\}/)
@@ -491,7 +541,8 @@ export async function runClaudeWithMcp(
   source: UsageSource = 'suggest'
 ): Promise<string> {
   const cfg = readConfig()
-  const model = cfg.claude.model ?? ''
+  const fullPromptLen = systemPrompt.length + userPrompt.length + 2
+  const model = selectModel(source, fullPromptLen)
 
   // Build MCP config for the CLI: only servers that are configured
   const mcpConfig: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> = {}
@@ -540,7 +591,7 @@ export async function runClaudeWithMcp(
     '-p', fullPrompt,
     '--output-format', 'json',
     '--mcp-config', mcpConfigPath,
-    ...modelArgs(cfg.claude.model)
+    ...modelArgs(model)
   ]
   if (allowedTools.length > 0) {
     args.push('--allowedTools', allowedTools.join(','))
@@ -605,7 +656,22 @@ export async function streamChat(
     ? `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.\n\nOriginal data collected by this routine:\n${rawContext}`
     : `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.`
 
-  const full = await runClaudeStream(systemPrompt, messages, onChunk, streamId, source)
+  // Approximate total chars for model selection (system prompt + all message content)
+  const approxLen = systemPrompt.length + messages.reduce((n, m) => n + m.content.length, 0)
+  let model = selectModel(source, approxLen)
 
-  onDone(full)
+  while (true) {
+    try {
+      const full = await runClaudeStream(systemPrompt, messages, onChunk, streamId, source, model)
+      onDone(full)
+      return
+    } catch (err) {
+      // User-cancelled streams must not be retried — the UI has already stopped
+      if ((err as Error).message === 'Cancelled') throw err
+      const next = escalate(model)
+      if (!next) throw err
+      console.log(`[claude] stream: escalating ${model} → ${next} (${source})`)
+      model = next
+    }
+  }
 }

@@ -52,6 +52,7 @@ Main Process (Node.js)
   ├── src/main/db/               — better-sqlite3; schema + typed query functions
   └── src/main/services/
         claude.ts       — spawns `claude` CLI; one-shot and streaming
+        model-router.ts — automatic model selection per task (tier ladder + escalation)
         mcp.ts          — MCP client connections (stdio)
         cron.ts         — node-cron scheduler for routines
         routines.ts     — routine execution: MCP → Claude digest → OS notification
@@ -93,7 +94,7 @@ All AI calls go through `src/main/services/claude.ts` which **spawns the `claude
 - `runClaude()` — one-shot, `--output-format text`
 - `streamChat()` — streaming, `--output-format stream-json`; uses `\x00SPLIT\x00` sentinel to split multi-block responses
 
-The model is configured in `AppConfig.claude.model` (default `claude-opus-4-8`), read at call time via `readConfig()`. See [`docs-dev/claude-integration.md`](docs-dev/claude-integration.md).
+The model is chosen automatically per task by `src/main/services/model-router.ts` — Haiku for quick classifications, Sonnet for digests/chat, Opus for agentic MCP work. Large prompts bump the tier up. Failed or weak-JSON responses are retried once at the next-stronger tier. No user-facing model control exists. See [`docs-dev/claude-integration.md`](docs-dev/claude-integration.md).
 
 ### Database
 

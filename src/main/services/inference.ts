@@ -84,7 +84,7 @@ export async function inferIntent(
 
   let text: string
   try {
-    text = await runClaude(systemPrompt, userPrompt, 'inference')
+    text = await runClaude(systemPrompt, userPrompt, 'inference', 120_000, true)
   } catch (e) {
     console.error('[inference] runClaude failed:', e)
     return { obj: null, dropReason: 'error' }
@@ -221,7 +221,7 @@ export async function inferRoutineIntents(
 
   let text: string
   try {
-    text = await runClaude(systemPrompt, userPrompt, 'inference')
+    text = await runClaude(systemPrompt, userPrompt, 'inference', 120_000, true)
   } catch (e) {
     console.error('[inference] inferRoutineIntents runClaude failed:', e)
     return []

@@ -407,18 +407,8 @@ export default function Settings(): React.ReactElement {
         </div>
         <div className="form-group">
           <div className="form-hint" style={{ marginBottom: 12 }}>
-            Powered by your local Claude Code CLI. Optionally provide your own Anthropic API key — when set it overrides the CLI's own authentication.
+            Powered by your local Claude Code CLI. mypa automatically selects the right model for each task — Haiku for quick classifications, Sonnet for summaries and chat, Opus for complex agentic work. Optionally provide your own Anthropic API key — when set it overrides the CLI's own authentication.
           </div>
-          <label className="form-label">Model</label>
-          <select
-            className="form-select"
-            value={config.claude.model}
-            onChange={(e) => setConfig({ ...config, claude: { ...config.claude, model: e.target.value } })}
-          >
-            <option value="claude-opus-4-8">claude-opus-4-8 (recommended)</option>
-            <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
-            <option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (fastest)</option>
-          </select>
         </div>
         <div className="form-group">
           <label className="form-label">Anthropic API Key</label>

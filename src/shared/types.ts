@@ -198,7 +198,7 @@ export interface AppConfig {
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
-  claude: { model: 'claude-opus-4-8' },
+  claude: {},
   mcp_servers: [],
   preferences: {
     widget_always_on_top: false,
@@ -494,6 +494,7 @@ export type UsageSource =
   | 'inference'
   | 'memory'
   | 'chat'
+  | 'suggest'
   | 'other'
 
 export type UsageRange = '7d' | '30d' | '90d' | 'all'

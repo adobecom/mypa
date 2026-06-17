@@ -9,31 +9,12 @@ interface Props {
   onComplete: () => void
 }
 
-type Step = 1 | 2 | 3 | 4 | 5 | 6
-
-const MODELS = [
-  {
-    id: 'claude-opus-4-8',
-    label: 'claude-opus-4-8',
-    tagline: 'Most capable — recommended for complex routines'
-  },
-  {
-    id: 'claude-sonnet-4-6',
-    label: 'claude-sonnet-4-6',
-    tagline: 'Balanced speed and quality'
-  },
-  {
-    id: 'claude-haiku-4-5-20251001',
-    label: 'claude-haiku-4-5',
-    tagline: 'Fastest — best for simple, frequent tasks'
-  }
-]
+type Step = 1 | 2 | 3 | 4 | 5
 
 export default function OnboardingWizard({ onComplete }: Props): React.ReactElement {
   const [step, setStep] = useState<Step>(1)
   const [cliOk, setCliOk] = useState<boolean | null>(null)
   const [checkingCli, setCheckingCli] = useState(false)
-  const [model, setModel] = useState('claude-opus-4-8')
   const [existingServers, setExistingServers] = useState<McpServerConfig[]>([])
   const [serversAdded, setServersAdded] = useState<McpServerConfig[]>([])
   const [oauthCreds, setOauthCreds] = useState<AppConfig['oauth_apps']>({})
@@ -50,7 +31,6 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
   useEffect(() => {
     api.config.get()
       .then((cfg) => {
-        setModel(cfg.claude.model ?? 'claude-opus-4-8')
         setExistingServers(cfg.mcp_servers)
         setOauthCreds(cfg.oauth_apps ?? {})
         setOwnerName(cfg.owner?.name ?? '')
@@ -80,10 +60,7 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
     if (transitioning) return
     setTransitioning(true)
     try {
-      if (step === 3) {
-        await api.config.update({ claude: { model } })
-      }
-      if (step === 5) {
+      if (step === 4) {
         await api.config.update({
           owner: {
             name: ownerName.trim() || undefined,
@@ -186,7 +163,7 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
     }}>
       {/* Progress dots */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 40 }}>
-        {([1, 2, 3, 4, 5, 6] as Step[]).map((s) => (
+        {([1, 2, 3, 4, 5] as Step[]).map((s) => (
           <div
             key={s}
             style={{
@@ -319,72 +296,8 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
           </div>
         )}
 
-        {/* ── Step 3: Model ────────────────────────────────────────────────── */}
+        {/* ── Step 3: Connect Tools ────────────────────────────────────────── */}
         {step === 3 && (
-          <div>
-            <div style={{ marginBottom: 28 }}>
-              <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Choose a model</div>
-              <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                All models run via your local Claude Code CLI. You can change this anytime in Settings.
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {MODELS.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => setModel(m.id)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 14,
-                    padding: '14px 16px',
-                    background: model === m.id ? 'var(--bg-elevated)' : 'transparent',
-                    border: `1.5px solid ${model === m.id ? 'var(--accent)' : 'var(--border-subtle, rgba(255,255,255,0.1))'}`,
-                    borderRadius: 'var(--radius-md)',
-                    cursor: 'pointer', textAlign: 'left', width: '100%',
-                    transition: 'all 0.15s'
-                  }}
-                >
-                  <div style={{
-                    width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
-                    border: `2px solid ${model === m.id ? 'var(--accent)' : 'var(--text-muted)'}`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center'
-                  }}>
-                    {model === m.id && (
-                      <div style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent)' }} />
-                    )}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, fontFamily: 'monospace', color: 'var(--text-primary)' }}>
-                      {m.label}
-                      {m.id === 'claude-opus-4-8' && (
-                        <span style={{
-                          marginLeft: 8, fontSize: 10,
-                          background: 'var(--accent)', color: 'white',
-                          padding: '1px 5px', borderRadius: 4, fontFamily: 'inherit', fontWeight: 600
-                        }}>
-                          recommended
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{m.tagline}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-
-            <WizardNav
-              onBack={handleBack}
-              onNext={handleNext}
-              nextDisabled={transitioning}
-              backDisabled={transitioning}
-              nextLabel={transitioning ? 'Saving…' : 'Next →'}
-              nextSpinner={transitioning}
-            />
-          </div>
-        )}
-
-        {/* ── Step 4: Connect Tools ────────────────────────────────────────── */}
-        {step === 4 && (
           <div>
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Connect your tools</div>
@@ -424,13 +337,13 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
                 <button
                   className="btn btn--ghost btn--sm"
                   style={{ color: 'var(--text-muted)', fontSize: 12 }}
-                  onClick={() => { if (!transitioning) setStep(5) }}
+                  onClick={() => { if (!transitioning) setStep(4) }}
                   disabled={transitioning}
                 >
                   Skip for now
                 </button>
                 {serversAdded.length > 0 && (
-                  <button className="btn btn--primary btn--sm" onClick={() => { if (!transitioning) setStep(5) }} disabled={transitioning}>
+                  <button className="btn btn--primary btn--sm" onClick={() => { if (!transitioning) setStep(4) }} disabled={transitioning}>
                     Done adding tools →
                   </button>
                 )}
@@ -439,8 +352,8 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
           </div>
         )}
 
-        {/* ── Step 5: About You ────────────────────────────────────────────── */}
-        {step === 5 && (
+        {/* ── Step 4: About You ────────────────────────────────────────────── */}
+        {step === 4 && (
           <div>
             <div style={{ marginBottom: 24 }}>
               <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>About you</div>
@@ -515,8 +428,8 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
           </div>
         )}
 
-        {/* ── Step 6: All Set ──────────────────────────────────────────────── */}
-        {step === 6 && (
+        {/* ── Step 5: All Set ──────────────────────────────────────────────── */}
+        {step === 5 && (
           <div>
             <div style={{ textAlign: 'center', marginBottom: 32 }}>
               <div style={{
@@ -535,7 +448,7 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
 
             <div className="card" style={{ padding: '14px 18px', marginBottom: 24 }}>
               <SummaryRow ok label="Claude Code CLI detected" />
-              <SummaryRow ok label={`Model: ${MODELS.find((m) => m.id === model)?.label ?? model}`} />
+              <SummaryRow ok label="Model selection: automatic" />
               {serversAdded.length > 0 ? (
                 <SummaryRow ok label={`${serversAdded.length} tool${serversAdded.length === 1 ? '' : 's'} connected`} />
               ) : (

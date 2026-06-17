@@ -13,13 +13,26 @@ Spawns the `claude` CLI for all AI work. See [claude-integration.md](claude-inte
 | Export | Description |
 |---|---|
 | `detectClaudeBin()` | Non-throwing resolver: returns the absolute path to the `claude` CLI or `null`; used by the runtime and by `setup:check-prerequisites` / `setup:get-health` so both code paths use identical detection logic |
-| `runClaude(systemPrompt, userPrompt, source?, timeoutMs?)` | One-shot JSON completion (default 120 s timeout, overridable); records usage |
+| `runClaude(systemPrompt, userPrompt, source?, timeoutMs?, expectJson?)` | One-shot JSON completion; model auto-selected via `model-router.ts`; escalates to next tier on failure; records usage per attempt |
 | `runClaudeWithMcp(systemPrompt, userPrompt, source?)` | One-shot with live MCP access; writes a temp `--mcp-config` file from connected servers, passes a read-only `--allowedTools` allowlist (tools whose names start with `get`/`list`/`search`/`read`/`fetch`/`view`/`find`/`show`/`describe`/`query`/`lookup`/`check`), then falls back to `runClaude` if no servers are connected |
 | `streamChat(history, userMessage, onChunk, onDone, rawContext?, streamId?, source?)` | Streaming multi-turn chat; records usage on completion |
 | `cancelStream(streamId)` | Kill an active stream by ID; returns `true` if found |
 | `generatePlanDraft(intent)` | Parse free-text intent → `PlanDraft` |
 | `generateRoutineDigest(name, promptTemplate, rawOutput)` | Summarize MCP output → `RoutineDigest` (`{ summary, body }`) |
 | `generateRoutineSetup(intent, servers)` | Natural-language intent → validated `RoutineSetupDraft` |
+
+---
+
+## `model-router.ts` — Automatic model selection
+
+Stateless, pure module. No I/O; no config reads. The single source of truth for which Claude model to use.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `selectModel(source, promptChars)` | Returns the model id for a task. Base tier comes from the `UsageSource` label; large prompts (≥ 12 k / ≥ 40 k chars) bump the tier up toward `capable`. |
+| `escalate(modelId)` | Returns the next-stronger model in the ladder (`haiku → sonnet → opus`), or `null` at the top. Used by `runClaude` / `streamChat` to retry failed or weak-output tasks. |
 
 ---
 
@@ -299,6 +312,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-06-17 — **Automatic model selection:** added `model-router.ts` with `selectModel()` (task-source + prompt-size heuristics → tier) and `escalate()` (ladder traversal). `claude.ts` — `runClaude` uses `selectModel` for the initial model and an escalation loop on failure; new `expectJson` param triggers escalation on non-JSON responses. `runClaudeWithMcp` uses `selectModel('suggest', …)`. `runClaudeStream` / `streamChat` select the model from the source+size and escalate on pre-output failure.
 
 - 2026-06-17 — **Fix: resolved intents re-surfaced on synthesis heartbeat (resolution cooldown).** `ambient.ts` — new `DEFAULT_RESOLUTION_COOLDOWN_MS` constant and `suppressedFocusNodeIds()` function. `suppressedFocusNodeIds` calls `dbGetResolvedIntentsSince(cutoff)` (new DB helper), iterates over terminal intents within their per-status cooldown window, and returns the union of their focus-node ids — excluding nodes whose underlying signal `observed_at` is newer than the intent's `resolved_at` (break-through for genuine new activity). `runAmbientCycle` builds `suppressed` separately from `covered` and applies an additional guard before each hit. The cycle log now reports both `C skipped (covered)` and `D skipped (cooldown)`. `src/shared/types.ts` — `AmbientConfig` gains optional `resolutionCooldownMs: Partial<Record<'dismissed'|'challenged'|'executed'|'failed'|'expired', number>>` for per-status override.
 
