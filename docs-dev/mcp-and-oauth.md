@@ -36,12 +36,14 @@ Maintains a `Map<string, Client>` of active connections keyed by server name.
 | `connectServer(cfg)` | Spawn the server process, establish stdio transport, list available tools, cache the client |
 | `disconnectServer(name)` | Gracefully close the transport, remove from cache |
 | `connectAllServers()` | Called at startup and on every `config:update` — iterates `config.mcp_servers`, connects all; serialized via mutex |
-| `reconnectServer(name)` | Reconnect one named server under the mutex and return its `McpServerStatus`; this is the "Test connection" IPC action — it updates the real Map so the UI dot always reflects live state |
+| `reconnectServer(name)` | Test or restore one named server under the mutex; returns `McpServerStatus`. When already connected, probes the live client with `listTools` (non-destructive); falls back to a full reconnect only when the server is not in the Map or the probe fails. This is the "Test connection" IPC action — the UI dot always reflects the actual live state. |
 | `disconnectAllServers()` | Called at shutdown |
 | `callTool(server, tool, params)` | Call a tool on a connected server; throws if server not found |
 | `getServerStatus()` | Return `McpServerStatus[]` from the in-memory Map (no reconnect) |
 
 **Concurrency:** a module-level `connectQueue` promise chain serializes `connectAllServers()` and `reconnectServer()`. Two near-simultaneous `config:update` calls (e.g. rapid saves or OAuth reconnect overlapping a save) cannot race and destroy each other's live connections.
+
+**Stderr capture:** `connectServer` passes `stderr: 'pipe'` to the `StdioClientTransport`. A `data` listener re-emits each line to `process.stderr` with a `[mcp:<name>]` prefix (matching the visibility that `'inherit'` previously provided) and keeps a bounded 30-line ring buffer. When a `connect` or `listTools` timeout fires, the last 5 buffered lines are appended to the error message so the user sees what the server was doing before it stalled.
 
 **Backward compat:**
 - GitHub: if a server's env contains `GITHUB_TOKEN` but not `GITHUB_PERSONAL_ACCESS_TOKEN`, the value is copied under the new key automatically.
@@ -191,6 +193,8 @@ Provider configurations (client IDs, scopes, token endpoints) live in `src/share
 | `oauthStaleDays` | Days since last auth (if stale, show re-auth prompt) |
 
 ## Changelog
+
+- 2026-06-17 — **Fix "Test connection" false-negative + stderr diagnostics:** `mcp.ts` — `reconnectServer` now probes the live client with `listTools` when the server is already connected (non-destructive); only falls back to a full `connectServer` call when the server is not in the Map or the probe fails. This fixes the symptom where clicking "Test connection" on a healthy Slack server reported `connect slack timed out after 30s` because the old implementation always called `disconnectServer` first, killing the working subprocess. Additionally, `connectServer` now uses `stderr: 'pipe'` on the `StdioClientTransport` with a re-emitting line listener (`[mcp:<name>]` prefix) and a 30-line ring buffer; genuine timeouts append the last 5 buffered stderr lines to the error returned to the UI.
 
 - 2026-06-16 — **Slack catalog hint: add missing channel-listing scopes.** `mcp-catalog.ts` — the `SLACK_MCP_XOXP_TOKEN` hint previously listed only `*:history` read scopes; `slack-mcp-server` also calls `getChannelsMultiType` on startup to build its channel list and fatals with "API returned zero channels and no existing cache is available" if any of `channels:read`, `groups:read`, `im:read`, `mpim:read` are absent. Added all four to the hint, plus `users:read` (required to resolve user mentions). Also added an explicit callout that the server exits immediately if the read scopes are missing, so users know to regenerate their token after updating the Slack app.
 - 2026-06-16 — **MCP connection reliability + Slack --transport fix:** `mcp-catalog.ts` — Slack `baseArgs` updated to `['-y', 'slack-mcp-server@latest', '--transport', 'stdio']`; without `--transport stdio` the server defaults to HTTP and closes the stdio pipe immediately (→ `MCP error -32000: Connection closed`). `mcp.ts` — added `runExclusive` mutex for `connectAllServers`/`reconnectServer`; added `reconnectServer(name): McpServerStatus` (live reconnect, updates the connection Map); added Slack stale-config migration in `connectAllServers` (rewrites args + env for stored entries missing `--transport`); removed ephemeral `testServer` (replaced by `reconnectServer`). IPC: `config:test-mcp-server` replaced by `config:reconnect-mcp-server(name)` + `config:reconnect-all()`. Settings UI: per-row `testing/rowError` state (concurrent tests now each show their own spinner), `syncDisplay()` for post-mutation refresh, Re-check now calls `reconnectAll` for a real probe.

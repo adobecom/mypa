@@ -46,7 +46,7 @@ Manages stdio MCP server connections using `@modelcontextprotocol/sdk`. See [mcp
 | `connectServer(cfg)` | Connect a single MCP server and cache it |
 | `disconnectServer(name)` | Gracefully disconnect and remove from cache |
 | `connectAllServers()` | Connect all enabled servers from config; serialized via mutex |
-| `reconnectServer(name)` | Reconnect a named server under the mutex; returns `McpServerStatus`; used by Settings "Test connection" to update the live Map |
+| `reconnectServer(name)` | Test or restore a named server under the mutex; returns `McpServerStatus`. Non-destructive when already connected: probes the live client with `listTools`; only falls back to a full reconnect if the probe fails or the server was not in the Map. Used by Settings "Test connection". |
 | `disconnectAllServers()` | Disconnect all active connections |
 | `callTool(server, tool, params)` | Call a tool on a connected server |
 | `getServerStatus()` | Return `McpServerStatus[]` from the in-memory Map (no reconnect) |
@@ -298,6 +298,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-06-17 — **Fix "Test connection" false-negative + stderr diagnostics:** `mcp.ts` — `reconnectServer` now probes the live `listTools` on the already-connected client instead of tearing it down and rebuilding; only falls back to a full reconnect when the server is not in the Map or when the probe fails. `connectServer` changed `stderr` from `'inherit'` to `'pipe'`; a data listener re-emits each line to `process.stderr` with a `[mcp:<name>]` prefix (preserving visibility) and keeps a 30-line ring buffer; genuine `connect`/`listTools` timeouts now append the last 5 buffered lines to the error message returned to the UI.
 
 - 2026-06-16 — **Ambient audit — bug fixes and dead-code removal:** `ambient.ts` — digest `decisions` filter corrected from `status='pending'` to `status='surfaced' && type='action' && required_approval=true` (intents transition out of `pending` immediately; the old filter produced an always-empty section). `ambientSuggestIntent` now only calls `dbReproposeIntent` when `result.intent` is present (reproposeIntent can now return message-only for sub-floor re-proposals). `inference.ts` — `reproposeIntent` applies the same `confidenceFloor`/`urgencyFloor` checks that `inferIntent` enforces; `urgency` is now forwarded into the re-validated object; `ReproposeResult.intent` is optional. `triggers.ts` — removed dead `evalThreshold` function (imported nowhere; comment falsely claimed it ran in the heartbeat), removed `evalStaleness` alias (dead; heartbeat calls `evalStaleAndMine` directly), removed unused `getOwnerHandles` import, removed stale section header. `autonomy.ts` — fixed inverted log wording: `recordApproval` said "trust raised" while the tier number was decreasing (more trust); `recordChallenge` said "trust lowered" while the tier number was increasing.
 

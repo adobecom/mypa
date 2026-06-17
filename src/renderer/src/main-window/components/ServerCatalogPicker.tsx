@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react'
-import { ArrowLeft, Check, ExternalLink, Download, FolderOpen } from 'lucide-react'
+import { ArrowLeft, Check, Copy, ExternalLink, Download, FolderOpen } from 'lucide-react'
 import { MCP_CATALOG, CATALOG_CATEGORIES, type McpCatalogEntry } from '@shared/mcp-catalog'
 import type { McpServerConfig, DeviceFlowStart, OAuthProvider, OAuthAppCredential, AppConfig, DetectedMcpServer } from '@shared/types'
 
@@ -211,6 +211,21 @@ function ConfigurePanel({
   const [error, setError] = useState('')
   const [inlineClientId, setInlineClientId] = useState('')
   const [inlineClientSecret, setInlineClientSecret] = useState('')
+  const [manifestCopyState, setManifestCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const manifestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const handleCopyManifest = async () => {
+    if (!entry.appManifest) return
+    if (manifestTimerRef.current) clearTimeout(manifestTimerRef.current)
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(entry.appManifest, null, 2))
+      setManifestCopyState('copied')
+      manifestTimerRef.current = setTimeout(() => setManifestCopyState('idle'), 2000)
+    } catch {
+      setManifestCopyState('failed')
+      manifestTimerRef.current = setTimeout(() => setManifestCopyState('idle'), 2000)
+    }
+  }
 
   const api = window.electron
 
@@ -416,6 +431,34 @@ function ConfigurePanel({
               Connected to {entry.name}
             </div>
           )}
+        </div>
+      )}
+
+      {/* App manifest copy block */}
+      {entry.appManifest && (
+        <div style={{ marginBottom: 12, padding: '10px 12px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4, color: 'var(--text-secondary)' }}>
+            App manifest
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
+            Go to{' '}
+            <a
+              href="#"
+              onClick={(e) => { e.preventDefault(); window.open('https://api.slack.com/apps', '_blank', 'noopener,noreferrer') }}
+              style={{ color: 'var(--accent)' }}
+            >
+              api.slack.com/apps <ExternalLink size={10} style={{ display: 'inline', verticalAlign: 'middle' }} />
+            </a>
+            {' '}→ Create New App → From a manifest. The manifest pre-configures all required permissions.
+          </div>
+          <button
+            className="btn btn--ghost btn--sm"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            onClick={handleCopyManifest}
+          >
+            {manifestCopyState === 'copied' ? <Check size={13} /> : <Copy size={13} />}
+            {manifestCopyState === 'copied' ? 'Copied!' : manifestCopyState === 'failed' ? 'Copy failed' : 'Copy manifest'}
+          </button>
         </div>
       )}
 

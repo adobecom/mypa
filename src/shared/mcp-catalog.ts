@@ -39,6 +39,12 @@ export interface McpCatalogEntry {
   patLabel?: string
   patPlaceholder?: string
   patHint?: string
+  /**
+   * Slack app manifest (or similar provider manifest) that the user can
+   * copy-paste into the provider's app-creation flow to pre-configure all
+   * required permissions in one step.
+   */
+  appManifest?: Record<string, unknown>
 }
 
 export const MCP_CATALOG: McpCatalogEntry[] = [
@@ -106,13 +112,66 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
         key: 'SLACK_MCP_XOXP_TOKEN',
         label: 'User OAuth token',
         placeholder: 'xoxp-...',
-        hint: 'Go to api.slack.com/apps, create an app, and add a user token with these scopes — channels:read, channels:history, groups:read, groups:history, im:read, im:history, mpim:read, mpim:history, search:read, users:read, chat:write. The server fetches your channel list on startup and will exit immediately if the read scopes are missing.',
+        hint: 'Install the app using the manifest above, then go to OAuth & Permissions and copy the User OAuth Token (xoxp-...). If your workspace blocks manifest uploads, add these user scopes manually: channels:read, channels:history, groups:read, groups:history, im:read, im:history, mpim:read, mpim:history, search:read, users:read, chat:write, files:read.',
         secret: true
       }
     ],
     // Enables the conversations_add_message tool (off by default in the server).
     fixedEnv: { SLACK_MCP_ADD_MESSAGE_TOOL: 'true' },
-    authType: 'api_key'
+    authType: 'api_key',
+    appManifest: {
+      display_information: {
+        name: 'mypa',
+        description: 'Local AI assistant that reads your Slack activity to surface context and intents.',
+        background_color: '#4545b0'
+      },
+      features: {
+        bot_user: {
+          display_name: 'mypa',
+          always_online: false
+        }
+      },
+      oauth_config: {
+        scopes: {
+          user: [
+            'channels:read',
+            'channels:history',
+            'groups:read',
+            'groups:history',
+            'im:read',
+            'im:history',
+            'mpim:read',
+            'mpim:history',
+            'search:read',
+            'users:read',
+            'chat:write',
+            'files:read'
+          ],
+          bot: [
+            'channels:history',
+            'channels:read',
+            'groups:history',
+            'groups:read',
+            'im:history',
+            'im:read',
+            'mpim:history',
+            'mpim:read',
+            'chat:write',
+            'reactions:write',
+            'users:read',
+            'users.profile:read',
+            'files:read'
+          ]
+        },
+        pkce_enabled: false
+      },
+      settings: {
+        org_deploy_enabled: false,
+        socket_mode_enabled: false,
+        token_rotation_enabled: false,
+        is_mcp_enabled: false
+      }
+    }
   },
   // ─── Productivity ────────────────────────────────────────────────────────────
   {
