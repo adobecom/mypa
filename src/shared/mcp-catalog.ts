@@ -106,7 +106,7 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
         key: 'SLACK_MCP_XOXP_TOKEN',
         label: 'User OAuth token',
         placeholder: 'xoxp-...',
-        hint: 'Go to api.slack.com/apps, create an app, and add a user token with channels:history, search:read, im:history, groups:history, mpim:history, and chat:write scopes.',
+        hint: 'Go to api.slack.com/apps, create an app, and add a user token with these scopes — channels:read, channels:history, groups:read, groups:history, im:read, im:history, mpim:read, mpim:history, search:read, users:read, chat:write. The server fetches your channel list on startup and will exit immediately if the read scopes are missing.',
         secret: true
       }
     ],
