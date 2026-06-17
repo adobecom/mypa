@@ -16,8 +16,8 @@ export default function Settings(): React.ReactElement {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [showNewServer, setShowNewServer] = useState(false)
-  const [testing, setTesting] = useState<string | null>(null)
-  const [testResult, setTestResult] = useState<{ name: string; ok: boolean; error?: string } | null>(null)
+  const [testing, setTesting] = useState<Record<string, boolean>>({})
+  const [rowError, setRowError] = useState<Record<string, string>>({})
   const [health, setHealth] = useState<SetupHealth | null>(null)
   const [healthLoading, setHealthLoading] = useState(false)
   const [oauthState, setOauthState] = useState<{
@@ -34,9 +34,31 @@ export default function Settings(): React.ReactElement {
   const api = window.electron
   const toast = useToast()
 
+  // Sync display state after config mutations — reads current connection Map without re-probing.
+  const syncDisplay = useCallback(async () => {
+    const [newStatus, newHealth] = await Promise.all([
+      api.config.getMcpStatus(),
+      api.setup.getHealth()
+    ])
+    setStatus(newStatus)
+    setHealth(newHealth)
+    // Clear row errors for any server that is now connected so stale failure
+    // alerts don't persist after a successful save/add/reconnect.
+    setRowError((prev) => {
+      const next = { ...prev }
+      for (const s of newStatus) {
+        if (s.connected) delete next[s.name]
+      }
+      return next
+    })
+  }, [api])
+
+  // Re-check button — fully re-connects all servers then reads health.
   const refreshHealth = useCallback(async () => {
     setHealthLoading(true)
     try {
+      const newStatus = await api.config.reconnectAll()
+      setStatus(newStatus)
       setHealth(await api.setup.getHealth())
     } finally {
       setHealthLoading(false)
@@ -47,7 +69,7 @@ export default function Settings(): React.ReactElement {
     api.config.get().then(setConfig)
     api.config.getMcpStatus().then(setStatus)
     api.config.getClaudeKey().then(setApiKeyStatus)
-    refreshHealth()
+    api.setup.getHealth().then(setHealth)
   }, [])
 
   const usedProviders = useMemo(() => {
@@ -78,8 +100,7 @@ export default function Settings(): React.ReactElement {
       }
       setSaved(true)
       setTimeout(() => setSaved(false), 2500)
-      const [newStatus] = await Promise.all([api.config.getMcpStatus(), refreshHealth()])
-      setStatus(newStatus)
+      await syncDisplay()
       toast.success('Settings saved')
     } catch (err: any) {
       toast.error('Failed to save settings', { message: err?.message })
@@ -102,12 +123,13 @@ export default function Settings(): React.ReactElement {
   const handleAddServer = async (srv: McpServerConfig) => {
     if (saving) return
     setSaving(true)
+    setTesting((prev) => ({ ...prev, [srv.name]: true }))
     try {
       const updated = { ...config, mcp_servers: [...config.mcp_servers, srv] }
       setConfig(updated)
       setShowNewServer(false)
       await api.config.update(updated)
-      await refreshHealth()
+      await syncDisplay()
       toast.success(`Server "${srv.name}" added`)
       // Silently try to detect identity for this surface. config:update already
       // connected the server so resolveOwnerHandles can reach it immediately.
@@ -138,6 +160,7 @@ export default function Settings(): React.ReactElement {
     } catch (err: any) {
       toast.error('Failed to add server', { message: err?.message })
     } finally {
+      setTesting((prev) => { const next = { ...prev }; delete next[srv.name]; return next })
       setSaving(false)
     }
   }
@@ -147,7 +170,7 @@ export default function Settings(): React.ReactElement {
       const updated = { ...config, mcp_servers: config.mcp_servers.filter((s) => s.name !== name) }
       setConfig(updated)
       await api.config.update(updated)
-      await refreshHealth()
+      await syncDisplay()
       toast.success(`Server "${name}" removed`)
     } catch (err: any) {
       toast.error('Failed to remove server', { message: err?.message })
@@ -155,12 +178,20 @@ export default function Settings(): React.ReactElement {
   }
 
   const handleTestServer = async (srv: McpServerConfig) => {
-    setTesting(srv.name)
+    setTesting((prev) => ({ ...prev, [srv.name]: true }))
+    setRowError((prev) => { const next = { ...prev }; delete next[srv.name]; return next })
     try {
-      const result = await api.config.testMcpServer(srv)
-      setTestResult({ name: srv.name, ok: result.ok, error: result.error })
+      const st = await api.config.reconnectMcpServer(srv.name)
+      setStatus((prev) => [...prev.filter((s) => s.name !== st.name), st])
+      if (st.connected) {
+        toast.success(`${srv.name}: connected (${st.tools.length} tools)`)
+      } else {
+        setRowError((prev) => ({ ...prev, [srv.name]: st.error ?? 'Connection failed' }))
+      }
+    } catch (err: any) {
+      setRowError((prev) => ({ ...prev, [srv.name]: err?.message ?? 'Unknown error' }))
     } finally {
-      setTesting(null)
+      setTesting((prev) => { const next = { ...prev }; delete next[srv.name]; return next })
     }
   }
 
@@ -181,7 +212,7 @@ export default function Settings(): React.ReactElement {
           setConfig(updated)
           await api.config.update(updated)
           setOauthState(null)
-          await refreshHealth()
+          await syncDisplay()
           toast.success(`${srv.name} connected`)
         })
         .catch((err: Error) =>
@@ -249,7 +280,7 @@ export default function Settings(): React.ReactElement {
         oauth_connected_at: { [provider]: new Date().toISOString() } as Partial<AppConfig>['oauth_connected_at']
       } as Partial<AppConfig>)
       setConfig({ ...config, oauth_apps: { ...config.oauth_apps, [provider]: creds } })
-      await refreshHealth()
+      await syncDisplay()
       toast.success(`${provider} credentials saved`)
     } catch (err: any) {
       toast.error('Failed to save credentials', { message: err?.message })
@@ -526,12 +557,6 @@ export default function Settings(): React.ReactElement {
           </button>
         </div>
 
-        {testResult && (
-          <div className={`alert ${testResult.ok ? 'alert--success' : 'alert--error'}`}>
-            {testResult.name}: {testResult.ok ? 'Connected successfully' : `Failed — ${testResult.error}`}
-          </div>
-        )}
-
         {config.mcp_servers.length === 0 && !showNewServer && (
           <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '8px 0' }}>
             No MCP servers configured. Add one to enable tool integrations.
@@ -552,7 +577,13 @@ export default function Settings(): React.ReactElement {
                 />
                 <div className="mcp-server-row__name">{srv.name}</div>
                 <div className="mcp-server-row__count">
-                  {s?.connected ? `${s.tools.length} tools` : s ? 'disconnected' : 'unknown'}
+                  {testing[srv.name]
+                    ? 'connecting…'
+                    : s?.connected
+                      ? `${s.tools.length} tools`
+                      : s
+                        ? 'disconnected'
+                        : 'unknown'}
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
                   {needsOAuth && (
@@ -567,15 +598,20 @@ export default function Settings(): React.ReactElement {
                   <button
                     className="btn btn--ghost btn--sm"
                     onClick={() => handleTestServer(srv)}
-                    disabled={testing === srv.name}
+                    disabled={!!testing[srv.name]}
                   >
-                    {testing === srv.name ? <span className="spinner" /> : 'Test'}
+                    {testing[srv.name] ? <span className="spinner" /> : 'Test connection'}
                   </button>
                   <button className="btn btn--danger btn--sm" onClick={() => handleRemoveServer(srv.name)}>
                     Remove
                   </button>
                 </div>
               </div>
+              {rowError[srv.name] && (
+                <div className="alert alert--error" style={{ marginTop: 4 }}>
+                  {srv.name}: {rowError[srv.name]}
+                </div>
+              )}
               {oauthActive && oauthState!.error && (
                 <div className="alert alert--error" style={{ marginTop: 6 }}>{oauthState!.error}</div>
               )}

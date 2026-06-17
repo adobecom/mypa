@@ -33,7 +33,7 @@ import {
   dbGetRecentUsage
 } from './db/index'
 import { readConfig, updateConfig, clearClaudeApiKey, resetConfig } from './services/config'
-import { testServer, getServerStatus, connectAllServers, disconnectAllServers, resolveOwnerHandles } from './services/mcp'
+import { reconnectServer, getServerStatus, connectAllServers, disconnectAllServers, resolveOwnerHandles } from './services/mcp'
 import { startDeviceFlow, pollDeviceFlow, startPkceFlow } from './services/oauth'
 import { detectClaudeMcpServers } from './services/claude-import'
 import { executeRoutine, handleRunMessage } from './services/routines'
@@ -68,7 +68,7 @@ import { dbGetActionLog } from './db/index'
 import { buildMemoryExportMarkdown } from './services/memory-export'
 import { setTrayState } from './tray'
 import { checkForUpdatesNow, installUpdate } from './services/updater'
-import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, McpServerConfig, SetupHealth, DigestSlot, Tier, UsageRange } from '@shared/types'
+import type { RoutineInput, PlanDraft, PlanItemStatus, RunStatus, SetupHealth, DigestSlot, Tier, UsageRange } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import { broadcast, updateBadgeCount } from './windows'
 
@@ -251,8 +251,13 @@ export function registerIpcHandlers(
     return updated
   })
 
-  ipcMain.handle('config:test-mcp-server', async (_e, cfg: McpServerConfig) => {
-    return testServer(cfg)
+  ipcMain.handle('config:reconnect-mcp-server', async (_e, name: string) => {
+    return reconnectServer(name)
+  })
+
+  ipcMain.handle('config:reconnect-all', async () => {
+    await connectAllServers()
+    return getServerStatus()
   })
 
   ipcMain.handle('config:get-mcp-status', async () => {

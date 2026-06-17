@@ -577,7 +577,8 @@ export interface IpcApi {
   config: {
     get(): Promise<AppConfig>
     update(config: Partial<AppConfig>): Promise<AppConfig>
-    testMcpServer(cfg: McpServerConfig): Promise<{ ok: boolean; tools: McpTool[]; error?: string }>
+    reconnectMcpServer(name: string): Promise<McpServerStatus>
+    reconnectAll(): Promise<McpServerStatus[]>
     getMcpStatus(): Promise<McpServerStatus[]>
     getClaudeKey(): Promise<{ configured: boolean; preview: string | null }>
     setClaudeKey(key: string | null): Promise<void>

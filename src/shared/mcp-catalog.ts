@@ -100,7 +100,7 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
     description: 'Read messages, DMs, and mentions; reply and send messages',
     category: 'Communication',
     command: 'npx',
-    baseArgs: ['-y', 'slack-mcp-server'],
+    baseArgs: ['-y', 'slack-mcp-server@latest', '--transport', 'stdio'],
     requiredEnv: [
       {
         key: 'SLACK_MCP_XOXP_TOKEN',
