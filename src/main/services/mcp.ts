@@ -115,6 +115,15 @@ export async function connectServer(cfg: McpServerConfig): Promise<McpTool[]> {
     }))
 
     servers.set(cfg.name, { client, transport, tools, config: cfg })
+    // Auto-evict from the Map when the subprocess exits so that subsequent callTool
+    // calls don't silently hit a dead client. The guard prevents double-eviction if a
+    // concurrent reconnect has already replaced this entry with a fresh one.
+    client.onclose = () => {
+      if (servers.get(cfg.name)?.client === client) {
+        servers.delete(cfg.name)
+        console.log(`[mcp:${cfg.name}] disconnected`)
+      }
+    }
     return tools
   } catch (err) {
     const tail = stderrLines.slice(-5).join('\n').trim()
@@ -255,7 +264,10 @@ export async function reconnectServer(name: string): Promise<McpServerStatus> {
       return { name, connected: true, tools }
     } catch (err: any) {
       console.error(`[mcp] reconnect failed: ${name}:`, err)
-      return { name, connected: false, tools: [], error: err?.message ?? String(err) }
+      // Take only the first line for the UI — the enriched error may contain
+      // a multi-line stderr tail that is for console diagnostics, not user display.
+      const rawMsg = err?.message ?? String(err)
+      return { name, connected: false, tools: [], error: rawMsg.split('\n')[0] }
     }
   })
 }

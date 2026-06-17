@@ -444,7 +444,7 @@ function ConfigurePanel({
             Go to{' '}
             <a
               href="#"
-              onClick={(e) => { e.preventDefault(); window.open('https://api.slack.com/apps') }}
+              onClick={(e) => { e.preventDefault(); window.open('https://api.slack.com/apps', '_blank', 'noopener,noreferrer') }}
               style={{ color: 'var(--accent)' }}
             >
               api.slack.com/apps <ExternalLink size={10} style={{ display: 'inline', verticalAlign: 'middle' }} />
