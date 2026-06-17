@@ -50,10 +50,14 @@ Defined in `src/shared/types.ts`. Deep-merged with `DEFAULT_CONFIG` on every rea
     "linear":  null
   },
   "ambient": {
-    "enabled":          true,
-    "pollIntervalMs":   300000,    // 5 minutes
-    "decayHalfLifeDays": 7,
-    "confidenceFloor":   0.4
+    "enabled":                  true,
+    "pollIntervalMs":            300000,   // 5 minutes
+    "decayHalfLifeDays":         7,
+    "confidenceFloor":           0.4,
+    "urgencyFloor":              0.5,      // spike/dependency/time triggers
+    "waitingUrgencyFloor":       0.25,     // waiting/staleness triggers (lenient — real-but-not-urgent)
+    "synthesisIntervalMs":       1800000,  // 30 min recurring heartbeat
+    "synthesisInitialDelayMs":   75000     // 75 s delay before first heartbeat tick after boot
   }
 }
 ```
@@ -66,7 +70,7 @@ Defined in `src/shared/types.ts`. Deep-merged with `DEFAULT_CONFIG` on every rea
   mcp_servers: [],
   preferences: { widget_always_on_top: false, notification_sound: true, launch_on_login: false },
   onboarding_complete: false,
-  ambient: { enabled: true, pollIntervalMs: 300000, decayHalfLifeDays: 7, confidenceFloor: 0.4 }
+  ambient: { enabled: true, pollIntervalMs: 300000, decayHalfLifeDays: 7, confidenceFloor: 0.4, urgencyFloor: 0.5, waitingUrgencyFloor: 0.25, synthesisIntervalMs: 1800000, synthesisInitialDelayMs: 75000 }
 }
 ```
 
