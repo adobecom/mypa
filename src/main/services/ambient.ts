@@ -460,14 +460,37 @@ function stopRevalidationTimer(): void {
 
 // ─── Intent routing by tier ───────────────────────────────────────────────────
 
+// Shared surfacing path for all tiers: mark surfaced, push to renderer, notify + badge
+// for actionable intents (flag/digest are informational — no interruption).
+function surfaceIntent(intentId: string, win: BrowserWindow | null): void {
+  dbUpdateIntentStatus(intentId, 'surfaced')
+  const updated = dbGetIntent(intentId)!
+  pushIntent(updated, win)
+
+  // Only notify and badge for actionable intents — informational ones (flag/digest)
+  // live in the main-window Activity page and should not interrupt the user.
+  if (updated.type === 'action') {
+    const notif = new Notification({
+      title: `mypa: ${updated.surface ?? 'ambient'}`,
+      body: (updated.rationale ?? '').slice(0, 120),
+      silent: !(readConfig().preferences.notification_sound ?? true)
+    })
+    notif.on('click', () => win?.show())
+    notif.show()
+
+    updateBadgeCount()
+  }
+
+  refreshTray(win)
+}
+
 async function handleIntent(intent: Intent, win: BrowserWindow | null): Promise<void> {
   const tier = intent.tier as Tier
 
   if (tier === 3) {
-    // Locked — log and surface as flag only, never execute
-    dbUpdateIntentStatus(intent.id, 'surfaced')
-    pushIntent(dbGetIntent(intent.id)!, win)
-    refreshTray(win)
+    // Locked — never auto-execute; surface with full notification + badge so the
+    // user is alerted even while the widget is hidden (tray-only mode).
+    surfaceIntent(intent.id, win)
     return
   }
 
@@ -484,25 +507,7 @@ async function handleIntent(intent: Intent, win: BrowserWindow | null): Promise<
   }
 
   // Tier 1, 2, or a tier-0 verb that isn't in the allowlist: surface for user attention
-  dbUpdateIntentStatus(intent.id, 'surfaced')
-  const updated = dbGetIntent(intent.id)!
-  pushIntent(updated, win)
-
-  // Only notify and badge for actionable intents — informational ones (flag/digest)
-  // live in the main-window Activity page and should not interrupt the user.
-  if (intent.type === 'action') {
-    const notif = new Notification({
-      title: `mypa: ${intent.surface ?? 'ambient'}`,
-      body: (intent.rationale ?? '').slice(0, 120),
-      silent: !(readConfig().preferences.notification_sound ?? true)
-    })
-    notif.on('click', () => win?.show())
-    notif.show()
-
-    updateBadgeCount()
-  }
-
-  refreshTray(win)
+  surfaceIntent(intent.id, win)
 }
 
 async function executeIntent(intent: Intent, win: BrowserWindow | null): Promise<void> {

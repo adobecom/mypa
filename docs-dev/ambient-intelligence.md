@@ -163,7 +163,7 @@ The trust tier system adapts over time based on the user's feedback. Each `actio
 | `0` | Fully automatic — execute without surfacing to the user |
 | `1` | Notify — show in ambient feed, execute after short delay unless dismissed |
 | `2` (default) | Require approval — surface in feed, wait for explicit approve/dismiss |
-| `3` | Always approve — extra confirmation required (used for irreversible or high-impact actions) |
+| `3` | Always approve — extra confirmation required (used for irreversible or high-impact actions). Surfaced with full OS notification + dock badge, same as tiers 1 and 2. |
 
 ### Two-level tier resolution
 
@@ -290,6 +290,8 @@ These rows appear in `ambient.getLog()` interleaved with real `emitted`/`execute
 - `totalHits: N > 0` but no `emitted` row follows ⇒ inference dropped every candidate; see the `dropped:` breakdown in the cycle console log
 
 ## Changelog
+
+- 2026-06-17 — **Fix: tier-3 intents surfaced silently (no notification or badge).** `handleIntent` had an early-return path for tier 3 that called `pushIntent` but exited before the `Notification` + `updateBadgeCount()` block. Because the widget is hidden by default (tray app), tier-3 action intents were never seen in real time — only discovered on relaunch or when something else (a routine) prompted opening the widget. Fixed: extracted a shared `surfaceIntent(intentId, win)` helper that covers status-update, push, notification, badge, and tray refresh; both the tier-3 branch and the tier-1/2 fall-through now call it.
 
 - 2026-06-17 — **Durable fix: ambient always-on path was throttled into near-silence (not broken).** Root cause established by reading the full pipeline — three compounding issues, all addressed in this pass:
   - *Synthesis heartbeat first-tick deferral (primary cause):* `startSynthesisTimer` used a bare `setInterval`, so the first heartbeat — the only mechanism to re-surface persisted "waiting on me" items during quiet periods — fired 30 min after boot. In normal steady state, the continuous poller only forwards *newly-fingerprint-changed* signals, so almost all re-surfacing depends on the heartbeat. Fixed: `startSynthesisTimer` now fires an initial tick ~75 s after boot (`synthesisInitialDelayMs`, configurable), landing after all three adapter stagger offsets complete so `dbGetDirectedSignals` has populated rows.
