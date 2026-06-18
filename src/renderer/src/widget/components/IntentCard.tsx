@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { GitBranch, SquareKanban, MessageSquare, ChevronDown, Lightbulb, Zap, MessagesSquare } from 'lucide-react'
+import { GitBranch, SquareKanban, MessageSquare, ChevronDown, Wand2, Zap, MessagesSquare } from 'lucide-react'
 import type { Intent, ChatMessage, RoutineRun } from '../../../../../../shared/types'
 import MarkdownText from '@renderer/components/MarkdownText'
 import Tabs from '@renderer/components/Tabs'
@@ -103,17 +103,13 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
   const [challengeReason, setChallengeReason] = useState('')
   const [loading, setLoading] = useState(false)
   const [challengeConfirmed, setChallengeConfirmed] = useState(false)
-  const [suggesting, setSuggesting] = useState(false)
-  const [suggestThread, setSuggestThread] = useState<ChatMessage[]>([])
-  const [suggestStreaming, setSuggestStreaming] = useState(false)
-  const [suggestError, setSuggestError] = useState<string | null>(null)
-
   // ── "Chat about it" state ─────────────────────────────────────────────────
   const [chatOpen, setChatOpen] = useState(false)
   const [chatThread, setChatThread] = useState<ChatMessage[]>([])
   const [chatStreaming, setChatStreaming] = useState(false)
   const [chatStreamContent, setChatStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
+  const [revising, setRevising] = useState(false)
 
   const api = window.electron
   const isTerminal = TERMINAL_STATUSES.includes(intent.status)
@@ -189,58 +185,6 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
     }
   }
 
-  // ── Suggest thread ────────────────────────────────────────────────────────
-
-  // Load existing thread when the Suggest panel opens for the first time
-  useEffect(() => {
-    if (!suggesting || suggestThread.length > 0) return
-    api.ambient.getIntentThread(intent.id)
-      .then((msgs) => setSuggestThread(msgs as ChatMessage[]))
-      .catch(console.error)
-  }, [suggesting])
-
-  // Subscribe to assistant replies streamed through the broadcast channel
-  useEffect(() => {
-    const off = api.on('ambient:intent-message', (payload) => {
-      const p = payload as { intentId: string; message: string }
-      if (p.intentId !== intent.id) return
-      setSuggestStreaming(false)
-      setSuggestThread((prev) => [
-        ...prev,
-        { id: Date.now().toString(), role: 'assistant' as const, content: p.message, timestamp: new Date().toISOString() }
-      ])
-    })
-    return off
-  }, [intent.id])
-
-  async function handleSuggest(message: string): Promise<void> {
-    setSuggestError(null)
-    setSuggestStreaming(true)
-    // Optimistically show user message
-    const optimisticId = Date.now().toString()
-    setSuggestThread((prev) => [
-      ...prev,
-      { id: optimisticId, role: 'user' as const, content: message, timestamp: new Date().toISOString() }
-    ])
-    try {
-      const result = await api.ambient.suggest(intent.id, message)
-      if (result) {
-        onIntentChange(result.intent as Intent)
-        // Update draft text to the new proposal if it has a payload body
-        const newPayload = (result.intent as Intent).payload ?? {}
-        const newDraftKey = ['body', 'text', 'comment', 'message'].find(
-          (k) => typeof newPayload[k] === 'string'
-        )
-        if (newDraftKey) {
-          setDraftText(String(newPayload[newDraftKey]))
-        }
-      }
-    } catch (e: any) {
-      setSuggestError(e?.message ?? 'Failed to get a re-proposal.')
-      setSuggestStreaming(false)
-    }
-  }
-
   // ── "Chat about it" handlers ──────────────────────────────────────────────
 
   // Load existing chat thread when the panel opens for the first time
@@ -295,6 +239,34 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
 
   function handleChatStop(): void {
     api.ambient.cancelChatStream(intent.id).catch(console.error)
+  }
+
+  // "Update the proposal" — triggers a one-shot re-proposal over the chat thread
+  async function handleRevise(): Promise<void> {
+    setRevising(true)
+    setChatError(null)
+    try {
+      const result = await api.ambient.reviseFromChat(intent.id)
+      if (result) {
+        onIntentChange(result.intent as Intent)
+        // Update draft text to the new proposal if it has a payload body
+        const newPayload = (result.intent as Intent).payload ?? {}
+        const newDraftKey = ['body', 'text', 'comment', 'message'].find(
+          (k) => typeof newPayload[k] === 'string'
+        )
+        if (newDraftKey) {
+          setDraftText(String(newPayload[newDraftKey]))
+        }
+        // Re-fetch thread so the appended assistant reply appears
+        api.ambient.getChatThread(intent.id)
+          .then((msgs) => setChatThread(msgs as ChatMessage[]))
+          .catch(console.error)
+      }
+    } catch (e: any) {
+      setChatError(e?.message ?? 'Failed to revise proposal.')
+    } finally {
+      setRevising(false)
+    }
   }
 
   // ── Expand detail helpers ──────────────────────────────────────────────────
@@ -521,31 +493,6 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
         </div>
       )}
 
-      {/* ── Suggest thread panel ── */}
-      {suggesting && !isTerminal && (
-        <div className="routine-card__body" style={{ paddingTop: 4 }}>
-          <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', marginBottom: 6 }}>
-            Suggest improvements
-          </div>
-          <ChatThread
-            messages={suggestThread}
-            streaming={suggestStreaming}
-            onSend={handleSuggest}
-            error={suggestError}
-            sendDisabled={suggestStreaming}
-          />
-          <div style={{ marginTop: 6, display: 'flex', justifyContent: 'flex-end' }}>
-            <button
-              className="btn btn--ghost"
-              onClick={() => setSuggesting(false)}
-              style={{ fontSize: 11 }}
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* ── Chat about it panel ── */}
       {chatOpen && (
         <div className="routine-card__body" style={{ paddingTop: 4 }}>
@@ -561,7 +508,22 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
             error={chatError}
             sendDisabled={chatStreaming}
           />
-          <div style={{ marginTop: 6, display: 'flex', justifyContent: 'flex-end' }}>
+          <div style={{ marginTop: 6, display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+            {/* "Update the proposal" — visible for active action intents once there is at
+                least one assistant message in the thread (opt-in; user must have had a real
+                exchange first). Not shown for observations or terminal intents. */}
+            {!isObservation && !isTerminal && chatThread.some((m) => m.role === 'assistant') && (
+              <button
+                className="btn btn--ghost"
+                onClick={handleRevise}
+                disabled={revising || chatStreaming}
+                style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+                title="Ask Claude to revise the proposal based on your conversation"
+              >
+                <Wand2 size={11} />
+                {revising ? 'Updating...' : 'Update the proposal'}
+              </button>
+            )}
             <button
               className="btn btn--ghost"
               onClick={() => setChatOpen(false)}
@@ -607,7 +569,7 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
       )}
 
       {/* ── Action footer ── */}
-      {!isTerminal && !challenging && !suggesting && (
+      {!isTerminal && !challenging && (
         <div className="routine-card__body" style={{ paddingTop: 10, display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
           {isObservation ? (
             <>
@@ -657,16 +619,6 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
               >
                 <MessagesSquare size={11} />
                 Chat
-              </button>
-              <button
-                className="btn btn--ghost"
-                onClick={(e) => { e.stopPropagation(); setSuggesting(true); setExpanded(true) }}
-                disabled={loading}
-                style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
-                title="Ask mypa to rethink this proposal"
-              >
-                <Lightbulb size={11} />
-                Suggest
               </button>
               <button
                 className="btn btn--danger"

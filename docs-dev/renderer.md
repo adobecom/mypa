@@ -51,9 +51,9 @@ Data flow: `window.electron.plan.getAll()` on mount; push event `plan:item-messa
 |---|---|
 | `DigestView` | Renders the latest `AmbientDigest` — three sections: did / watching / decisions |
 | `QueueView` | Scrollable list of pending/surfaced action intents and active plan items |
-| `IntentCard` | Single intent — rationale, proposed action, confidence badge, Approve / Dismiss / Challenge / Suggest controls; Suggest opens an embedded `ChatThread` for multi-round re-proposal |
+| `IntentCard` | Single intent — rationale, proposed action, confidence badge, Approve / Dismiss / Challenge / Chat controls; Chat opens a streaming `ChatThread` for free-form discussion; an opt-in "Update the proposal" button inside Chat calls `reviseFromChat` for active action intents |
 
-Data flow: `window.electron.ambient.getIntents()` + `getDigest()` on mount; push events `ambient:intent-created`, `ambient:intent-updated`, `ambient:intent-message`, `ambient:tray-state`, `ambient:digest-ready`.
+Data flow: `window.electron.ambient.getIntents()` + `getDigest()` on mount; push events `ambient:intent-created`, `ambient:intent-updated`, `ambient:tray-state`, `ambient:digest-ready`, `ambient:chat-user-message`, `ambient:chat-message`.
 
 ### QuickAddBar
 
@@ -146,7 +146,7 @@ Navigation:
 
 `InsightsPage` surfaces the agent's ambient intelligence in a structured layout:
 
-1. **Queue tab (first):** reuses the widget's `QueueView` component to render the full actionable queue — pending `action`-type intents ("Needs you") and active plan items — with working Approve / Dismiss / Challenge / Suggest actions. A count badge on the Queue tab reflects `pendingActionIntents + activePlanItems`. Plan items are fetched via `plan.getAll()` and kept live via `plan:item-updated` and `badge:updated` push events.
+1. **Queue tab (first):** reuses the widget's `QueueView` component to render the full actionable queue — pending `action`-type intents ("Needs you") and active plan items — with working Approve / Dismiss / Challenge / Chat actions. A count badge on the Queue tab reflects `pendingActionIntents + activePlanItems`. Plan items are fetched via `plan.getAll()` and kept live via `plan:item-updated` and `badge:updated` push events.
 2. **Daily Digest (always on):** `DigestView` sits above the tabs, always visible, with its morning / midday / end-of-day slot selector. Any non-terminal `digest`-type intents are listed directly below it under "Recent digests".
 3. **Observations tab:** non-terminal `flag`/`suggestion` intents.
 4. **History tab:** full history of terminal intents (executed, dismissed, challenged, failed, expired).
@@ -158,9 +158,9 @@ Navigation:
 |---|---|
 | `InsightsPage` | Outer shell: page header with Poll now button, Queue / Observations / History / Activity `<Tabs>` strip, `ActivityLog` sub-component |
 | `ActivityLog` | Inline component rendering `ActionLogEntry[]` as a compact timestamp · event · action_type · tier grid |
-| `QueueView` | Shared widget+main component: "Needs you" action intents + active plan items + Done section; supports all four intent actions including Suggest |
+| `QueueView` | Shared widget+main component: "Needs you" action intents + active plan items + Done section; supports Approve / Dismiss / Challenge / Chat actions |
 | `DigestView` | Self-contained: fetches and renders the `AmbientDigest` for the selected slot; has its own slot selector and re-fetches on `ambient:digest-ready` |
-| `IntentCard` | Single intent card with Approve / Dismiss / Challenge / Suggest actions; shared with widget |
+| `IntentCard` | Single intent card with Approve / Dismiss / Challenge / Chat actions; shared with widget |
 
 Data flow: `window.electron.ambient.getAllIntents(200)` + `window.electron.plan.getAll()` + `window.electron.ambient.getLog(100)` on mount; `ambient:intent-created`, `ambient:intent-updated`, `plan:item-updated`, `badge:updated`, `ambient:action-executed` push events for live updates; `ambient:digest-ready` handled inside `DigestView`.
 
@@ -242,6 +242,8 @@ Located in `src/renderer/src/` (shared between widget and main window):
 | `components.css` | Shared component stylesheet imported by both renderer entry points before their window-specific `index.css`. Contains `.routine-card*`, `.intent-card*`, `.intent-detail*`, `.intent-chip*`, `.plan-review-card*`, `.review-field*`, `.section-header`, `.section-subheader`, `.tabs`, `.tab*`. |
 
 ## Changelog
+
+- 2026-06-17 — **Button trimming — merge Suggest into Chat:** `IntentCard.tsx` — removed Suggest button, Suggest panel, and all Suggest state/handlers (`suggesting`, `suggestThread`, `suggestStreaming`, `suggestError`, `handleSuggest`). Removed `Lightbulb` lucide import. Removed `&& !suggesting` guard from the action footer. Action footer is now `Dismiss · Chat · Challenge · [Approve]` (down from `Dismiss · Chat · Suggest · Challenge · [Approve]`). Inside the Chat panel, added an "Update the proposal" button (icon: `Wand2`) shown only for non-terminal action intents once the thread contains at least one assistant reply. Clicking it calls `api.ambient.reviseFromChat(intent.id)` → on success, updates the intent via `onIntentChange`, re-syncs `draftText`, and re-fetches the chat thread so the appended reply appears. Added `revising` boolean state for the button's loading state.
 
 - 2026-06-17 — **IntentCard: "Chat about it" streaming thread.** `IntentCard.tsx` gains a "Chat" button (non-terminal intents) and "Chat about it" button (terminal/failed intents) that toggles a streaming `ChatThread` panel, keeping the existing "Suggest" non-streaming re-proposal panel separate. Chat state: `chatOpen`, `chatThread`, `chatStreaming`, `chatStreamContent`, `chatError`. Three effects wire the IPC: load thread on open (`ambient.getChatThread`), echo user messages (`ambient:chat-user-message`), and accumulate streaming chunks (`ambient:chat-message` — `done: true` triggers a thread re-fetch to replace the streaming content with persisted messages). `handleChatSend` → `ambient.sendChatMessage`; `handleChatStop` → `ambient.cancelChatStream`. Icon: `MessagesSquare` from `lucide-react`. The panel is available on all intent types and statuses so the user always has a discussion/recovery path even for failed actions.
 

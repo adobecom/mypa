@@ -150,9 +150,9 @@ Proposed actions derived from signal analysis.
 | `resolved_at` | TEXT | Nullable |
 | `error` | TEXT | Nullable |
 
-#### `intent_threads`
+#### `intent_threads` _(deprecated)_
 
-Conversation messages for a multi-round Suggest session on an intent. Mirrors the `plan_item_threads` pattern.
+Conversation messages for the old standalone Suggest session on an intent. **Deprecated as of 2026-06-17** — the Suggest flow was merged into the streaming Chat panel; new writes go to `intent_chat_threads` instead. Existing rows are preserved for historical reference. No new rows are written.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -164,7 +164,7 @@ Conversation messages for a multi-round Suggest session on an intent. Mirrors th
 
 #### `intent_chat_threads`
 
-Streaming "Chat about it" conversation messages for an intent. Separate from `intent_threads` (which tracks Suggest re-proposal messages) so the two flows don't intermix. Available on all intents including terminal/failed ones.
+Streaming "Chat about it" conversation messages for an intent. This is the active chat table. `intent_threads` (the old Suggest table) is deprecated — new messages go here. Available on all intents including terminal/failed ones.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -377,6 +377,8 @@ Vectors are stored as raw little-endian Float32 BLOBs and similarity search is p
 ---
 
 ## Changelog
+
+- 2026-06-17 — **`intent_threads` deprecated:** the standalone Suggest re-proposal conversation table (`intent_threads`) is no longer written to — the Suggest flow was merged into the streaming Chat panel. No schema change; existing rows are preserved. All new conversation messages go to `intent_chat_threads`.
 
 - 2026-06-17 — **Intent chat thread table — `intent_chat_threads`:** new table (mirroring `plan_item_threads`) for the streaming "Chat about it" per-intent conversation thread. Schema: `id TEXT PK, intent_id TEXT FK → intents CASCADE DELETE, role TEXT, content TEXT, timestamp TEXT`. Index: `idx_intent_chat_threads_intent_id`. Added via `CREATE TABLE IF NOT EXISTS` (no migration needed for fresh installs; existing installs pick it up on first startup). New query helpers: `dbAddIntentChatMessage(intentId, role, content)`, `dbGetIntentChatThread(intentId) → ChatMessage[]`.
 

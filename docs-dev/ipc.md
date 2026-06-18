@@ -112,8 +112,7 @@ Ambient intelligence — intents, digests, policy, tray state.
 | `approve` | `(id, payload?) → Intent` | Approve an intent, optionally passing a user-edited payload (for draft-and-confirm). Persists the edited payload before executing. |
 | `dismiss` | `(id) → void` | Dismiss an intent |
 | `challenge` | `(id, reason) → Intent` | Challenge an intent with a reason; adjusts trust policy |
-| `suggest` | `(id, message) → { intent: Intent; assistantMessage: string } \| null` | Multi-round Suggest: send user feedback, receive a re-proposed intent and a conversational reply. Intent stays non-terminal; can be called repeatedly. |
-| `getIntentThread` | `(id) → ChatMessage[]` | Fetch the Suggest conversation thread for an intent. |
+| `reviseFromChat` | `(id) → { intent: Intent; applied: boolean; message: string } \| null` | Revise the intent's proposal using the existing Chat thread. `applied` is `true` when the new proposal passed the confidence/urgency floors and was committed; `false` when below-floor (message-only). The assistant message is appended to the chat thread either way. |
 | `sendChatMessage` | `(id, message) → void` | Send a user message in the streaming "Chat about it" thread for an intent. Streams response via `ambient:chat-message` push events. |
 | `getChatThread` | `(id) → ChatMessage[]` | Fetch the "Chat about it" streaming conversation thread for an intent. Available on all intents including terminal/failed ones. |
 | `cancelChatStream` | `(id) → void` | Cancel an active "Chat about it" stream for an intent. |
@@ -163,7 +162,6 @@ Subscribed with `window.electron.on(channel, listener)`. Returns an unsubscribe 
 | `ambient:tray-state` | `TrayState` | Tray icon state changed | widget only |
 | `ambient:digest-ready` | `AmbientDigest` | A new digest was generated | widget only |
 | `ambient:action-executed` | `Intent` | A tier-0 intent was auto-executed (success only) | **widget + main** |
-| `ambient:intent-message` | `{ intentId: string; message: string }` | Assistant reply after a Suggest round (non-streaming; fires once when re-proposal completes) | **widget + main** |
 | `ambient:chat-user-message` | `{ intentId: string; message: ChatMessage }` | User message persisted to an intent's "Chat about it" thread (fires immediately before streaming begins) | **widget + main** |
 | `ambient:chat-message` | `{ intentId: string; chunk: string; done: boolean; error?: string }` | Streaming chunk for an intent's "Chat about it" reply. `done: true` signals completion or error. | **widget + main** |
 
@@ -247,6 +245,8 @@ Manage PA check-in sessions and their chat threads.
 | `openInMainWindow` | `(checkinId?) → void` | Open main window on Check-in page, expanding the given session |
 
 ## Changelog
+
+- 2026-06-17 — **Button trimming — merge Suggest into Chat:** removed `ambient.suggest` and `ambient.getIntentThread` IPC methods (and the `ambient:intent-message` push channel that backed Suggest replies). Added `ambient.reviseFromChat(id)` — a one-shot call that runs `reproposeIntent` over the full Chat thread and returns `{ intent, applied, message }`. The Suggest conversational path is now unified into the Chat panel via an opt-in "Update the proposal" button that calls `reviseFromChat`.
 
 - 2026-06-17 — **Ambient insight chat + routing fix:** Added three new `ambient` IPC methods (`sendChatMessage`, `getChatThread`, `cancelChatStream`) and two new push channels (`ambient:chat-user-message`, `ambient:chat-message`) for a streaming per-intent "Chat about it" conversation thread backed by `intent_chat_threads` DB table. Also fixed GitHub/Jira intent actions failing with `-32603` by introducing `enrichPayloadForRouting` (which injects `_owner`/`_repo`/`_issue_number` for GitHub, `_issue_key` for Jira at intent-creation time) and a pre-flight schema validation guard in `executeIntent` that surfaces a clear human error instead of a raw MCP error when required args are still missing.
 

@@ -188,20 +188,23 @@ The safety floor still applies: irreversible or `required_approval` intents can 
 | **Approve** | Execute the intent; increment `approvals` + `consecutive_approvals`; potentially promote tier |
 | **Dismiss** | Mark intent dismissed; increment `dismissals`; reset consecutive streak |
 | **Challenge** | Mark intent challenged with a reason; increment `challenges`; reset streak; potentially demote tier |
-| **Suggest** | Open a multi-round re-proposal conversation; keeps the intent non-terminal so the user can iterate before finally approving, dismissing, or challenging |
+| **Chat** | Open a streaming conversation about this insight; an embedded `ChatThread` appears. The user can ask questions, get context, or ask Claude to revise the proposal via an opt-in "Update the proposal" button. |
 
-### Suggest — multi-round re-proposal
+### Chat — streaming conversation + opt-in re-proposal
 
-The Suggest action allows the user to steer mypa's thinking before committing. It does not end the intent; the user can Suggest as many times as desired, then Approve/Dismiss/Challenge as normal.
+The Chat panel provides a free-form streaming discussion surface for every intent, including failed and terminal ones. For active action intents it also offers a one-shot re-proposal path.
 
-**Flow:**
-1. User opens Suggest on an actionable intent card; an embedded `ChatThread` appears.
-2. Each user message is persisted to `intent_threads` and sent to `inference.reproposeIntent()`.
-3. `reproposeIntent` injects the original `context_packet`, the current proposal, and the full conversation history into a system prompt, then calls `runClaudeWithMcp`.
-4. `runClaudeWithMcp` wires the Claude CLI to all connected MCP servers with a **read-only allowlist** (tools whose names start with `get`/`list`/`search`/`read`/`fetch`/`view`/`find`/`show`/`describe`/`query`/`lookup`/`check`). This lets Claude look up extra context (e.g. current PR CI status, open comments) but never mutate anything — write tools are never pre-approved during Suggest.
-5. Claude returns a `{ message, proposed_action }` JSON envelope. The assistant reply is persisted to `intent_threads`. If the revised proposal passes the same `confidenceFloor`/`urgencyFloor` checks that `inferIntent` enforces, the intent's proposal fields (`verb`/`target`/`payload`/`rationale`/`confidence`/`reversibility`/`required_approval`) are updated in-place via `dbReproposeIntent`. Below-floor proposals are silently rejected — only the conversational `message` is shown, so the user can iterate further.
-6. Intent status remains `surfaced`; no tier changes. `ambient:intent-updated` and `ambient:intent-message` are broadcast to both windows.
-7. The user can repeat from step 2 indefinitely, then choose a terminal action.
+**Flow — chat:**
+1. User opens Chat on any intent card; a `ChatThread` appears.
+2. The user's message is persisted to `intent_chat_threads` and streamed via `handleIntentChat` → `streamChat`. The intent's `context_packet`, proposal, and error (if any) are attached as `rawContext` so Claude has the same situational awareness the inference layer had.
+3. Claude replies in streaming chunks broadcast as `ambient:chat-message`. The final reply is persisted. The user can continue the conversation freely.
+
+**Flow — "Update the proposal" (action intents only, once ≥1 assistant reply exists):**
+1. After a conversation exchange, the user clicks "Update the proposal" inside the Chat panel.
+2. `reviseIntentFromChat(id)` loads `intent_chat_threads` history and calls `inference.reproposeIntent()` with a synthetic instruction.
+3. `reproposeIntent` injects the original `context_packet`, the current proposal, and the full chat history into its system prompt, then calls `runClaudeWithMcp` with a **read-only allowlist** (tools prefixed `get`/`list`/`search`/`read`/`fetch`/`view`/`find`/`show`/`describe`/`query`/`lookup`/`check`).
+4. Claude returns a `{ message, proposed_action }` JSON envelope. If the revised proposal passes `confidenceFloor`/`urgencyFloor`, intent fields (`verb`/`target`/`payload`/`rationale`/`confidence`/`reversibility`/`required_approval`) are updated in-place via `dbReproposeIntent`. Below-floor proposals surface only the message.
+5. The assistant reply is appended to the chat thread. `ambient:intent-updated` + `ambient:chat-message` broadcast to both windows.
 
 ---
 
@@ -249,8 +252,7 @@ See [ipc.md](ipc.md) for full signatures. Quick reference:
 | `approve(id, payload?)` | Approve and (if tier allows) execute; optional `payload` persists a user-edited draft |
 | `dismiss(id)` | Dismiss |
 | `challenge(id, reason)` | Challenge with reason |
-| `suggest(id, message)` | Send a Suggest message; returns updated `{intent, assistantMessage}` |
-| `getIntentThread(id)` | Load the `ChatMessage[]` thread for an intent |
+| `reviseFromChat(id)` | Trigger a one-shot re-proposal over the Chat thread; returns `{intent, applied, message}` |
 | `getDigest(slot?)` | Latest digest for a slot |
 | `getTrayState()` | Current tray state |
 | `getPolicy()` | All autonomy policies |
@@ -290,6 +292,8 @@ These rows appear in `ambient.getLog()` interleaved with real `emitted`/`execute
 - `totalHits: N > 0` but no `emitted` row follows ⇒ inference dropped every candidate; see the `dropped:` breakdown in the cycle console log
 
 ## Changelog
+
+- 2026-06-17 — **Button trimming — merge Suggest into Chat:** removed the standalone Suggest action from intent cards. The re-proposal capability is now an opt-in "Update the proposal" button inside the Chat panel, shown for non-terminal action intents once at least one assistant reply exists. Clicking it calls `reviseIntentFromChat` which runs `reproposeIntent` over the full `intent_chat_threads` history and applies the result in-place. The action table entry for "Suggest" is replaced by "Chat". The `intent_threads` table is deprecated (preserved for historical rows; no new writes). The `ambient.suggest` and `ambient.getIntentThread` IPC methods are replaced by `ambient.reviseFromChat`.
 
 - 2026-06-17 — **Fix: GitHub/Jira intent actions failing with MCP `-32603` + pre-flight guard + "Chat about it" per-intent streaming chat.** Root cause: `buildToolArgs` returned the LLM payload verbatim for GitHub/Jira surfaces, but the LLM only produces `body` — never `owner`/`repo`/`issue_number`/`issue_key`. Only Slack had routing identifiers injected at intent-creation time. Three-part fix: (1) **`enrichPayloadForRouting`** — shared helper called in both `runAmbientCycle` and `routeIntent` before `dbCreateIntent`. For GitHub, parses `_owner`/`_repo`/`_issue_number` from the focus node's `url` attr (e.g. `https://github.com/adobecom/EMC/pull/188`). For Jira, extracts `_issue_key` from the `jira:issue:PROJ-123` node key. For Slack, retains existing `_channel_id`/`_thread_ts` injection. (2) **`buildToolArgs` extended** — GitHub branch maps to `{ owner, repo, issue_number, body }` / `{ owner, repo, issue_number, labels }`; Jira branch maps to `{ issue_key, comment }`; all `_`-prefixed routing fields stripped from outgoing args. (3) **Pre-flight validation guard** in `executeIntent` — after assembling args, reads the MCP tool's `inputSchema` via `getToolInputSchema()` (new export from `mcp.ts`) and fails fast with a clear human error if any `required` fields are missing, instead of letting the MCP server reject with `-32603`. (4) **"Chat about it" streaming chat** — `handleIntentChat(intentId, message)` mirrors `handlePlanMessage` (streaming via `streamChat`, broadcasts `ambient:chat-user-message` / `ambient:chat-message` chunks, persists to new `intent_chat_threads` table). The intent's `context_packet` + proposal + error are attached as `rawContext` so Claude has the same situational awareness the inference layer had. Chat is available on all intents including failed ones. `IntentCard.tsx` gains a "Chat" button and chat panel using the existing `ChatThread` component.
 

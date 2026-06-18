@@ -637,10 +637,9 @@ export interface IpcApi {
     approve(id: string, payload?: Record<string, unknown>): Promise<Intent>
     dismiss(id: string): Promise<void>
     challenge(id: string, reason: string): Promise<Intent>
-    /** Multi-round Suggest: send a message and receive a re-proposal. */
-    suggest(id: string, message: string): Promise<{ intent: Intent; assistantMessage: string } | null>
-    /** Retrieve the Suggest conversation thread for an intent. */
-    getIntentThread(id: string): Promise<ChatMessage[]>
+    /** Revise the intent's proposal using the existing Chat thread. Returns the updated intent,
+     *  whether the proposal was applied (vs. below-floor message-only), and the assistant message. */
+    reviseFromChat(id: string): Promise<{ intent: Intent; applied: boolean; message: string } | null>
     /** Send a message in the streaming "Chat about it" thread for an intent. */
     sendChatMessage(id: string, message: string): Promise<void>
     /** Retrieve the "Chat about it" streaming conversation thread for an intent. */
@@ -700,7 +699,6 @@ export interface IpcApi {
       | 'navigate:plan-item'
       | 'ambient:intent-created'
       | 'ambient:intent-updated'
-      | 'ambient:intent-message'
       | 'ambient:tray-state'
       | 'ambient:digest-ready'
       | 'ambient:action-executed'

@@ -15,8 +15,6 @@ import {
   dbUpsertNode,
   dbBumpNodeWeight,
   dbUpsertEdge,
-  dbAddIntentMessage,
-  dbGetIntentThread,
   dbReproposeIntent,
   dbGetNodeById,
   dbGetSignalByExternal,
@@ -952,38 +950,33 @@ export async function ambientChallengeIntent(id: string, reason: string): Promis
   return dbGetIntent(id)!
 }
 
-export function ambientGetIntentThread(id: string): ChatMessage[] {
-  return dbGetIntentThread(id)
-}
-
 /**
- * Handle one round of the multi-round Suggest loop.
+ * Revise the intent's proposal based on the existing "Chat about it" thread.
  *
- * Persists the user message, calls `reproposeIntent` (which may make
- * read-only MCP tool calls), persists the assistant reply, updates the
- * intent's proposal fields in-place, then broadcasts updates.
+ * Calls `reproposeIntent` with the full chat history and a synthetic instruction
+ * so the LLM produces an updated proposal. If the re-proposal passes the
+ * confidence/urgency floors the intent is updated in-place via `dbReproposeIntent`.
+ * Either way, the assistant's reply is appended to the chat thread and broadcast
+ * so the renderer shows it without re-opening the stream.
  *
- * Returns the updated Intent plus the assistant message, or null on error.
+ * This replaces the old standalone Suggest flow, giving one unified conversational
+ * surface in the Chat panel with an explicit opt-in "Update the proposal" button.
  */
-export async function ambientSuggestIntent(
-  id: string,
-  userMessage: string
-): Promise<{ intent: Intent; assistantMessage: string } | null> {
+export async function reviseIntentFromChat(
+  id: string
+): Promise<{ intent: Intent; applied: boolean; message: string } | null> {
   const intent = dbGetIntent(id)
   if (!intent) throw new Error(`Intent ${id} not found`)
 
-  const thread = dbGetIntentThread(id)
+  const thread = dbGetIntentChatThread(id)
 
-  // Persist the user's message immediately
-  dbAddIntentMessage(id, 'user', userMessage)
-
-  let assistantMessage = 'I reconsidered the proposal.'
+  let message = 'I reconsidered the proposal.'
+  let applied = false
   try {
-    const result = await reproposeIntent(intent, thread, userMessage)
+    const syntheticInstruction = 'Based on our conversation above, produce your revised proposal.'
+    const result = await reproposeIntent(intent, thread, syntheticInstruction)
     if (result) {
-      assistantMessage = result.message
-      // Only adopt the re-proposal when the inference layer returned a proposal
-      // (sub-floor proposals are dropped; the assistant message is still shown).
+      message = result.message
       if (result.intent) {
         // Update the intent's proposal in-place (status stays non-terminal)
         dbReproposeIntent(id, {
@@ -995,23 +988,26 @@ export async function ambientSuggestIntent(
           reversibility: result.intent.reversibility,
           required_approval: result.intent.required_approval
         })
+        applied = true
       }
     }
   } catch (e) {
-    console.error('[ambient] reproposeIntent error:', e)
-    assistantMessage = 'Sorry, I ran into an error reconsidering this. Try again or use Challenge/Dismiss.'
+    console.error('[ambient] reviseIntentFromChat error:', e)
+    message = 'Sorry, I ran into an error reconsidering this proposal. Try again or use Challenge/Dismiss.'
   }
 
-  dbAddIntentMessage(id, 'assistant', assistantMessage)
+  // Append the assistant reply to the chat thread so the conversation stays coherent
+  dbAddIntentChatMessage(id, 'assistant', message)
+  const win = getWidgetWin?.() ?? null
+  broadcast('ambient:chat-message', { intentId: id, chunk: message, done: true })
 
   const updated = dbGetIntent(id)!
-  const win = getWidgetWin?.() ?? null
   pushIntent(updated, win)
   refreshTray(win)
   updateBadgeCount()
   broadcast('ambient:intent-updated', updated)
 
-  return { intent: updated, assistantMessage }
+  return { intent: updated, applied, message }
 }
 
 // ─── Intent chat thread (streaming "Chat about it") ──────────────────────────
