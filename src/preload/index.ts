@@ -70,6 +70,10 @@ const api: IpcApi = {
     sendChatMessage: (id: string, message: string) => ipcRenderer.invoke('ambient:send-chat-message', id, message),
     getChatThread: (id: string) => ipcRenderer.invoke('ambient:get-chat-thread', id),
     cancelChatStream: (id: string) => ipcRenderer.invoke('ambient:cancel-chat-stream', id),
+    approveChatAction: (intentId: string, messageId: string, editedPayload?: Record<string, unknown>) =>
+      ipcRenderer.invoke('ambient:approve-chat-action', intentId, messageId, editedPayload),
+    dismissChatAction: (intentId: string, messageId: string) =>
+      ipcRenderer.invoke('ambient:dismiss-chat-action', intentId, messageId),
     getDigest: (slot?: string) => ipcRenderer.invoke('ambient:get-digest', slot),
     getTrayState: () => ipcRenderer.invoke('ambient:get-tray-state'),
     getPolicy: () => ipcRenderer.invoke('ambient:get-policy'),

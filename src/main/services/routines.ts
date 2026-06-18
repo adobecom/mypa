@@ -151,7 +151,8 @@ export async function handleRunMessage(
       },
       run.raw_output ?? undefined,
       runId,
-      'routine_chat'
+      'routine_chat',
+      true  // enableMcp — live read-only tools in routine chat
     )
     const toSave = segments.filter((s) => s.trim())
     for (const seg of toSave.length > 0 ? toSave : [fullResponse]) {

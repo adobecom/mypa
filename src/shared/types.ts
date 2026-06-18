@@ -92,11 +92,30 @@ export interface RoutineRun {
 
 export type MessageRole = 'user' | 'assistant' | 'system'
 
+/**
+ * A write action proposed by the assistant mid-chat.
+ * Persisted in intent_chat_threads.metadata and surfaced in the renderer as
+ * inline Approve / Dismiss buttons. Writes are never executed directly by the
+ * CLI — the user approves them and mypa runs them through callTool in-process,
+ * recording trust via the autonomy machinery.
+ */
+export interface ProposedChatAction {
+  surface: IntentSurface
+  verb: string
+  target: string
+  payload: Record<string, unknown>
+  tier: Tier
+  status: 'pending' | 'executed' | 'dismissed' | 'failed'
+  resultText?: string
+}
+
 export interface ChatMessage {
   id: string
   role: MessageRole
   content: string
   timestamp: string
+  /** Present when the message carries a proposed write action (Phase 2). */
+  action?: ProposedChatAction
 }
 
 // ─── OAuth ───────────────────────────────────────────────────────────────────
@@ -646,6 +665,10 @@ export interface IpcApi {
     getChatThread(id: string): Promise<ChatMessage[]>
     /** Cancel an in-progress "Chat about it" stream for an intent. */
     cancelChatStream(id: string): Promise<void>
+    /** Approve and execute a pending write action proposed in a chat message. */
+    approveChatAction(intentId: string, messageId: string, editedPayload?: Record<string, unknown>): Promise<ProposedChatAction>
+    /** Dismiss a pending write action proposed in a chat message. */
+    dismissChatAction(intentId: string, messageId: string): Promise<ProposedChatAction>
     getDigest(slot?: DigestSlot): Promise<AmbientDigest>
     getTrayState(): Promise<TrayState>
     getPolicy(): Promise<AutonomyPolicy[]>
@@ -702,6 +725,8 @@ export interface IpcApi {
       | 'ambient:tray-state'
       | 'ambient:digest-ready'
       | 'ambient:action-executed'
+      | 'ambient:chat-message'
+      | 'ambient:chat-user-message'
       | 'checkin:started'
       | 'checkin:message'
       | 'checkin:status-changed'

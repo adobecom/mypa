@@ -507,6 +507,27 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
             onStop={handleChatStop}
             error={chatError}
             sendDisabled={chatStreaming}
+            onApproveAction={async (msg, editedPayload) => {
+              try {
+                const updated = await api.ambient.approveChatAction(intent.id, msg.id, editedPayload)
+                // Re-fetch thread to show the updated action status
+                const msgs = await api.ambient.getChatThread(intent.id)
+                setChatThread(msgs as any)
+                // If the action updated the trust tier, refresh the intent too
+                if (updated) onIntentChange({ ...intent })
+              } catch (e) {
+                console.error('approveChatAction error:', e)
+              }
+            }}
+            onDismissAction={async (msg) => {
+              try {
+                await api.ambient.dismissChatAction(intent.id, msg.id)
+                const msgs = await api.ambient.getChatThread(intent.id)
+                setChatThread(msgs as any)
+              } catch (e) {
+                console.error('dismissChatAction error:', e)
+              }
+            }}
           />
           <div style={{ marginTop: 6, display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
             {/* "Update the proposal" — visible for active action intents once there is at
