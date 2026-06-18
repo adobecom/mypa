@@ -21,10 +21,11 @@ import {
   dbGetDirectedSignals,
   dbAddIntentChatMessage,
   dbGetIntentChatThread,
+  dbUpdateIntentChatMessageMetadata,
 } from '../db/index'
 import { readConfig } from './config'
 import { violatesScope } from './scope'
-import { callTool, getToolInputSchema } from './mcp'
+import { callTool, getToolInputSchema, ensureServersConnected } from './mcp'
 import { startIngestion, stopIngestion, pollOnce, getLastCompletePollAt } from './ingestion'
 import { ingestSignalIntoGraph, assembleContextPacket, startDecayTimer, stopDecayTimer, renderPacketForPrompt } from './memory-graph'
 import { evalEventTriggers, evalTime, coalesceHits, evalWaitingOnMeFromGraph, evalStaleAndMine } from './triggers'
@@ -47,7 +48,7 @@ import {
 } from './autonomy'
 import { setTrayState } from '../tray'
 import { broadcast, updateBadgeCount } from '../windows'
-import type { Signal, Intent, IntentObject, TriggerKind, TrayState, DigestSlot, AmbientDigest, Tier, ChatMessage, IntentSurface, GraphNode } from '@shared/types'
+import type { Signal, Intent, IntentObject, TriggerKind, TrayState, DigestSlot, AmbientDigest, Tier, ChatMessage, IntentSurface, GraphNode, ProposedChatAction } from '@shared/types'
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
@@ -1017,13 +1018,54 @@ export function ambientGetIntentChatThread(id: string): ChatMessage[] {
 }
 
 /**
+ * Execute a write action proposed mid-chat.
+ *
+ * Validates the verb is in VERB_TO_TOOL, builds tool args from the merged
+ * payload (routing identifiers come from the parent intent), validates required
+ * args against the MCP server's input schema, and calls the tool in-process.
+ * Returns the raw tool result string on success, throws on failure.
+ */
+async function executeChatAction(
+  surface: string,
+  verb: string,
+  payload: Record<string, unknown>
+): Promise<string> {
+  const tool = verbToTool(surface, verb)
+  if (!tool) throw new Error(`Unsupported action: ${surface}:${verb}`)
+
+  // buildToolArgs reads intent.surface/verb/payload — pass a minimal shaped object
+  const pseudoIntent = { surface, verb, payload } as unknown as Intent
+  const toolArgs = buildToolArgs(pseudoIntent)
+
+  const schema = getToolInputSchema(surface, tool)
+  if (schema) {
+    const required = (schema.required as string[] | undefined) ?? []
+    const missing = required.filter((k) => toolArgs[k] === undefined || toolArgs[k] === null)
+    if (missing.length > 0) {
+      throw new Error(`Missing required details (${missing.join(', ')}) for this ${surface} action. The routing context may be incomplete.`)
+    }
+  }
+
+  return callTool(surface, tool, toolArgs)
+}
+
+// Regex to detect <action>{...}</action> blocks emitted by the model.
+const ACTION_BLOCK_RE = /<action>([\s\S]*?)<\/action>/g
+
+/**
  * Handle one message in a streaming "Chat about it" conversation for an intent.
  *
- * Mirrors handlePlanMessage from plan.ts — persists the user turn, streams the
- * assistant reply via streamChat, persists each response segment, and broadcasts
- * chunk events to the renderer. The intent's context_packet and proposal are
- * attached as rawContext so Claude has the same situational awareness the
- * inference layer had when the insight was created.
+ * Persists the user turn, streams the assistant reply via streamChat with live
+ * read-only MCP tools wired in, persists each response segment, and broadcasts
+ * chunk events to the renderer.
+ *
+ * When the model proposes a write action via <action>...</action>, mypa:
+ *   - strips the tag from the visible text
+ *   - merges routing identifiers from the parent intent's payload
+ *   - computes the trust tier
+ *   - at tier 0 (auto-execute): runs the action immediately, appends a result note
+ *   - at tier ≥ 1 (approval required): persists the message with action metadata
+ *     so the renderer can render Approve / Dismiss buttons
  *
  * Available on every intent, including failed/terminal ones, so the user can
  * always discuss and understand what went wrong.
@@ -1068,12 +1110,97 @@ export async function handleIntentChat(intentId: string, userMessage: string): P
       (_full) => { /* no-op; we save per-segment below */ },
       rawContext,
       `intentchat:${intentId}`,
-      'chat'
+      'chat',
+      true  // enableMcp — wire read-only tools and the write-action protocol
     )
+
+    // Parse <action> blocks from the full streamed text.
+    // Strip them from the visible text; process them as write-action proposals.
+    const win = getWidgetWin?.() ?? null
     const toSave = segments.filter((s) => s.trim())
-    for (const seg of toSave.length > 0 ? toSave : []) {
-      if (seg.trim()) dbAddIntentChatMessage(intentId, 'assistant', seg)
+
+    for (const seg of toSave) {
+      if (!seg.trim()) continue
+
+      // Extract any action blocks from this segment
+      const actions: { surface: string; verb: string; target: string; payload: Record<string, unknown> }[] = []
+      const cleanSeg = seg.replace(ACTION_BLOCK_RE, (_, json) => {
+        try {
+          const parsed = JSON.parse(json.trim())
+          if (parsed.surface && parsed.verb) actions.push(parsed)
+        } catch { /* invalid JSON — ignore */ }
+        return ''
+      }).trim()
+
+      // Persist the clean text (action blocks stripped)
+      // Use cleanSeg directly: if the segment was only action tags (valid or malformed),
+      // cleanSeg is '' and nothing is persisted — avoids leaking raw <action> markup.
+      const persistContent = cleanSeg
+      if (persistContent.trim()) {
+        dbAddIntentChatMessage(intentId, 'assistant', persistContent)
+      }
+
+      // Process each proposed action
+      for (const action of actions) {
+        if (!verbToTool(action.surface, action.verb)) {
+          // Unsupported surface:verb — ignore silently (won't execute arbitrary tools)
+          console.warn(`[ambient] chat: ignoring unsupported action ${action.surface}:${action.verb}`)
+          continue
+        }
+
+        // Merge routing identifiers from the parent intent's payload
+        const routingEntries = Object.entries((intent.payload ?? {}) as Record<string, unknown>)
+          .filter(([k]) => k.startsWith('_'))
+        const mergedPayload: Record<string, unknown> = {
+          ...Object.fromEntries(routingEntries),
+          ...action.payload
+        }
+
+        // Compute trust tier using a synthesized IntentObject
+        const synthObj: IntentObject = {
+          type: 'action',
+          confidence: 0.8,
+          urgency: 0.5,
+          proposed_action: {
+            surface: action.surface as IntentSurface,
+            verb: action.verb,
+            target: action.target ?? '',
+            payload: mergedPayload
+          },
+          rationale: action.target ?? `${action.surface}:${action.verb}`,
+          reversibility: 'reversible',
+          required_approval: true
+        }
+        const tier = resolveTier(synthObj)
+
+        if (shouldAutoExecute(tier) && AUTO_EXECUTABLE.has(`${action.surface}:${action.verb}`)) {
+          // Tier 0: auto-execute, append a system note with the result
+          try {
+            await ensureServersConnected()
+            const result = await executeChatAction(action.surface, action.verb, mergedPayload)
+            recordExecution(`${action.surface}:${action.verb}`)
+            const note = `Action completed: ${action.surface}:${action.verb} — ${result.slice(0, 200)}`
+            dbAddIntentChatMessage(intentId, 'assistant', note)
+          } catch (execErr: any) {
+            const errNote = `Action failed: ${execErr?.message ?? String(execErr)}`
+            dbAddIntentChatMessage(intentId, 'assistant', errNote)
+          }
+        } else {
+          // Tier ≥ 1: surface for approval. Persist the (empty) assistant message
+          // with action metadata so the renderer can show Approve / Dismiss buttons.
+          const actionMeta: ProposedChatAction = {
+            surface: action.surface as IntentSurface,
+            verb: action.verb,
+            target: action.target ?? '',
+            payload: mergedPayload,
+            tier,
+            status: 'pending'
+          }
+          dbAddIntentChatMessage(intentId, 'assistant', '', actionMeta as unknown as Record<string, unknown>)
+        }
+      }
     }
+
     broadcast('ambient:chat-message', { intentId, chunk: '', done: true })
   } catch (err: any) {
     broadcast('ambient:chat-message', {
@@ -1083,6 +1210,81 @@ export async function handleIntentChat(intentId: string, userMessage: string): P
       error: err?.message ?? 'Claude failed to respond'
     })
   }
+}
+
+/**
+ * Approve and execute a pending write action proposed in a chat message.
+ *
+ * Looks up the action from the message's metadata, optionally applies an
+ * edited payload (so the user can tweak the text before approving), ensures
+ * the server is connected, executes the action via callTool in-process,
+ * records trust accumulation, and updates the message's action status.
+ */
+export async function approveChatAction(
+  intentId: string,
+  messageId: string,
+  editedPayload?: Record<string, unknown>
+): Promise<ProposedChatAction> {
+  const thread = dbGetIntentChatThread(intentId)
+  const msg = thread.find((m) => m.id === messageId)
+  if (!msg?.action) throw new Error(`Message ${messageId} not found or has no pending action`)
+
+  const action = msg.action
+  if (action.status !== 'pending') {
+    return action  // idempotent — already resolved
+  }
+
+  // Merge user-edited payload (preserves routing identifiers from the original)
+  const finalPayload = editedPayload && Object.keys(editedPayload).length > 0
+    ? { ...action.payload, ...editedPayload }
+    : action.payload
+
+  let updated: ProposedChatAction
+  try {
+    await ensureServersConnected()
+    const resultText = await executeChatAction(action.surface, action.verb, finalPayload)
+    recordApproval(`${action.surface}:${action.verb}`)
+    dbAppendActionLog({
+      intent_id: intentId,
+      event: 'executed',
+      action_type: `${action.surface}:${action.verb}`,
+      tier: action.tier,
+      detail: { from_chat: true },
+      created_at: new Date().toISOString()
+    })
+    updated = { ...action, payload: finalPayload, status: 'executed', resultText: resultText.slice(0, 500) }
+  } catch (err: any) {
+    dbAppendActionLog({
+      intent_id: intentId,
+      event: 'failed',
+      action_type: `${action.surface}:${action.verb}`,
+      tier: action.tier,
+      detail: { from_chat: true, error: (err?.message ?? String(err)) },
+      created_at: new Date().toISOString()
+    })
+    updated = { ...action, status: 'failed', resultText: (err?.message ?? String(err)).slice(0, 500) }
+  }
+
+  dbUpdateIntentChatMessageMetadata(messageId, updated as unknown as Record<string, unknown>)
+  return updated
+}
+
+/**
+ * Dismiss a pending write action proposed in a chat message (no tier change).
+ */
+export function dismissChatAction(
+  intentId: string,
+  messageId: string
+): ProposedChatAction {
+  const thread = dbGetIntentChatThread(intentId)
+  const msg = thread.find((m) => m.id === messageId)
+  if (!msg?.action) throw new Error(`Message ${messageId} not found or has no pending action`)
+
+  if (msg.action.status !== 'pending') return msg.action  // idempotent
+
+  const updated: ProposedChatAction = { ...msg.action, status: 'dismissed' }
+  dbUpdateIntentChatMessageMetadata(messageId, updated as unknown as Record<string, unknown>)
+  return updated
 }
 
 /**

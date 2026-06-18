@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, KeyboardEvent } from 'react'
-import { Sparkles, ArrowUp, Square } from 'lucide-react'
-import type { ChatMessage } from '../../../../../../shared/types'
+import { Sparkles, ArrowUp, Square, Check, X } from 'lucide-react'
+import type { ChatMessage, ProposedChatAction } from '../../../../../../shared/types'
 import MarkdownText from '@renderer/components/MarkdownText'
 import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 
@@ -12,6 +12,10 @@ interface Props {
   sendDisabled?: boolean
   error?: string | null
   onStop?: () => void
+  /** Called when the user approves a pending write action. */
+  onApproveAction?: (message: ChatMessage, editedPayload?: Record<string, unknown>) => Promise<void>
+  /** Called when the user dismisses a pending write action. */
+  onDismissAction?: (message: ChatMessage) => Promise<void>
 }
 
 export default function ChatThread({
@@ -21,7 +25,9 @@ export default function ChatThread({
   onSend,
   sendDisabled,
   error,
-  onStop
+  onStop,
+  onApproveAction,
+  onDismissAction
 }: Props): React.ReactElement {
   const [input, setInput] = useState('')
   const threadRef = useRef<HTMLDivElement>(null)
@@ -55,8 +61,13 @@ export default function ChatThread({
   return (
     <div>
       <div className="chat-thread" ref={threadRef}>
-        {messages.filter((msg) => msg.content.trim() !== '').map((msg) => (
-          <ChatBubble key={msg.id} message={msg} />
+        {messages.filter((msg) => msg.content.trim() !== '' || msg.action).map((msg) => (
+          <ChatBubble
+            key={msg.id}
+            message={msg}
+            onApprove={onApproveAction ? (ep) => onApproveAction(msg, ep) : undefined}
+            onDismiss={onDismissAction ? () => onDismissAction(msg) : undefined}
+          />
         ))}
         {streaming && (() => {
           const segments = (streamingContent ?? '')
@@ -125,13 +136,146 @@ export default function ChatThread({
   )
 }
 
-function ChatBubble({ message }: { message: ChatMessage }): React.ReactElement {
+const ACTION_VERB_LABELS: Record<string, string> = {
+  comment: 'Post comment',
+  label: 'Add label',
+  reply: 'Send reply',
+  send: 'Send message'
+}
+
+function ActionChip({
+  action,
+  onApprove,
+  onDismiss
+}: {
+  action: ProposedChatAction
+  onApprove?: (editedPayload?: Record<string, unknown>) => Promise<void>
+  onDismiss?: () => Promise<void>
+}): React.ReactElement {
+  const [busy, setBusy] = useState(false)
+  // Draft text for the editable payload field (body / message / labels)
+  const draftKey = ['body', 'message', 'text', 'comment'].find(
+    (k) => typeof (action.payload ?? {})[k] === 'string'
+  )
+  const [draft, setDraft] = useState<string>(
+    draftKey ? String((action.payload ?? {})[draftKey]) : ''
+  )
+  const draftRef = useAutoGrowTextarea(draft)
+
+  const verbLabel = ACTION_VERB_LABELS[action.verb] ?? action.verb
+  const surfaceLabel = action.surface.charAt(0).toUpperCase() + action.surface.slice(1)
+  const chipLabel = `${surfaceLabel} · ${verbLabel}`
+
+  const handleApprove = async () => {
+    if (busy || !onApprove) return
+    setBusy(true)
+    try {
+      const ep = draftKey && draft.trim() ? { [draftKey]: draft } : undefined
+      await onApprove(ep)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleDismiss = async () => {
+    if (busy || !onDismiss) return
+    setBusy(true)
+    try {
+      await onDismiss()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (action.status === 'pending') {
+    return (
+      <div className="chat-action-chip chat-action-chip--pending">
+        <div className="chat-action-chip__label">{chipLabel}</div>
+        {action.target && (
+          <div className="chat-action-chip__target">{action.target}</div>
+        )}
+        {draftKey && (
+          <textarea
+            ref={draftRef}
+            className="chat-action-chip__draft"
+            rows={2}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            disabled={busy}
+          />
+        )}
+        <div className="chat-action-chip__buttons">
+          <button
+            className="btn btn--ghost btn--sm"
+            onClick={handleDismiss}
+            disabled={busy}
+          >
+            <X size={11} /> Dismiss
+          </button>
+          <button
+            className="btn btn--primary btn--sm"
+            onClick={handleApprove}
+            disabled={busy || (!!draftKey && !draft.trim())}
+          >
+            <Check size={11} /> Approve
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (action.status === 'executed') {
+    return (
+      <div className="chat-action-chip chat-action-chip--done">
+        <Check size={11} /> {chipLabel} · Done
+        {action.resultText && (
+          <span className="chat-action-chip__result"> — {action.resultText.slice(0, 120)}</span>
+        )}
+      </div>
+    )
+  }
+
+  if (action.status === 'failed') {
+    return (
+      <div className="chat-action-chip chat-action-chip--failed">
+        <X size={11} /> {chipLabel} · Failed
+        {action.resultText && (
+          <span className="chat-action-chip__result"> — {action.resultText.slice(0, 120)}</span>
+        )}
+      </div>
+    )
+  }
+
+  // dismissed
+  return (
+    <div className="chat-action-chip chat-action-chip--dismissed">
+      <X size={11} /> {chipLabel} · Dismissed
+    </div>
+  )
+}
+
+function ChatBubble({
+  message,
+  onApprove,
+  onDismiss
+}: {
+  message: ChatMessage
+  onApprove?: (editedPayload?: Record<string, unknown>) => Promise<void>
+  onDismiss?: () => Promise<void>
+}): React.ReactElement {
   const isUser = message.role === 'user'
   return (
     <div className={`chat-message chat-message--${message.role}`}>
       <div className="chat-message__avatar">{isUser ? 'U' : <Sparkles size={10} />}</div>
       <div className="chat-message__bubble">
-        <MarkdownText>{message.content}</MarkdownText>
+        {message.content.trim() && <MarkdownText>{message.content}</MarkdownText>}
+        {message.action && (
+          <ActionChip
+            action={message.action}
+            onApprove={onApprove}
+            onDismiss={onDismiss}
+          />
+        )}
       </div>
     </div>
   )

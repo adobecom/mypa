@@ -5,7 +5,7 @@ import { join } from 'path'
 import cron from 'node-cron'
 import { readConfig, buildOwnerClause } from './config'
 import { recordUsage } from './usage'
-import { getServerStatus } from './mcp'
+import { getKnownServerTools, ensureServersConnected } from './mcp'
 import { selectModel, escalate } from './model-router'
 import type { PlanDraft, PlanItemTiming, ChatMessage, McpServerStatus, RoutineAction, RoutineSetupDraft, UsageSource } from '@shared/types'
 
@@ -243,17 +243,42 @@ async function runClaudeStream(
   onChunk: (chunk: string) => void,
   streamId: string | undefined,
   source: UsageSource,
-  model: string
+  model: string,
+  enableMcp?: boolean
 ): Promise<string> {
+  // Wire MCP servers if requested. We call ensureServersConnected() first so that
+  // callTool (in-process execution) also benefits, then build the --mcp-config temp
+  // file so the CLI subprocess can call read-only tools itself during the stream.
+  let mcpCleanup: (() => void) | undefined
+  const extraArgs: string[] = []
+  if (enableMcp) {
+    await ensureServersConnected()
+    const inv = buildMcpInvocation()
+    if (inv.mcpConfigPath) {
+      extraArgs.push('--mcp-config', inv.mcpConfigPath)
+      if (inv.allowedTools.length > 0) {
+        extraArgs.push('--allowedTools', inv.allowedTools.join(','))
+      }
+      mcpCleanup = inv.cleanup
+    }
+  }
+
+  // Inject the MCP addendum only when tools were actually wired — if buildMcpInvocation
+  // returned null (no servers configured, or /tmp write failed) we skip the addendum so
+  // the model is never told it has tools it cannot reach.
   const history = messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')
-  const fullPrompt = `${systemPrompt}\n\n${history}`
+  const effectiveSystemPrompt = (enableMcp && extraArgs.length > 0)
+    ? `${systemPrompt}\n\n${MCP_CHAT_SYSTEM_ADDENDUM}`
+    : systemPrompt
+  const fullPrompt = `${effectiveSystemPrompt}\n\n${history}`
 
   return new Promise((resolve, reject) => {
     const proc = spawn(getClaude(), [
       '-p', fullPrompt,
       '--output-format', 'stream-json',
       '--verbose',
-      ...modelArgs(model)
+      ...modelArgs(model),
+      ...extraArgs
     ], { env: claudeEnv() })
     proc.stdin?.end()
     let full = ''
@@ -280,6 +305,7 @@ async function runClaudeStream(
         full = parseStreamEvent(buf, full, onChunk, (ev) => { cliResult = ev })
       }
       if (streamId) activeStreams.delete(streamId)
+      mcpCleanup?.()
       if (entry.killed || (code !== 0 && !full)) {
         reject(new Error(entry.killed ? 'Cancelled' : (stderr.trim() || `Claude process exited with code ${code}`)))
         return
@@ -290,6 +316,7 @@ async function runClaudeStream(
     })
     proc.on('error', (err) => {
       if (streamId) activeStreams.delete(streamId)
+      mcpCleanup?.()
       reject(err)
     })
   })
@@ -526,8 +553,63 @@ function isReadOnlyTool(toolName: string): boolean {
 }
 
 /**
+ * Build the --mcp-config temp file and --allowedTools list for the claude CLI.
+ *
+ * Uses getKnownServerTools() instead of getServerStatus() so that read-only
+ * tool names are still allowlisted even when the in-process client has died —
+ * the CLI spawns its own fresh MCP subprocess from the config file.
+ *
+ * Returns null mcpConfigPath when no servers are configured.
+ * Always call cleanup() when the CLI process exits (both success and error).
+ */
+function buildMcpInvocation(): {
+  mcpConfigPath: string | null
+  allowedTools: string[]
+  cleanup: () => void
+} {
+  const cfg = readConfig()
+  const mcpConfig: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> = {}
+  const allowedTools: string[] = []
+
+  for (const srv of cfg.mcp_servers) {
+    if (!srv.command) continue
+    const safeName = srv.name.replace(/[^a-zA-Z0-9_-]/g, '_')
+    mcpConfig[safeName] = {
+      command: srv.command,
+      ...(srv.args && srv.args.length > 0 ? { args: srv.args } : {}),
+      ...(srv.env && Object.keys(srv.env).length > 0 ? { env: srv.env } : {})
+    }
+  }
+
+  // Build allowedTools from the last-known tool list so it survives dead clients.
+  for (const status of getKnownServerTools()) {
+    if (status.tools.length === 0) continue  // no known tools for this server
+    const safeName = status.name.replace(/[^a-zA-Z0-9_-]/g, '_')
+    for (const tool of status.tools) {
+      if (isReadOnlyTool(tool.name)) {
+        allowedTools.push(`mcp__${safeName}__${tool.name}`)
+      }
+    }
+  }
+
+  if (Object.keys(mcpConfig).length === 0) {
+    return { mcpConfigPath: null, allowedTools: [], cleanup: () => {} }
+  }
+
+  const mcpConfigPath = join(tmpdir(), `mypa-mcp-${Date.now()}.json`)
+  try {
+    writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: mcpConfig }, null, 2))
+  } catch {
+    return { mcpConfigPath: null, allowedTools: [], cleanup: () => {} }
+  }
+
+  const cleanup = () => { try { unlinkSync(mcpConfigPath) } catch { /* best-effort */ } }
+  return { mcpConfigPath, allowedTools, cleanup }
+}
+
+/**
  * Run a one-shot Claude call with the configured MCP servers wired in.
- * Only read-only tools are pre-approved; write tools are never included.
+ * Only read-only tools are pre-approved; write tools are never CLI-allowlisted.
  *
  * The MCP config is written to a temp file, passed via --mcp-config, and
  * cleaned up after the call regardless of outcome.
@@ -544,45 +626,10 @@ export async function runClaudeWithMcp(
   const fullPromptLen = systemPrompt.length + userPrompt.length + 2
   const model = selectModel(source, fullPromptLen)
 
-  // Build MCP config for the CLI: only servers that are configured
-  const mcpConfig: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> = {}
-  const allowedTools: string[] = []
+  const { mcpConfigPath, allowedTools, cleanup } = buildMcpInvocation()
 
-  for (const srv of cfg.mcp_servers) {
-    if (!srv.command) continue
-    const safeName = srv.name.replace(/[^a-zA-Z0-9_-]/g, '_')
-    mcpConfig[safeName] = {
-      command: srv.command,
-      ...(srv.args && srv.args.length > 0 ? { args: srv.args } : {}),
-      ...(srv.env && Object.keys(srv.env).length > 0 ? { env: srv.env } : {})
-    }
-    // Include only read-only tool names from this server's known tool list.
-    // If the server isn't tracked by mcp.ts yet (e.g. not started), we don't know
-    // its tools — skip allowedTools for that server (Claude CLI will refuse unknown tools).
-    // Tool names that are NOT read-only are simply not listed, so the model can't call them.
-  }
-
-  // Get read-only tools from the currently connected servers
-  for (const status of getServerStatus()) {
-    if (!status.connected) continue
-    const safeName = status.name.replace(/[^a-zA-Z0-9_-]/g, '_')
-    for (const tool of status.tools) {
-      if (isReadOnlyTool(tool.name)) {
-        allowedTools.push(`mcp__${safeName}__${tool.name}`)
-      }
-    }
-  }
-
-  if (Object.keys(mcpConfig).length === 0) {
+  if (!mcpConfigPath) {
     // No MCP servers configured — fall back to plain runClaude
-    return runClaude(systemPrompt, userPrompt, source)
-  }
-
-  // Write temp MCP config file
-  const mcpConfigPath = join(tmpdir(), `mypa-mcp-${Date.now()}.json`)
-  try {
-    writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: mcpConfig }, null, 2))
-  } catch {
     return runClaude(systemPrompt, userPrompt, source)
   }
 
@@ -609,7 +656,7 @@ export async function runClaudeWithMcp(
     proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
     proc.on('close', (code) => {
       clearTimeout(timer)
-      try { unlinkSync(mcpConfigPath) } catch { /* best-effort cleanup */ }
+      cleanup()
       if (code !== 0) {
         reject(new Error(`Claude (MCP) failed: ${stderr || stdout}`))
         return
@@ -627,7 +674,7 @@ export async function runClaudeWithMcp(
       }
     })
     proc.on('error', (err) => {
-      try { unlinkSync(mcpConfigPath) } catch { /* best-effort cleanup */ }
+      cleanup()
       clearTimeout(timer)
       reject(err)
     })
@@ -636,6 +683,20 @@ export async function runClaudeWithMcp(
 
 // ─── Streaming chat ───────────────────────────────────────────────────────────
 
+// Added to the system prompt when MCP tools are available in a chat turn.
+// Tells the model it can use read-only tools freely and how to propose writes.
+const MCP_CHAT_SYSTEM_ADDENDUM = `
+You have live read-only MCP tools available. Call them freely to look up current state (e.g. check PR comments, Jira status, Slack threads) before answering. Read/lookup tool calls are always approved.
+
+To propose a write action (post a comment, label an issue, send a Slack message), end your reply with an action block — one per response:
+<action>{ "surface": "github", "verb": "comment", "target": "<PR or issue title>", "payload": { "body": "<your comment text>" } }</action>
+
+Valid surface:verb pairs: github:comment, github:label, jira:comment, slack:reply, slack:send.
+For slack:reply and slack:send, use "message" instead of "body" in the payload.
+For github:label, use "labels" (string array) in the payload.
+Do NOT call write tools directly — only read-only lookups are CLI-approved. Use the action block for writes; the user will see Approve/Dismiss buttons and can edit the text before approving.
+Routing details (owner, repo, issue number, channel, etc.) are injected automatically — you do not need to provide them.`.trim()
+
 export async function streamChat(
   history: ChatMessage[],
   userMessage: string,
@@ -643,7 +704,8 @@ export async function streamChat(
   onDone: (fullText: string) => void,
   rawContext?: string,
   streamId?: string,
-  source: UsageSource = 'chat'
+  source: UsageSource = 'chat',
+  enableMcp?: boolean
 ): Promise<void> {
   const messages = [
     ...history.map((m) => ({ role: m.role, content: m.content })),
@@ -652,9 +714,10 @@ export async function streamChat(
 
   const persona = readConfig().persona?.trim() || 'a personal assistant'
   const ownerClause = buildOwnerClause()
-  const systemPrompt = rawContext
-    ? `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.\n\nOriginal data collected by this routine:\n${rawContext}`
+  const basePrompt = rawContext
+    ? `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.\n\nOriginal data collected:\n${rawContext}`
     : `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.`
+  const systemPrompt = basePrompt  // addendum injected inside runClaudeStream only when MCP is actually wired
 
   // Approximate total chars for model selection (system prompt + all message content)
   const approxLen = systemPrompt.length + messages.reduce((n, m) => n + m.content.length, 0)
@@ -662,7 +725,7 @@ export async function streamChat(
 
   while (true) {
     try {
-      const full = await runClaudeStream(systemPrompt, messages, onChunk, streamId, source, model)
+      const full = await runClaudeStream(systemPrompt, messages, onChunk, streamId, source, model, enableMcp)
       onDone(full)
       return
     } catch (err) {

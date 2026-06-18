@@ -173,8 +173,9 @@ Streaming "Chat about it" conversation messages for an intent. This is the activ
 | `role` | TEXT | `'user'` or `'assistant'` |
 | `content` | TEXT | Message body |
 | `timestamp` | TEXT | ISO 8601 |
+| `metadata` | TEXT | JSON — optional `ProposedChatAction` when the message carries a write-action proposal (added 2026-06-18 via `ALTER TABLE`) |
 
-Query helpers: `dbAddIntentChatMessage(intentId, role, content)`, `dbGetIntentChatThread(intentId) → ChatMessage[]`.
+Query helpers: `dbAddIntentChatMessage(intentId, role, content, metadata?)`, `dbGetIntentChatThread(intentId) → ChatMessage[]` (parses `metadata` into `message.action`), `dbUpdateIntentChatMessageMetadata(messageId, metadata)` (used by approve/dismiss to update action status).
 
 #### `action_log`
 
@@ -377,6 +378,8 @@ Vectors are stored as raw little-endian Float32 BLOBs and similarity search is p
 ---
 
 ## Changelog
+
+- 2026-06-18 — **`intent_chat_threads.metadata` column:** additive `ALTER TABLE` migration adds `metadata TEXT` (nullable JSON) to `intent_chat_threads`. Stores `ProposedChatAction` when a chat message carries a pending/executed/dismissed write-action proposal. `dbAddIntentChatMessage` gains optional `metadata?` param and includes it in the INSERT. `dbGetIntentChatThread` parses `metadata` into `message.action`. New helper `dbUpdateIntentChatMessageMetadata(messageId, metadata)` updates the column in-place (used by `approveChatAction`/`dismissChatAction`).
 
 - 2026-06-17 — **`intent_threads` deprecated:** the standalone Suggest re-proposal conversation table (`intent_threads`) is no longer written to — the Suggest flow was merged into the streaming Chat panel. No schema change; existing rows are preserved. All new conversation messages go to `intent_chat_threads`.
 

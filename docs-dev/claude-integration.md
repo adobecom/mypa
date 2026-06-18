@@ -95,7 +95,8 @@ export async function streamChat(
   onDone:  (fullText: string) => void,
   rawContext?: string,
   streamId?:   string,
-  source?:     UsageSource   // default 'chat'
+  source?:     UsageSource,   // default 'chat'
+  enableMcp?:  boolean        // default false
 ): Promise<void>
 ```
 
@@ -103,8 +104,10 @@ The model is selected via `selectModel(source, approxLen)` where `approxLen` is 
 
 The `source` param is threaded to `runClaudeStream`, which captures the `result` event from the CLI's NDJSON stream (the event carrying `usage` and `total_cost_usd`) and calls `recordUsage` on process exit.
 
+When `enableMcp` is `true`, `streamChat` appends `MCP_CHAT_SYSTEM_ADDENDUM` to the system prompt (tells the model it has read-only tools and how to emit `<action>` blocks for writes), and `runClaudeStream` calls `ensureServersConnected()` then `buildMcpInvocation()` to wire `--mcp-config` + `--allowedTools` into the CLI spawn.
+
 Internally calls `runClaudeStream`:
-- Flags: `--output-format stream-json --verbose`.
+- Flags: `--output-format stream-json --verbose` plus optionally `--mcp-config <path> --allowedTools <csv>`.
 - Parses `assistant` events from the NDJSON stream, extracting `content[].text` blocks.
 - Calls `onChunk(text)` for each incremental chunk.
 - Calls `onDone(fullText)` when the process exits cleanly.
@@ -229,6 +232,8 @@ This clause is appended in `inferIntent` (`inference.ts`) **after** `buildOwnerC
 `UsageSource` labels: `'plan_draft'`, `'routine_digest'`, `'routine_setup'`, `'routine_chat'`, `'plan_chat'`, `'checkin_chat'`, `'checkin_extract'`, `'inference'`, `'memory'`, `'suggest'`, `'chat'`, `'other'`.
 
 ## Changelog
+
+- 2026-06-18 — **Live MCP in streaming chat (`enableMcp`):** `buildMcpInvocation()` helper extracted from `runClaudeWithMcp` — builds the `--mcp-config` temp file + `--allowedTools` list using `getKnownServerTools()` (survives dead in-process clients via `lastKnownTools` cache in `mcp.ts`). `runClaudeStream` and `streamChat` gain an optional `enableMcp?: boolean` param. When set: `runClaudeStream` calls `await ensureServersConnected()`, calls `buildMcpInvocation()`, appends the CLI flags, and `cleanup()`s the temp file on both close and error. `streamChat` appends `MCP_CHAT_SYSTEM_ADDENDUM` to the system prompt (read-only tool instructions + `<action>` block protocol for write proposals). All chat callers — `handleIntentChat`, `handleRunMessage`, `handlePlanMessage`, `handleCheckInMessage`, check-in briefing — pass `enableMcp: true`. `runClaudeWithMcp` now also uses `buildMcpInvocation()` internally (no behavior change, just deduplication).
 
 - 2026-06-17 — **Automatic model selection + escalation:** replaced the single user-configured model with `model-router.ts`. `selectModel(source, promptChars)` picks a tier (fast/balanced/capable) from the task's `UsageSource` and bumps it up for large prompts (≥ 12 k chars → +1, ≥ 40 k → +2). `escalate(modelId)` returns the next-stronger tier and is called by `runClaude` and `streamChat` on failure — one retry per escalation step, stopping at `capable`. `runClaude` gains an `expectJson` parameter; `true` triggers escalation when the response lacks JSON structure. Removed the model dropdown from `Settings.tsx` and the "Choose a model" step 3 from `OnboardingWizard.tsx` (renumbered to 5 steps). `DEFAULT_CONFIG.claude` no longer seeds a model. Added `'suggest'` to `UsageSource` (was missing, causing a latent type error).
 

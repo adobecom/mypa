@@ -73,7 +73,8 @@ Speak in first person as ${persona}, directly to your manager.`
     (full) => { fullResponse = full },
     rawContext,
     checkinId,
-    'checkin_chat'
+    'checkin_chat',
+    true  // enableMcp — live read-only tools in check-in briefings
   )
 
   broadcast('checkin:message', { checkinId, chunk: '', done: true })
@@ -133,7 +134,8 @@ export async function handleCheckInMessage(
       (full) => { fullResponse = full },
       undefined,
       checkinId,
-      'checkin_chat'
+      'checkin_chat',
+      true  // enableMcp — live read-only tools in check-in conversation
     )
     const toSave = segments.filter((s) => s.trim())
     for (const seg of toSave.length > 0 ? toSave : [fullResponse]) {

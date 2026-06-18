@@ -113,9 +113,11 @@ Ambient intelligence — intents, digests, policy, tray state.
 | `dismiss` | `(id) → void` | Dismiss an intent |
 | `challenge` | `(id, reason) → Intent` | Challenge an intent with a reason; adjusts trust policy |
 | `reviseFromChat` | `(id) → { intent: Intent; applied: boolean; message: string } \| null` | Revise the intent's proposal using the existing Chat thread. `applied` is `true` when the new proposal passed the confidence/urgency floors and was committed; `false` when below-floor (message-only). The assistant message is appended to the chat thread either way. |
-| `sendChatMessage` | `(id, message) → void` | Send a user message in the streaming "Chat about it" thread for an intent. Streams response via `ambient:chat-message` push events. |
-| `getChatThread` | `(id) → ChatMessage[]` | Fetch the "Chat about it" streaming conversation thread for an intent. Available on all intents including terminal/failed ones. |
+| `sendChatMessage` | `(id, message) → void` | Send a user message in the streaming "Chat about it" thread for an intent. Streams response via `ambient:chat-message` push events. MCP read-only tools are available to Claude during the stream; write-action proposals appear as `<action>` blocks that mypa parses post-stream. |
+| `getChatThread` | `(id) → ChatMessage[]` | Fetch the "Chat about it" streaming conversation thread for an intent. Messages may carry an optional `action: ProposedChatAction` field when the assistant proposed a write action. Available on all intents including terminal/failed ones. |
 | `cancelChatStream` | `(id) → void` | Cancel an active "Chat about it" stream for an intent. |
+| `approveChatAction` | `(intentId, messageId, editedPayload?) → ProposedChatAction` | Approve and execute a pending write action proposed in a chat message. Optionally pass a user-edited payload (e.g. edited comment text). Executes via `callTool` in-process and records trust accumulation. Returns the updated `ProposedChatAction` with `status: 'executed' \| 'failed'` and a `resultText` snippet. |
+| `dismissChatAction` | `(intentId, messageId) → ProposedChatAction` | Dismiss a pending write action proposed in a chat message. No trust tier change (matches `recordDismissal` semantics). Returns the updated action with `status: 'dismissed'`. |
 | `getDigest` | `(slot?) → AmbientDigest` | Fetch the latest digest for a slot (`morning \| midday \| eod`) |
 | `getTrayState` | `() → TrayState` | Current tray state: `idle \| has-something \| needs-you` (driven only by `action`-type intents) |
 | `getPolicy` | `() → AutonomyPolicy[]` | All per-action-type trust policies |
@@ -245,6 +247,8 @@ Manage PA check-in sessions and their chat threads.
 | `openInMainWindow` | `(checkinId?) → void` | Open main window on Check-in page, expanding the given session |
 
 ## Changelog
+
+- 2026-06-18 — **Live MCP in chat + in-chat write actions:** All streaming chat paths (`handleIntentChat`, `handleRunMessage`, `handlePlanMessage`, `handleCheckInMessage`, check-in briefing) now pass `enableMcp: true` to `streamChat`, which wires `--mcp-config` + `--allowedTools` into the spawned claude CLI. Read-only tools are pre-approved; the allowed-tools list is built from `getKnownServerTools()` (survives dead in-process clients via `lastKnownTools` cache). When the model proposes a write action in an intent chat via `<action>{...}</action>`, mypa parses it post-stream, merges parent-intent routing identifiers, computes the trust tier, and either auto-executes (tier 0) or persists it as a pending action on the chat message (`intent_chat_threads.metadata`). New IPC: `ambient.approveChatAction(intentId, messageId, editedPayload?)` and `ambient.dismissChatAction(intentId, messageId)`. New push channels `ambient:chat-message` and `ambient:chat-user-message` added to the typed `on()` union. `ChatMessage` gains optional `action?: ProposedChatAction`; renderer shows Approve/Dismiss chips with editable draft text.
 
 - 2026-06-17 — **Button trimming — merge Suggest into Chat:** removed `ambient.suggest` and `ambient.getIntentThread` IPC methods (and the `ambient:intent-message` push channel that backed Suggest replies). Added `ambient.reviseFromChat(id)` — a one-shot call that runs `reproposeIntent` over the full Chat thread and returns `{ intent, applied, message }`. The Suggest conversational path is now unified into the Chat panel via an opt-in "Update the proposal" button that calls `reviseFromChat`.
 

@@ -14,6 +14,12 @@ interface ActiveServer {
 
 const servers = new Map<string, ActiveServer>()
 
+// Persists the tool list for each server across in-process reconnects.
+// When a server subprocess dies and is evicted from `servers`, its tool names
+// remain here so the CLI --allowedTools list stays accurate (the CLI spawns its
+// own fresh MCP subprocess from --mcp-config, so tool names are still valid).
+const lastKnownTools: Map<string, McpTool[]> = new Map()
+
 // Serialize all connection mutations (connectAllServers, reconnectServer) so that
 // two near-simultaneous config:update calls cannot race on the Map and disconnect
 // each other's live connections, which would surface as "Connection closed" errors.
@@ -115,6 +121,9 @@ export async function connectServer(cfg: McpServerConfig): Promise<McpTool[]> {
     }))
 
     servers.set(cfg.name, { client, transport, tools, config: cfg })
+    // Persist the tool list so --allowedTools stays accurate even after the
+    // in-process client dies (the CLI spawns its own fresh MCP subprocess).
+    lastKnownTools.set(cfg.name, tools)
     // Auto-evict from the Map when the subprocess exits so that subsequent callTool
     // calls don't silently hit a dead client. The guard prevents double-eviction if a
     // concurrent reconnect has already replaced this entry with a fresh one.
@@ -263,6 +272,7 @@ export async function reconnectServer(name: string): Promise<McpServerStatus> {
           inputSchema: (t.inputSchema as Record<string, unknown>) ?? {}
         }))
         active.tools = tools  // refresh cached tool list in place
+        lastKnownTools.set(name, tools)  // keep stale-cache in sync
         console.log(`[mcp] tested: ${name} (${tools.length} tools)`)
         return { name, connected: true, tools }
       } catch {
@@ -301,6 +311,51 @@ export function getServerStatus(): McpServerStatus[] {
       tools: active?.tools ?? []
     }
   })
+}
+
+/**
+ * Like getServerStatus but falls back to the last-known tool list when the
+ * in-process client has died. Used to build --allowedTools for the claude CLI,
+ * which spawns its own fresh MCP subprocess from --mcp-config — so tool names
+ * remain valid even if the in-process client has gone away.
+ *
+ * The `stale` flag is true when the in-process client is dead but we have a
+ * cached tool list. Callers may log/skip stale servers at their discretion.
+ */
+export function getKnownServerTools(): (McpServerStatus & { stale: boolean })[] {
+  const cfg = readConfig()
+  return cfg.mcp_servers.map((srv) => {
+    const active = servers.get(srv.name)
+    if (active) {
+      return { name: srv.name, connected: true, tools: active.tools, stale: false }
+    }
+    const cached = lastKnownTools.get(srv.name)
+    return {
+      name: srv.name,
+      connected: false,
+      tools: cached ?? [],
+      stale: !!cached
+    }
+  })
+}
+
+/**
+ * Best-effort reconnect of any configured server that is not currently in the
+ * live Map. Called before MCP-enabled chat turns so that `callTool` (in-process
+ * execution) and --allowedTools (CLI allowlist) stay as fresh as possible.
+ * Errors are logged and swallowed — a failed reconnect is not fatal.
+ */
+export async function ensureServersConnected(): Promise<void> {
+  const cfg = readConfig()
+  const dead = cfg.mcp_servers.filter((srv) => !servers.has(srv.name))
+  if (dead.length === 0) return
+  await Promise.all(dead.map(async (srv) => {
+    try {
+      await reconnectServer(srv.name)
+    } catch (err) {
+      console.warn(`[mcp] ensureServersConnected: could not reconnect ${srv.name}:`, err)
+    }
+  }))
 }
 
 // ─── Owner identity resolution ────────────────────────────────────────────────

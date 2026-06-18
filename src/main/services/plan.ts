@@ -68,7 +68,8 @@ export async function handlePlanMessage(
       },
       undefined,
       itemId,
-      'plan_chat'
+      'plan_chat',
+      true  // enableMcp — live read-only tools in plan chat
     )
     const toSave = segments.filter((s) => s.trim())
     for (const seg of toSave.length > 0 ? toSave : [fullResponse]) {

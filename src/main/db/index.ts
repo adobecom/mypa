@@ -223,20 +223,41 @@ export function dbGetIntentThread(intentId: string): ChatMessage[] {
 
 // ─── Intent chat threads (streaming "Chat about it") ──────────────────────────
 
-export function dbAddIntentChatMessage(intentId: string, role: string, content: string): ChatMessage {
+export function dbAddIntentChatMessage(
+  intentId: string,
+  role: string,
+  content: string,
+  metadata?: Record<string, unknown>
+): ChatMessage {
   const id = uuidv4()
   const timestamp = new Date().toISOString()
+  const metaStr = metadata ? JSON.stringify(metadata) : null
   getDb()
-    .prepare('INSERT INTO intent_chat_threads (id, intent_id, role, content, timestamp) VALUES (?,?,?,?,?)')
-    .run(id, intentId, role, content, timestamp)
-  return { id, role: role as any, content, timestamp }
+    .prepare('INSERT INTO intent_chat_threads (id, intent_id, role, content, timestamp, metadata) VALUES (?,?,?,?,?,?)')
+    .run(id, intentId, role, content, timestamp, metaStr)
+  return {
+    id, role: role as any, content, timestamp,
+    ...(metadata ? { action: metadata as any } : {})
+  }
 }
 
 export function dbGetIntentChatThread(intentId: string): ChatMessage[] {
   const rows = getDb()
     .prepare('SELECT * FROM intent_chat_threads WHERE intent_id = ? ORDER BY timestamp ASC')
     .all(intentId) as any[]
-  return rows.map((r) => ({ id: r.id, role: r.role, content: r.content, timestamp: r.timestamp }))
+  return rows.map((r) => {
+    const msg: ChatMessage = { id: r.id, role: r.role, content: r.content, timestamp: r.timestamp }
+    if (r.metadata) {
+      try { (msg as any).action = JSON.parse(r.metadata) } catch { /* corrupt metadata — ignore */ }
+    }
+    return msg
+  })
+}
+
+export function dbUpdateIntentChatMessageMetadata(messageId: string, metadata: Record<string, unknown>): void {
+  getDb()
+    .prepare('UPDATE intent_chat_threads SET metadata = ? WHERE id = ?')
+    .run(JSON.stringify(metadata), messageId)
 }
 
 /**

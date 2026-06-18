@@ -291,6 +291,9 @@ export function initSchema(db: Database.Database): void {
   // Work items detected in a routine run's raw MCP output (added 2026-06-17)
   // JSON-encoded CoveredEntity[] — snapshot so display survives signal pruning.
   tryExec('ALTER TABLE routine_runs ADD COLUMN covered_entities TEXT')
+  // Structured action metadata on chat messages — carries pending/executed/dismissed
+  // write-action proposals so the renderer can show Approve/Dismiss buttons (added 2026-06-18)
+  tryExec('ALTER TABLE intent_chat_threads ADD COLUMN metadata TEXT')
 
   // Migrate signals from old UNIQUE(surface, external_id, fingerprint) → UNIQUE(surface, external_id).
   // The 3-column constraint allowed duplicate (surface, external_id) rows to accumulate, causing

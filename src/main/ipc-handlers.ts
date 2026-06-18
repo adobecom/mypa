@@ -56,6 +56,8 @@ import {
   reviseIntentFromChat,
   ambientGetIntentChatThread,
   handleIntentChat,
+  approveChatAction,
+  dismissChatAction,
   ambientGetDigest,
   ambientComputeTrayState,
   ambientGetPolicy,
@@ -469,6 +471,18 @@ export function registerIpcHandlers(
 
   ipcMain.handle('ambient:cancel-chat-stream', async (_e, id: string) => {
     cancelStream(`intentchat:${id}`)
+  })
+
+  ipcMain.handle('ambient:approve-chat-action', async (
+    _e, intentId: string, messageId: string, editedPayload?: Record<string, unknown>
+  ) => {
+    return approveChatAction(intentId, messageId, editedPayload)
+  })
+
+  ipcMain.handle('ambient:dismiss-chat-action', async (
+    _e, intentId: string, messageId: string
+  ) => {
+    return dismissChatAction(intentId, messageId)
   })
 
   ipcMain.handle('ambient:get-digest', async (_e, slot?: DigestSlot) => {
