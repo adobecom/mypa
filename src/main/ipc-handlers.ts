@@ -53,8 +53,9 @@ import {
   ambientApproveIntent,
   ambientDismissIntent,
   ambientChallengeIntent,
-  ambientSuggestIntent,
-  ambientGetIntentThread,
+  reviseIntentFromChat,
+  ambientGetIntentChatThread,
+  handleIntentChat,
   ambientGetDigest,
   ambientComputeTrayState,
   ambientGetPolicy,
@@ -448,20 +449,26 @@ export function registerIpcHandlers(
     return intent
   })
 
-  ipcMain.handle('ambient:suggest', async (_e, id: string, message: string) => {
-    const result = await ambientSuggestIntent(id, message)
+  ipcMain.handle('ambient:revise-from-chat', async (_e, id: string) => {
+    const result = await reviseIntentFromChat(id)
     if (result) {
       broadcast('ambient:intent-updated', result.intent)
-      // Also broadcast the assistant reply for any subscribed ChatThread views
-      broadcast('ambient:intent-message', { intentId: id, message: result.assistantMessage })
     }
     refreshAmbientTray()
     updateBadgeCount()
     return result
   })
 
-  ipcMain.handle('ambient:get-intent-thread', async (_e, id: string) => {
-    return ambientGetIntentThread(id)
+  ipcMain.handle('ambient:get-chat-thread', async (_e, id: string) => {
+    return ambientGetIntentChatThread(id)
+  })
+
+  ipcMain.handle('ambient:send-chat-message', async (_e, id: string, message: string) => {
+    await handleIntentChat(id, message)
+  })
+
+  ipcMain.handle('ambient:cancel-chat-stream', async (_e, id: string) => {
+    cancelStream(`intentchat:${id}`)
   })
 
   ipcMain.handle('ambient:get-digest', async (_e, slot?: DigestSlot) => {

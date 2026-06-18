@@ -150,9 +150,9 @@ Proposed actions derived from signal analysis.
 | `resolved_at` | TEXT | Nullable |
 | `error` | TEXT | Nullable |
 
-#### `intent_threads`
+#### `intent_threads` _(deprecated)_
 
-Conversation messages for a multi-round Suggest session on an intent. Mirrors the `plan_item_threads` pattern.
+Conversation messages for the old standalone Suggest session on an intent. **Deprecated as of 2026-06-17** — the Suggest flow was merged into the streaming Chat panel; new writes go to `intent_chat_threads` instead. Existing rows are preserved for historical reference. No new rows are written.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -161,6 +161,20 @@ Conversation messages for a multi-round Suggest session on an intent. Mirrors th
 | `role` | TEXT | `'user'` or `'assistant'` |
 | `content` | TEXT | Message body |
 | `timestamp` | TEXT | ISO 8601 |
+
+#### `intent_chat_threads`
+
+Streaming "Chat about it" conversation messages for an intent. This is the active chat table. `intent_threads` (the old Suggest table) is deprecated — new messages go here. Available on all intents including terminal/failed ones.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | TEXT PK | UUID |
+| `intent_id` | TEXT FK → `intents` | CASCADE DELETE |
+| `role` | TEXT | `'user'` or `'assistant'` |
+| `content` | TEXT | Message body |
+| `timestamp` | TEXT | ISO 8601 |
+
+Query helpers: `dbAddIntentChatMessage(intentId, role, content)`, `dbGetIntentChatThread(intentId) → ChatMessage[]`.
 
 #### `action_log`
 
@@ -363,6 +377,10 @@ Vectors are stored as raw little-endian Float32 BLOBs and similarity search is p
 ---
 
 ## Changelog
+
+- 2026-06-17 — **`intent_threads` deprecated:** the standalone Suggest re-proposal conversation table (`intent_threads`) is no longer written to — the Suggest flow was merged into the streaming Chat panel. No schema change; existing rows are preserved. All new conversation messages go to `intent_chat_threads`.
+
+- 2026-06-17 — **Intent chat thread table — `intent_chat_threads`:** new table (mirroring `plan_item_threads`) for the streaming "Chat about it" per-intent conversation thread. Schema: `id TEXT PK, intent_id TEXT FK → intents CASCADE DELETE, role TEXT, content TEXT, timestamp TEXT`. Index: `idx_intent_chat_threads_intent_id`. Added via `CREATE TABLE IF NOT EXISTS` (no migration needed for fresh installs; existing installs pick it up on first startup). New query helpers: `dbAddIntentChatMessage(intentId, role, content)`, `dbGetIntentChatThread(intentId) → ChatMessage[]`.
 
 - 2026-06-17 — **Routine run entity linkage — `routine_runs.covered_entities`:** `routine_runs` table gains `covered_entities TEXT` (nullable) via additive `ALTER TABLE` migration. Stores a JSON-serialized `CoveredEntity[]` snapshot of work items (PRs, issues, Slack messages) detected in the run's raw MCP output. Populated by the new `entity-link.ts` service after digest generation. `deserializeRun` JSON-parses it (default `[]`). `dbUpdateRun` field type extended. New `dbGetRecentSignalsAllSurfaces(sinceIso, limit)` helper queries all signals across surfaces in a single SELECT for use by the entity-link scanner. `CoveredEntity` interface added to `src/shared/types.ts`; `RoutineRun.covered_entities: CoveredEntity[]` field added.
 

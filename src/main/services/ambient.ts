@@ -15,20 +15,21 @@ import {
   dbUpsertNode,
   dbBumpNodeWeight,
   dbUpsertEdge,
-  dbAddIntentMessage,
-  dbGetIntentThread,
   dbReproposeIntent,
   dbGetNodeById,
   dbGetSignalByExternal,
   dbGetDirectedSignals,
+  dbAddIntentChatMessage,
+  dbGetIntentChatThread,
 } from '../db/index'
 import { readConfig } from './config'
 import { violatesScope } from './scope'
-import { callTool } from './mcp'
+import { callTool, getToolInputSchema } from './mcp'
 import { startIngestion, stopIngestion, pollOnce, getLastCompletePollAt } from './ingestion'
-import { ingestSignalIntoGraph, assembleContextPacket, startDecayTimer, stopDecayTimer } from './memory-graph'
+import { ingestSignalIntoGraph, assembleContextPacket, startDecayTimer, stopDecayTimer, renderPacketForPrompt } from './memory-graph'
 import { evalEventTriggers, evalTime, coalesceHits, evalWaitingOnMeFromGraph, evalStaleAndMine } from './triggers'
 import { inferIntent, reproposeIntent } from './inference'
+import { streamChat, cancelStream } from './claude'
 import type { InferIntentResult } from './inference'
 import { enqueueEmbeddings, enqueueBackfill, enqueueMemoryBackfill } from './embeddings'
 import { runMemorySummarization } from './memories'
@@ -46,7 +47,7 @@ import {
 } from './autonomy'
 import { setTrayState } from '../tray'
 import { broadcast, updateBadgeCount } from '../windows'
-import type { Signal, Intent, IntentObject, TriggerKind, TrayState, DigestSlot, AmbientDigest, Tier, ChatMessage, IntentSurface } from '@shared/types'
+import type { Signal, Intent, IntentObject, TriggerKind, TrayState, DigestSlot, AmbientDigest, Tier, ChatMessage, IntentSurface, GraphNode } from '@shared/types'
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
@@ -285,25 +286,10 @@ export async function runAmbientCycle(
       continue
     }
 
-    // For Slack reply/send actions, inject _channel_id and _thread_ts into the
-    // payload so executeIntent can build the correct conversations_add_message
-    // args without needing to re-derive them from the context packet.
-    // Node key format: "slack:message:{channelId}:{ts}" (ts has no colons).
-    if (obj.proposed_action.surface === 'slack' &&
-        (obj.proposed_action.verb === 'reply' || obj.proposed_action.verb === 'send')) {
-      const msgNode = packet.focusNodes.find(n => n.key.startsWith('slack:message:'))
-      if (msgNode) {
-        const parts = msgNode.key.split(':')
-        if (parts.length === 4 && parts[2]) {
-          obj.proposed_action.payload = {
-            ...obj.proposed_action.payload,
-            _channel_id: parts[2],
-            // reply posts in-thread; send starts a new top-level message
-            ...(obj.proposed_action.verb === 'reply' ? { _thread_ts: parts[3] } : {})
-          }
-        }
-      }
-    }
+    // Inject surface-specific routing identifiers (owner/repo/issue_number for GitHub,
+    // issue_key for Jira, channel_id/thread_ts for Slack) into the payload so that
+    // buildToolArgs can assemble the correct MCP tool arguments at execution time.
+    enrichPayloadForRouting(obj, packet.focusNodes as GraphNode[])
 
     const intent = dbCreateIntent(obj, hit.kind as TriggerKind, tier, packet as unknown as Record<string, unknown>)
 
@@ -583,6 +569,26 @@ async function handleIntent(intent: Intent, win: BrowserWindow | null): Promise<
   surfaceIntent(intent.id, win)
 }
 
+/**
+ * Record an execution failure — updates DB, action log, and pushes the intent
+ * so both windows reflect the new failed state immediately.
+ */
+function recordIntentFailure(intent: Intent, msg: string, win: BrowserWindow | null): void {
+  const actionType = `${intent.surface}:${intent.verb}`
+  dbUpdateIntentStatus(intent.id, 'failed', msg)
+  dbAppendActionLog({
+    intent_id: intent.id,
+    event: 'failed',
+    action_type: actionType,
+    tier: intent.tier,
+    detail: { error: msg },
+    created_at: new Date().toISOString()
+  })
+  const updated = dbGetIntent(intent.id)!
+  pushIntent(updated, win)
+  refreshTray(win)
+}
+
 async function executeIntent(intent: Intent, win: BrowserWindow | null): Promise<void> {
   const actionType = `${intent.surface}:${intent.verb}`
   try {
@@ -599,7 +605,24 @@ async function executeIntent(intent: Intent, win: BrowserWindow | null): Promise
         return
       }
 
-      const toolResult = await callTool(intent.surface, tool, buildToolArgs(intent))
+      const toolArgs = buildToolArgs(intent)
+
+      // Pre-flight guard: validate assembled args against the tool's required inputSchema
+      // before making the MCP call. This converts missing-arg failures (e.g. owner/repo
+      // not found in the graph) into a clear human explanation instead of a raw -32603.
+      const schema = getToolInputSchema(intent.surface, tool)
+      if (schema) {
+        const required = (schema.required as string[] | undefined) ?? []
+        const missing = required.filter((k) => toolArgs[k] === undefined || toolArgs[k] === null)
+        if (missing.length > 0) {
+          const humanMsg = `Could not resolve required details (${missing.join(', ')}) for this ${intent.surface} action. The work item may not have been ingested yet. Use "Chat about it" to discuss or correct this action.`
+          console.warn(`[ambient] pre-flight validation failed for ${actionType}: missing ${missing.join(', ')}`)
+          recordIntentFailure(intent, humanMsg, win)
+          return
+        }
+      }
+
+      const toolResult = await callTool(intent.surface, tool, toolArgs)
       console.log(`[ambient] auto-executed ${actionType}:`, toolResult.slice(0, 200))
     }
 
@@ -625,15 +648,8 @@ async function executeIntent(intent: Intent, win: BrowserWindow | null): Promise
     }
   } catch (e: any) {
     console.error(`[ambient] execution failed for ${actionType}:`, e)
-    dbUpdateIntentStatus(intent.id, 'failed', String(e?.message ?? e))
-    dbAppendActionLog({
-      intent_id: intent.id,
-      event: 'failed',
-      action_type: actionType,
-      tier: intent.tier,
-      detail: { error: String(e) },
-      created_at: new Date().toISOString()
-    })
+    recordIntentFailure(intent, String(e?.message ?? e), win)
+    return
   }
 
   const updated = dbGetIntent(intent.id)!
@@ -643,6 +659,86 @@ async function executeIntent(intent: Intent, win: BrowserWindow | null): Promise
   // Notify main window of the auto-executed action so it can surface a toast
   if (updated.status === 'executed') {
     broadcast('ambient:action-executed', updated)
+  }
+}
+
+// ─── Routing identifier injection ────────────────────────────────────────────
+//
+// Inject surface-specific routing identifiers into the proposed action payload
+// so that buildToolArgs can assemble correct MCP tool arguments at execution time.
+// Identifiers are prefixed with _ to distinguish them from LLM-authored content
+// and to strip them cleanly in the relevant buildToolArgs branch.
+//
+// This replaces the earlier inline Slack-only enrichment blocks in runAmbientCycle
+// and routeIntent, and extends the same pattern to GitHub and Jira.
+
+function enrichPayloadForRouting(obj: IntentObject, focusNodes: GraphNode[]): void {
+  const { surface, verb } = obj.proposed_action
+
+  if (surface === 'slack' && (verb === 'reply' || verb === 'send')) {
+    // Node key format: "slack:message:{channelId}:{ts}"
+    const msgNode = focusNodes.find((n) => n.key.startsWith('slack:message:'))
+    if (msgNode) {
+      const parts = msgNode.key.split(':')
+      if (parts.length === 4 && parts[2]) {
+        obj.proposed_action.payload = {
+          ...obj.proposed_action.payload,
+          _channel_id: parts[2],
+          ...(verb === 'reply' ? { _thread_ts: parts[3] } : {})
+        }
+      }
+    }
+    return
+  }
+
+  if (surface === 'github') {
+    // Find the PR or issue work-item node in the focus set
+    const itemNode = focusNodes.find(
+      (n) => n.key.startsWith('github:pull_request:') || n.key.startsWith('github:issue:')
+    )
+    if (!itemNode) return
+
+    // Primary: parse owner/repo/number from the stored URL
+    // URL format: https://github.com/{owner}/{repo}/pull/{number}
+    //          or https://github.com/{owner}/{repo}/issues/{number}
+    const url = typeof itemNode.attrs?.url === 'string' ? itemNode.attrs.url : ''
+    const urlMatch = url.match(/github\.com\/([^/]+)\/([^/]+)\/(pull|issues)\/(\d+)/)
+    if (urlMatch) {
+      obj.proposed_action.payload = {
+        ...obj.proposed_action.payload,
+        _owner: urlMatch[1],
+        _repo: urlMatch[2],
+        _issue_number: urlMatch[4]
+      }
+      return
+    }
+
+    // Fallback: parse issue number from the node key tail (e.g. "github:pull_request:pull_request:188")
+    const keyParts = itemNode.key.split(':')
+    const num = keyParts[keyParts.length - 1]
+    if (num && /^\d+$/.test(num)) {
+      obj.proposed_action.payload = {
+        ...obj.proposed_action.payload,
+        _issue_number: num
+        // _owner / _repo remain absent; pre-flight guard will catch this cleanly
+      }
+    }
+    return
+  }
+
+  if (surface === 'jira') {
+    // Jira external_id is the issue key, e.g. "PROJ-123".
+    // The graph node key is "jira:issue:{external_id}" — extract the issue key portion.
+    const issueNode = focusNodes.find((n) => n.key.startsWith('jira:issue:'))
+    if (!issueNode) return
+    // key = "jira:issue:PROJ-123" → external_id = "PROJ-123"
+    const issueKey = issueNode.key.replace(/^jira:issue:/, '')
+    if (issueKey) {
+      obj.proposed_action.payload = {
+        ...obj.proposed_action.payload,
+        _issue_key: issueKey
+      }
+    }
   }
 }
 
@@ -672,21 +768,47 @@ function verbToTool(surface: string, verb: string): string | null {
 /**
  * Build the actual MCP tool arguments from an intent's payload.
  *
- * For most surfaces the payload produced by inference maps 1:1 to tool args.
- * Slack is the exception: inference sets payload.message (per the prompt schema)
- * but conversations_add_message expects { channel_id, text, thread_ts? }.
- * The _channel_id / _thread_ts routing fields are injected at intent-creation
- * time (in runAmbientCycle) so they are available here at execution time.
+ * The LLM-authored payload contains the draft content (body, labels, etc.) plus
+ * _-prefixed routing identifiers injected at intent-creation time by
+ * enrichPayloadForRouting. This function maps both into the correct tool arg
+ * shape and strips the internal _ fields from the outgoing call.
  */
 function buildToolArgs(intent: Intent): Record<string, unknown> {
-  if (intent.surface !== 'slack') return intent.payload as Record<string, unknown>
-  const { message, _channel_id, _thread_ts, ...rest } = intent.payload as Record<string, unknown>
-  return {
-    ...rest,
-    channel_id: _channel_id,
-    text: message,
-    ...(_thread_ts ? { thread_ts: _thread_ts } : {})
+  const p = (intent.payload ?? {}) as Record<string, unknown>
+
+  if (intent.surface === 'slack') {
+    const { message, _channel_id, _thread_ts, ...rest } = p
+    // Strip any other _ fields before passing to the tool
+    const clean = Object.fromEntries(Object.entries(rest).filter(([k]) => !k.startsWith('_')))
+    return {
+      ...clean,
+      channel_id: _channel_id,
+      text: message,
+      ...(_thread_ts ? { thread_ts: _thread_ts } : {})
+    }
   }
+
+  if (intent.surface === 'github') {
+    const { _owner, _repo, _issue_number, body, labels, ...rest } = p
+    const clean = Object.fromEntries(Object.entries(rest).filter(([k]) => !k.startsWith('_')))
+    const issueNum = _issue_number !== undefined ? Number(_issue_number) : undefined
+    if (intent.verb === 'label') {
+      // add_labels_to_issue requires owner, repo, issue_number, labels
+      return { ...clean, owner: _owner, repo: _repo, issue_number: issueNum, labels: labels ?? [] }
+    }
+    // add_issue_comment and other verbs (close, assign, merge): owner + repo + issue_number + body
+    return { ...clean, owner: _owner, repo: _repo, issue_number: issueNum, body }
+  }
+
+  if (intent.surface === 'jira') {
+    const { _issue_key, body, comment, ...rest } = p
+    const clean = Object.fromEntries(Object.entries(rest).filter(([k]) => !k.startsWith('_')))
+    // jira_add_comment typically uses issue_key + comment (body alias)
+    return { ...clean, issue_key: _issue_key, comment: body ?? comment }
+  }
+
+  // Any future surface: strip _ fields and pass the rest verbatim
+  return Object.fromEntries(Object.entries(p).filter(([k]) => !k.startsWith('_')))
 }
 
 // ─── External-pipeline routing ───────────────────────────────────────────────
@@ -718,22 +840,8 @@ export async function routeIntent(
     return
   }
 
-  // Same enrichment as runAmbientCycle — routeIntent receives focusNodeIds so use
-  // the already-resolved focusNodesForScope to find the Slack message node.
-  if (obj.proposed_action.surface === 'slack' &&
-      (obj.proposed_action.verb === 'reply' || obj.proposed_action.verb === 'send')) {
-    const msgNode = focusNodesForScope.find(n => n.key.startsWith('slack:message:'))
-    if (msgNode) {
-      const parts = msgNode.key.split(':')
-      if (parts.length === 4 && parts[2]) {
-        obj.proposed_action.payload = {
-          ...obj.proposed_action.payload,
-          _channel_id: parts[2],
-          ...(obj.proposed_action.verb === 'reply' ? { _thread_ts: parts[3] } : {})
-        }
-      }
-    }
-  }
+  // Inject surface-specific routing identifiers (same enrichment as runAmbientCycle).
+  enrichPayloadForRouting(obj, focusNodesForScope as GraphNode[])
 
   const intent = dbCreateIntent(obj, triggerKind, tier, contextPacket)
 
@@ -842,38 +950,33 @@ export async function ambientChallengeIntent(id: string, reason: string): Promis
   return dbGetIntent(id)!
 }
 
-export function ambientGetIntentThread(id: string): ChatMessage[] {
-  return dbGetIntentThread(id)
-}
-
 /**
- * Handle one round of the multi-round Suggest loop.
+ * Revise the intent's proposal based on the existing "Chat about it" thread.
  *
- * Persists the user message, calls `reproposeIntent` (which may make
- * read-only MCP tool calls), persists the assistant reply, updates the
- * intent's proposal fields in-place, then broadcasts updates.
+ * Calls `reproposeIntent` with the full chat history and a synthetic instruction
+ * so the LLM produces an updated proposal. If the re-proposal passes the
+ * confidence/urgency floors the intent is updated in-place via `dbReproposeIntent`.
+ * Either way, the assistant's reply is appended to the chat thread and broadcast
+ * so the renderer shows it without re-opening the stream.
  *
- * Returns the updated Intent plus the assistant message, or null on error.
+ * This replaces the old standalone Suggest flow, giving one unified conversational
+ * surface in the Chat panel with an explicit opt-in "Update the proposal" button.
  */
-export async function ambientSuggestIntent(
-  id: string,
-  userMessage: string
-): Promise<{ intent: Intent; assistantMessage: string } | null> {
+export async function reviseIntentFromChat(
+  id: string
+): Promise<{ intent: Intent; applied: boolean; message: string } | null> {
   const intent = dbGetIntent(id)
   if (!intent) throw new Error(`Intent ${id} not found`)
 
-  const thread = dbGetIntentThread(id)
+  const thread = dbGetIntentChatThread(id)
 
-  // Persist the user's message immediately
-  dbAddIntentMessage(id, 'user', userMessage)
-
-  let assistantMessage = 'I reconsidered the proposal.'
+  let message = 'I reconsidered the proposal.'
+  let applied = false
   try {
-    const result = await reproposeIntent(intent, thread, userMessage)
+    const syntheticInstruction = 'Based on our conversation above, produce your revised proposal.'
+    const result = await reproposeIntent(intent, thread, syntheticInstruction)
     if (result) {
-      assistantMessage = result.message
-      // Only adopt the re-proposal when the inference layer returned a proposal
-      // (sub-floor proposals are dropped; the assistant message is still shown).
+      message = result.message
       if (result.intent) {
         // Update the intent's proposal in-place (status stays non-terminal)
         dbReproposeIntent(id, {
@@ -885,23 +988,101 @@ export async function ambientSuggestIntent(
           reversibility: result.intent.reversibility,
           required_approval: result.intent.required_approval
         })
+        applied = true
       }
     }
   } catch (e) {
-    console.error('[ambient] reproposeIntent error:', e)
-    assistantMessage = 'Sorry, I ran into an error reconsidering this. Try again or use Challenge/Dismiss.'
+    console.error('[ambient] reviseIntentFromChat error:', e)
+    message = 'Sorry, I ran into an error reconsidering this proposal. Try again or use Challenge/Dismiss.'
   }
 
-  dbAddIntentMessage(id, 'assistant', assistantMessage)
+  // Append the assistant reply to the chat thread so the conversation stays coherent
+  dbAddIntentChatMessage(id, 'assistant', message)
+  const win = getWidgetWin?.() ?? null
+  broadcast('ambient:chat-message', { intentId: id, chunk: message, done: true })
 
   const updated = dbGetIntent(id)!
-  const win = getWidgetWin?.() ?? null
   pushIntent(updated, win)
   refreshTray(win)
   updateBadgeCount()
   broadcast('ambient:intent-updated', updated)
 
-  return { intent: updated, assistantMessage }
+  return { intent: updated, applied, message }
+}
+
+// ─── Intent chat thread (streaming "Chat about it") ──────────────────────────
+
+export function ambientGetIntentChatThread(id: string): ChatMessage[] {
+  return dbGetIntentChatThread(id)
+}
+
+/**
+ * Handle one message in a streaming "Chat about it" conversation for an intent.
+ *
+ * Mirrors handlePlanMessage from plan.ts — persists the user turn, streams the
+ * assistant reply via streamChat, persists each response segment, and broadcasts
+ * chunk events to the renderer. The intent's context_packet and proposal are
+ * attached as rawContext so Claude has the same situational awareness the
+ * inference layer had when the insight was created.
+ *
+ * Available on every intent, including failed/terminal ones, so the user can
+ * always discuss and understand what went wrong.
+ */
+export async function handleIntentChat(intentId: string, userMessage: string): Promise<void> {
+  const intent = dbGetIntent(intentId)
+  if (!intent) throw new Error(`Intent ${intentId} not found`)
+
+  const userMsg = dbAddIntentChatMessage(intentId, 'user', userMessage)
+  broadcast('ambient:chat-user-message', { intentId, message: userMsg })
+
+  const history = dbGetIntentChatThread(intentId).slice(0, -1)
+
+  // Build context string from the intent's proposal and context packet
+  const cp = intent.context_packet as Record<string, unknown> | undefined
+  const contextLines: string[] = []
+  contextLines.push(`**Insight type:** ${intent.type}`)
+  contextLines.push(`**Proposed action:** ${intent.surface}:${intent.verb} — ${intent.target}`)
+  contextLines.push(`**Rationale:** ${intent.rationale}`)
+  if (intent.status === 'failed' && intent.error) {
+    contextLines.push(`**Execution failed:** ${intent.error}`)
+  }
+  if (cp && typeof cp === 'object') {
+    const rendered = renderPacketForPrompt(cp as any)
+    if (rendered) contextLines.push(`\n**Work context:**\n${rendered}`)
+  }
+  const rawContext = contextLines.join('\n')
+
+  const segments: string[] = ['']
+  try {
+    await streamChat(
+      history,
+      userMessage,
+      (chunk) => {
+        if (chunk === '\x00SPLIT\x00') {
+          segments.push('')
+        } else {
+          segments[segments.length - 1] += chunk
+        }
+        broadcast('ambient:chat-message', { intentId, chunk, done: false })
+      },
+      (_full) => { /* no-op; we save per-segment below */ },
+      rawContext,
+      `intentchat:${intentId}`,
+      'chat'
+    )
+    const toSave = segments.filter((s) => s.trim())
+    for (const seg of toSave.length > 0 ? toSave : []) {
+      if (seg.trim()) dbAddIntentChatMessage(intentId, 'assistant', seg)
+    }
+    broadcast('ambient:chat-message', { intentId, chunk: '', done: true })
+  } catch (err: any) {
+    broadcast('ambient:chat-message', {
+      intentId,
+      chunk: '',
+      done: true,
+      error: err?.message ?? 'Claude failed to respond'
+    })
+  }
 }
 
 /**
