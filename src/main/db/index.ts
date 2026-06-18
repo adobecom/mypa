@@ -221,6 +221,24 @@ export function dbGetIntentThread(intentId: string): ChatMessage[] {
   return rows.map((r) => ({ id: r.id, role: r.role, content: r.content, timestamp: r.timestamp }))
 }
 
+// ─── Intent chat threads (streaming "Chat about it") ──────────────────────────
+
+export function dbAddIntentChatMessage(intentId: string, role: string, content: string): ChatMessage {
+  const id = uuidv4()
+  const timestamp = new Date().toISOString()
+  getDb()
+    .prepare('INSERT INTO intent_chat_threads (id, intent_id, role, content, timestamp) VALUES (?,?,?,?,?)')
+    .run(id, intentId, role, content, timestamp)
+  return { id, role: role as any, content, timestamp }
+}
+
+export function dbGetIntentChatThread(intentId: string): ChatMessage[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM intent_chat_threads WHERE intent_id = ? ORDER BY timestamp ASC')
+    .all(intentId) as any[]
+  return rows.map((r) => ({ id: r.id, role: r.role, content: r.content, timestamp: r.timestamp }))
+}
+
 /**
  * Update the proposal fields on an intent in-place without changing its status.
  * Used by the Suggest loop after each re-proposal round.

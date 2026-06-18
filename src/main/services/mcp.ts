@@ -144,6 +144,19 @@ export async function disconnectServer(name: string): Promise<void> {
   servers.delete(name)
 }
 
+/**
+ * Returns the inputSchema for a named tool on a connected server.
+ * Used by executeIntent's pre-flight guard to validate assembled args
+ * before calling the tool, so missing-arg failures surface with a clear
+ * human reason rather than a raw MCP -32603 error.
+ */
+export function getToolInputSchema(serverName: string, toolName: string): Record<string, unknown> | null {
+  const server = servers.get(serverName)
+  if (!server) return null
+  const tool = server.tools.find((t) => t.name === toolName)
+  return tool?.inputSchema ?? null
+}
+
 export async function callTool(
   serverName: string,
   toolName: string,

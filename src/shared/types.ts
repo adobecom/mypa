@@ -641,6 +641,12 @@ export interface IpcApi {
     suggest(id: string, message: string): Promise<{ intent: Intent; assistantMessage: string } | null>
     /** Retrieve the Suggest conversation thread for an intent. */
     getIntentThread(id: string): Promise<ChatMessage[]>
+    /** Send a message in the streaming "Chat about it" thread for an intent. */
+    sendChatMessage(id: string, message: string): Promise<void>
+    /** Retrieve the "Chat about it" streaming conversation thread for an intent. */
+    getChatThread(id: string): Promise<ChatMessage[]>
+    /** Cancel an in-progress "Chat about it" stream for an intent. */
+    cancelChatStream(id: string): Promise<void>
     getDigest(slot?: DigestSlot): Promise<AmbientDigest>
     getTrayState(): Promise<TrayState>
     getPolicy(): Promise<AutonomyPolicy[]>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { GitBranch, SquareKanban, MessageSquare, ChevronDown, Lightbulb, Zap } from 'lucide-react'
+import { GitBranch, SquareKanban, MessageSquare, ChevronDown, Lightbulb, Zap, MessagesSquare } from 'lucide-react'
 import type { Intent, ChatMessage, RoutineRun } from '../../../../../../shared/types'
 import MarkdownText from '@renderer/components/MarkdownText'
 import Tabs from '@renderer/components/Tabs'
@@ -107,6 +107,13 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
   const [suggestThread, setSuggestThread] = useState<ChatMessage[]>([])
   const [suggestStreaming, setSuggestStreaming] = useState(false)
   const [suggestError, setSuggestError] = useState<string | null>(null)
+
+  // ── "Chat about it" state ─────────────────────────────────────────────────
+  const [chatOpen, setChatOpen] = useState(false)
+  const [chatThread, setChatThread] = useState<ChatMessage[]>([])
+  const [chatStreaming, setChatStreaming] = useState(false)
+  const [chatStreamContent, setChatStreamContent] = useState('')
+  const [chatError, setChatError] = useState<string | null>(null)
 
   const api = window.electron
   const isTerminal = TERMINAL_STATUSES.includes(intent.status)
@@ -232,6 +239,62 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
       setSuggestError(e?.message ?? 'Failed to get a re-proposal.')
       setSuggestStreaming(false)
     }
+  }
+
+  // ── "Chat about it" handlers ──────────────────────────────────────────────
+
+  // Load existing chat thread when the panel opens for the first time
+  useEffect(() => {
+    if (!chatOpen || chatThread.length > 0) return
+    api.ambient.getChatThread(intent.id)
+      .then((msgs) => setChatThread(msgs as ChatMessage[]))
+      .catch(console.error)
+  }, [chatOpen])
+
+  // Subscribe to user-message echoes from the main process
+  useEffect(() => {
+    const off = api.on('ambient:chat-user-message', (payload) => {
+      const p = payload as { intentId: string; message: ChatMessage }
+      if (p.intentId !== intent.id) return
+      setChatThread((prev) => [...prev, p.message])
+      setChatStreaming(true)
+      setChatStreamContent('')
+    })
+    return off
+  }, [intent.id])
+
+  // Subscribe to streamed assistant reply chunks
+  useEffect(() => {
+    const off = api.on('ambient:chat-message', (payload) => {
+      const p = payload as { intentId: string; chunk: string; done: boolean; error?: string }
+      if (p.intentId !== intent.id) return
+      if (p.done) {
+        setChatStreaming(false)
+        if (p.error) {
+          setChatError(p.error)
+        } else {
+          // Re-fetch the thread so persisted assistant messages appear correctly
+          api.ambient.getChatThread(intent.id)
+            .then((msgs) => {
+              setChatThread(msgs as ChatMessage[])
+              setChatStreamContent('')
+            })
+            .catch(console.error)
+        }
+      } else {
+        setChatStreamContent((prev) => prev + p.chunk)
+      }
+    })
+    return off
+  }, [intent.id])
+
+  async function handleChatSend(message: string): Promise<void> {
+    setChatError(null)
+    await api.ambient.sendChatMessage(intent.id, message)
+  }
+
+  function handleChatStop(): void {
+    api.ambient.cancelChatStream(intent.id).catch(console.error)
   }
 
   // ── Expand detail helpers ──────────────────────────────────────────────────
@@ -483,6 +546,33 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
         </div>
       )}
 
+      {/* ── Chat about it panel ── */}
+      {chatOpen && (
+        <div className="routine-card__body" style={{ paddingTop: 4 }}>
+          <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-muted)', marginBottom: 6 }}>
+            Chat about it
+          </div>
+          <ChatThread
+            messages={chatThread}
+            streaming={chatStreaming}
+            streamingContent={chatStreamContent}
+            onSend={handleChatSend}
+            onStop={handleChatStop}
+            error={chatError}
+            sendDisabled={chatStreaming}
+          />
+          <div style={{ marginTop: 6, display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn btn--ghost"
+              onClick={() => setChatOpen(false)}
+              style={{ fontSize: 11 }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── Challenge input ── */}
       {challenging && !isTerminal && (
         <div className="routine-card__body" style={{ paddingTop: 4 }}>
@@ -523,6 +613,16 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
             <>
               <button
                 className="btn btn--ghost"
+                onClick={(e) => { e.stopPropagation(); setChatOpen((o) => !o) }}
+                disabled={loading}
+                style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+                title="Chat with Claude about this insight"
+              >
+                <MessagesSquare size={11} />
+                Chat
+              </button>
+              <button
+                className="btn btn--ghost"
                 onClick={(e) => { e.stopPropagation(); setChallenging(true) }}
                 disabled={loading}
                 style={{ fontSize: 11 }}
@@ -547,6 +647,16 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
                 style={{ fontSize: 11 }}
               >
                 Dismiss
+              </button>
+              <button
+                className="btn btn--ghost"
+                onClick={(e) => { e.stopPropagation(); setChatOpen((o) => !o) }}
+                disabled={loading}
+                style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+                title="Chat with Claude about this insight"
+              >
+                <MessagesSquare size={11} />
+                Chat
               </button>
               <button
                 className="btn btn--ghost"
@@ -578,6 +688,21 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
               )}
             </>
           )}
+        </div>
+      )}
+
+      {/* ── Chat button for terminal intents (always available for recovery/discussion) ── */}
+      {isTerminal && !chatOpen && (
+        <div className="routine-card__body" style={{ paddingTop: 4, display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            className="btn btn--ghost"
+            onClick={(e) => { e.stopPropagation(); setChatOpen(true) }}
+            style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+            title="Chat with Claude about this insight"
+          >
+            <MessagesSquare size={11} />
+            Chat about it
+          </button>
         </div>
       )}
     </div>

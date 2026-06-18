@@ -114,6 +114,9 @@ Ambient intelligence — intents, digests, policy, tray state.
 | `challenge` | `(id, reason) → Intent` | Challenge an intent with a reason; adjusts trust policy |
 | `suggest` | `(id, message) → { intent: Intent; assistantMessage: string } \| null` | Multi-round Suggest: send user feedback, receive a re-proposed intent and a conversational reply. Intent stays non-terminal; can be called repeatedly. |
 | `getIntentThread` | `(id) → ChatMessage[]` | Fetch the Suggest conversation thread for an intent. |
+| `sendChatMessage` | `(id, message) → void` | Send a user message in the streaming "Chat about it" thread for an intent. Streams response via `ambient:chat-message` push events. |
+| `getChatThread` | `(id) → ChatMessage[]` | Fetch the "Chat about it" streaming conversation thread for an intent. Available on all intents including terminal/failed ones. |
+| `cancelChatStream` | `(id) → void` | Cancel an active "Chat about it" stream for an intent. |
 | `getDigest` | `(slot?) → AmbientDigest` | Fetch the latest digest for a slot (`morning \| midday \| eod`) |
 | `getTrayState` | `() → TrayState` | Current tray state: `idle \| has-something \| needs-you` (driven only by `action`-type intents) |
 | `getPolicy` | `() → AutonomyPolicy[]` | All per-action-type trust policies |
@@ -161,6 +164,8 @@ Subscribed with `window.electron.on(channel, listener)`. Returns an unsubscribe 
 | `ambient:digest-ready` | `AmbientDigest` | A new digest was generated | widget only |
 | `ambient:action-executed` | `Intent` | A tier-0 intent was auto-executed (success only) | **widget + main** |
 | `ambient:intent-message` | `{ intentId: string; message: string }` | Assistant reply after a Suggest round (non-streaming; fires once when re-proposal completes) | **widget + main** |
+| `ambient:chat-user-message` | `{ intentId: string; message: ChatMessage }` | User message persisted to an intent's "Chat about it" thread (fires immediately before streaming begins) | **widget + main** |
+| `ambient:chat-message` | `{ intentId: string; chunk: string; done: boolean; error?: string }` | Streaming chunk for an intent's "Chat about it" reply. `done: true` signals completion or error. | **widget + main** |
 
 **`routine:run-started` and `routine:run-completed` are broadcast to both windows** via `broadcast()` in `src/main/windows.ts`. The main window uses them to drive in-app toast notifications. The widget uses them to update its inline run card. All other events remain window-specific.
 
@@ -242,6 +247,8 @@ Manage PA check-in sessions and their chat threads.
 | `openInMainWindow` | `(checkinId?) → void` | Open main window on Check-in page, expanding the given session |
 
 ## Changelog
+
+- 2026-06-17 — **Ambient insight chat + routing fix:** Added three new `ambient` IPC methods (`sendChatMessage`, `getChatThread`, `cancelChatStream`) and two new push channels (`ambient:chat-user-message`, `ambient:chat-message`) for a streaming per-intent "Chat about it" conversation thread backed by `intent_chat_threads` DB table. Also fixed GitHub/Jira intent actions failing with `-32603` by introducing `enrichPayloadForRouting` (which injects `_owner`/`_repo`/`_issue_number` for GitHub, `_issue_key` for Jira at intent-creation time) and a pre-flight schema validation guard in `executeIntent` that surfaces a clear human error instead of a raw MCP error when required args are still missing.
 
 - 2026-06-17 — **`RoutineRun` gains `covered_entities: CoveredEntity[]`:** the `RoutineRun` payload emitted by `routine:run-completed` and returned by `routines.getAllRuns`/`getRuns` now carries a `covered_entities` field — an array of `CoveredEntity` snapshots (`{ key, surface, kind, external_id, title, url }`). `key` matches graph-node and insight focus-node keys (`surface:kind:external_id`), enabling renderer-side insight↔run linkage with no extra IPC calls. The field is always present (empty array `[]` for runs without detected entities or runs completed before this change). New `CoveredEntity` interface in `src/shared/types.ts`. Widget `App.tsx` continues to call `ambient.getIntents()` on mount; the linkage index is derived from the same pending-intents state with no extra IPC calls.
 
