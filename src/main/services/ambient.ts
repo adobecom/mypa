@@ -1328,7 +1328,7 @@ export async function ambientGetDigest(slot?: DigestSlot): Promise<AmbientDigest
     .slice(0, 10)
 
   const decisions = recent
-    .filter((i) => i.status === 'surfaced' && i.type === 'action' && i.required_approval)
+    .filter((i) => i.status === 'surfaced' && i.type === 'action' && i.tier >= 2)
     .map((i) => i.id)
     .slice(0, 5)
 
@@ -1342,7 +1342,7 @@ export async function ambientGetDigest(slot?: DigestSlot): Promise<AmbientDigest
 export function ambientComputeTrayState(): TrayState {
   // Only actionable intents drive the tray state — informational (flag/digest) do not interrupt.
   const pending = dbGetPendingIntents().filter((i) => i.type === 'action')
-  if (pending.some((i) => i.required_approval && i.tier >= 2)) return 'needs-you'
+  if (pending.some((i) => i.tier >= 2)) return 'needs-you'
   if (pending.length > 0) return 'has-something'
   // Also consider recently auto-executed action intents in last hour
   const recent = dbGetAllIntents(20).filter((i) => {

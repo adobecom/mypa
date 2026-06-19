@@ -163,7 +163,7 @@ The trust tier system adapts over time based on the user's feedback. Each `actio
 | `0` | Fully automatic — execute without surfacing to the user |
 | `1` | Notify — show in ambient feed, execute after short delay unless dismissed |
 | `2` (default) | Require approval — surface in feed, wait for explicit approve/dismiss |
-| `3` | Always approve — extra confirmation required (used for irreversible or high-impact actions). Surfaced with full OS notification + dock badge, same as tiers 1 and 2. |
+| `3` | Locked — user-initiated only; agent never acts on its own. Must be set explicitly in Settings. Surfaced with full OS notification + dock badge, same as tiers 1 and 2. |
 
 ### Two-level tier resolution
 
@@ -172,13 +172,13 @@ The trust tier system adapts over time based on the user's feedback. Each `actio
 2. **Per-intent-type policy** — set by the user in Settings for a broad category (e.g. all `action` intents default to tier 2). This is the key written by `ambient.setTier` from the Settings autonomy controls.
 3. **Hardcoded default** — tier 2.
 
-The safety floor still applies: irreversible or `required_approval` intents can never be below tier 2. Tier 3 at either level is absolute.
+The safety floor still applies: irreversible or `required_approval` intents can never be below tier 2. Tier 3 at either level is absolute — but it can only be reached by explicit user action in Settings, never by challenge feedback alone (see `AUTO_ESCALATE_CEILING` below).
 
 ### Tier drift
 
-- **Promotion** (tier decreases): when `consecutive_approvals` reaches the threshold (5), the tier drops by one AND the streak is **reset to zero** so subsequent promotions also each require 5 approvals.
-- **Demotion** (tier increases): a challenge resets the consecutive streak and bumps the tier up.
-- **Locking**: `tier_locked = 1` prevents automatic drift; only a manual `setTier` call changes it.
+- **Promotion** (tier decreases): when `consecutive_approvals` reaches the threshold (5), the tier drops by one AND the streak is **reset to zero** so subsequent promotions also each require 5 approvals. Automatic trust accumulation floors at tier 1 (`AUTO_DECAY_FLOOR`) — reaching tier 0 (Silent) requires explicit user opt-in.
+- **Demotion** (tier increases): a challenge resets the consecutive streak and bumps the tier up by one, capped at tier 2 (`AUTO_ESCALATE_CEILING`). Challenge feedback can never push a verb past Approve — reaching tier 3 (Locked) requires explicit user opt-in in Settings.
+- **Locking**: `tier_locked = 1` means the tier was set explicitly via Settings; automatic drift (promotion or capped demotion) never overrides it. `setTier` writes `tier_locked = true` whenever tier 3 is set, so explicit Locks are always distinguishable from challenge drift (which caps at 2 and therefore always has `tier_locked = 0`).
 - **Reset**: `resetTrust()` deletes all policy rows; each `action_type` reverts to tier 2 on next use.
 
 ### User actions
@@ -292,6 +292,8 @@ These rows appear in `ambient.getLog()` interleaved with real `emitted`/`execute
 - `totalHits: N > 0` but no `emitted` row follows ⇒ inference dropped every candidate; see the `dropped:` breakdown in the cycle console log
 
 ## Changelog
+
+- 2026-06-18 — **Fix: missing action button + challenge tier drift.** Two interacting bugs caused action intent cards to display only Dismiss / Chat / Challenge with no way to trigger the action. (1) `IntentCard.tsx` — `needsApproval` was gated on `intent.required_approval`, but the model sometimes emits `required_approval=false` even for actions the agent will never auto-execute (tier ≥ 2). The condition is now `!isObservation && intent.tier >= 2` — any action at Approve or Locked tier shows the primary button, regardless of the model hint. (2) `autonomy.ts` — `recordChallenge` had no ceiling: a single challenge from the default tier 2 would push a verb to tier 3 (Locked), where `resolveTier` treated it as absolute and `recordApproval` refused to lower it. Added `AUTO_ESCALATE_CEILING = 2` (symmetric to `AUTO_DECAY_FLOOR = 1`): challenge feedback can raise a verb to at most Approve (tier 2); reaching Locked requires explicit user opt-in in Settings. `setTier` now writes `tier_locked = true` whenever tier 3 is set explicitly, so Locks are distinguishable from drift. A one-time `schema.ts` normalization reverts all existing `tier=3 AND tier_locked=0` rows (pure drift) to tier 2; explicit Locks (`tier_locked=1`) are preserved.
 
 - 2026-06-17 — **Button trimming — merge Suggest into Chat:** removed the standalone Suggest action from intent cards. The re-proposal capability is now an opt-in "Update the proposal" button inside the Chat panel, shown for non-terminal action intents once at least one assistant reply exists. Clicking it calls `reviseIntentFromChat` which runs `reproposeIntent` over the full `intent_chat_threads` history and applies the result in-place. The action table entry for "Suggest" is replaced by "Chat". The `intent_threads` table is deprecated (preserved for historical rows; no new writes). The `ambient.suggest` and `ambient.getIntentThread` IPC methods are replaced by `ambient.reviseFromChat`.
 

@@ -88,7 +88,7 @@ export default function QueueView({
     grouped[item.timing]!.push(item)
   }
 
-  const needsApproval = pendingIntents.some((i) => i.required_approval && i.tier >= 2)
+  const needsApproval = pendingIntents.some((i) => i.type === 'action' && i.tier >= 2)
 
   return (
     <div>

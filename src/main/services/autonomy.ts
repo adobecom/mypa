@@ -77,12 +77,14 @@ const CONSECUTIVE_APPROVALS_TO_LOWER = 5
 // The minimum tier that automatic trust accumulation can reach.
 // Tier 0 (silent auto-execute) requires explicit user opt-in via settings, never just approvals.
 const AUTO_DECAY_FLOOR: Tier = 1
+// The maximum tier that automatic challenge feedback can reach.
+// Tier 3 (Locked) requires explicit user opt-in via settings, never just challenges.
+const AUTO_ESCALATE_CEILING: Tier = 2
 
 export function recordApproval(actionType: string): void {
   const policy = dbRecordPolicyOutcome(actionType, 'approval')
 
-  // Don't lower tier if locked, already at floor or below, or locked at tier 3
-  if (policy.tier_locked || policy.tier <= AUTO_DECAY_FLOOR || policy.tier === 3) return
+  if (policy.tier_locked || policy.tier <= AUTO_DECAY_FLOOR) return
 
   // Use consecutive_approvals (reset on challenge/dismissal) for accurate streak tracking.
   // Reset the streak when lowering so each subsequent tier step also costs CONSECUTIVE_APPROVALS_TO_LOWER.
@@ -96,9 +98,10 @@ export function recordApproval(actionType: string): void {
 export function recordChallenge(actionType: string, feedback: string): void {
   const policy = dbRecordPolicyOutcome(actionType, 'challenge')
 
-  // Raise tier on challenge (don't lock — user can earn trust back)
-  if (!policy.tier_locked && policy.tier < 3) {
-    const newTier = Math.min(3, policy.tier + 1) as Tier
+  // Raise tier on challenge, but cap at AUTO_ESCALATE_CEILING (tier 2 = Approve).
+  // Tier 3 (Locked) requires explicit user opt-in in Settings, not just challenge feedback.
+  if (!policy.tier_locked && policy.tier < AUTO_ESCALATE_CEILING) {
+    const newTier = Math.min(AUTO_ESCALATE_CEILING, policy.tier + 1) as Tier
     dbUpsertPolicy(actionType, { tier: newTier })
     console.log(`[autonomy] trust lowered for ${actionType}: tier ${policy.tier} → ${newTier} (higher number = less trust)`)
   }
@@ -134,7 +137,9 @@ export function recordExecution(actionType: string): void {
 // ─── Policy management ────────────────────────────────────────────────────────
 
 export function setTier(actionType: string, tier: Tier, locked = false): void {
-  dbUpsertPolicy(actionType, { tier, tier_locked: locked })
+  // Tier 3 set via the UI is always treated as an explicit lock so it is distinguishable
+  // from challenge-driven drift (which caps at tier 2 and therefore never sets tier_locked).
+  dbUpsertPolicy(actionType, { tier, tier_locked: locked || tier === 3 })
 }
 
 export function resetTrust(): void {
