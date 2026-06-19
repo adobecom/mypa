@@ -101,6 +101,13 @@ function claudeEnv(key?: string): NodeJS.ProcessEnv {
 }
 
 /**
+ * If the streaming CLI subprocess produces no stdout for this many milliseconds,
+ * it is killed and the stream resolves as an error. This catches agentic MCP hangs
+ * where the process is alive but produces no output and never closes.
+ */
+const STREAM_IDLE_TIMEOUT_MS = 120_000
+
+/**
  * Single-attempt one-shot Claude call. Public callers go through runClaude(),
  * which wraps this with automatic model selection and escalation on failure.
  */
@@ -285,13 +292,30 @@ async function runClaudeStream(
     let buf = ''
     let stderr = ''
     let cliResult: any = null
+    let settled = false
 
     const entry = { proc, killed: false }
     if (streamId) activeStreams.set(streamId, entry)
 
+    // Idle watchdog: if the subprocess produces no stdout for STREAM_IDLE_TIMEOUT_MS,
+    // kill it and reject. Reset on every data chunk so legitimate long streams are unaffected.
+    const fireIdleTimeout = () => {
+      if (settled) return
+      entry.killed = true
+      proc.kill('SIGTERM')
+      settled = true
+      if (streamId) activeStreams.delete(streamId)
+      mcpCleanup?.()
+      reject(new Error('Stream timed out'))
+    }
+    let idleTimer = setTimeout(fireIdleTimeout, STREAM_IDLE_TIMEOUT_MS)
+
     proc.stderr?.on('data', (data: Buffer) => { stderr += data.toString() })
 
     proc.stdout.on('data', (data: Buffer) => {
+      clearTimeout(idleTimer)
+      idleTimer = setTimeout(fireIdleTimeout, STREAM_IDLE_TIMEOUT_MS)
+
       buf += data.toString()
       const lines = buf.split('\n')
       buf = lines.pop() ?? ''
@@ -301,6 +325,9 @@ async function runClaudeStream(
     })
 
     proc.on('close', (code) => {
+      clearTimeout(idleTimer)
+      if (settled) return
+      settled = true
       if (buf.trim()) {
         full = parseStreamEvent(buf, full, onChunk, (ev) => { cliResult = ev })
       }
@@ -315,6 +342,9 @@ async function runClaudeStream(
       resolve(full)
     })
     proc.on('error', (err) => {
+      clearTimeout(idleTimer)
+      if (settled) return
+      settled = true
       if (streamId) activeStreams.delete(streamId)
       mcpCleanup?.()
       reject(err)
@@ -688,14 +718,19 @@ export async function runClaudeWithMcp(
 const MCP_CHAT_SYSTEM_ADDENDUM = `
 You have live read-only MCP tools available. Call them freely to look up current state (e.g. check PR comments, Jira status, Slack threads) before answering. Read/lookup tool calls are always approved.
 
-To propose a write action (post a comment, label an issue, send a Slack message), end your reply with an action block — one per response:
+To propose a write action, end your reply with one action block:
 <action>{ "surface": "github", "verb": "comment", "target": "<PR or issue title>", "payload": { "body": "<your comment text>" } }</action>
 
-Valid surface:verb pairs: github:comment, github:label, jira:comment, slack:reply, slack:send.
-For slack:reply and slack:send, use "message" instead of "body" in the payload.
-For github:label, use "labels" (string array) in the payload.
-Do NOT call write tools directly — only read-only lookups are CLI-approved. Use the action block for writes; the user will see Approve/Dismiss buttons and can edit the text before approving.
-Routing details (owner, repo, issue number, channel, etc.) are injected automatically — you do not need to provide them.`.trim()
+CRITICAL: emitting the action block does NOT post or execute anything. It queues the write for the user's approval (they see Approve/Dismiss buttons, or they can type "go ahead" / "yes" / "approve it"). You will be told the result on the next turn once they actually approve or dismiss. Never claim or imply the write has happened — say "I've queued this for your approval" or similar.
+
+Valid surface:verb pairs: github:comment, github:label, github:approve, jira:comment, slack:reply, slack:send.
+- github:comment — post a comment on a PR or issue. payload: { "body": "..." }
+- github:label   — add labels to a PR or issue. payload: { "labels": ["label-name"] }
+- github:approve — submit a formal APPROVE review on a PR. payload: {} (optional "body" for a review message). This flips the PR's review state, not just a comment.
+- jira:comment   — add a comment to a Jira issue. payload: { "body": "..." }
+- slack:reply / slack:send — post to Slack. payload: { "message": "..." }
+Do NOT call write tools directly — only read-only lookups are CLI-approved. Use the action block for writes.
+Routing details (owner, repo, pull/issue number, channel, etc.) are injected automatically — you do not need to provide them. If you do provide owner/repo/issue_number in the payload they will be used as a fallback.`.trim()
 
 export async function streamChat(
   history: ChatMessage[],
@@ -729,8 +764,9 @@ export async function streamChat(
       onDone(full)
       return
     } catch (err) {
-      // User-cancelled streams must not be retried — the UI has already stopped
-      if ((err as Error).message === 'Cancelled') throw err
+      // User-cancelled or idle-timed-out streams must not be retried
+      const msg = (err as Error).message
+      if (msg === 'Cancelled' || msg === 'Stream timed out') throw err
       const next = escalate(model)
       if (!next) throw err
       console.log(`[claude] stream: escalating ${model} → ${next} (${source})`)

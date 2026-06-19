@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { GitBranch, SquareKanban, MessageSquare, ChevronDown, Wand2, Zap, MessagesSquare } from 'lucide-react'
 import type { Intent, ChatMessage, RoutineRun } from '../../../../../../shared/types'
 import MarkdownText from '@renderer/components/MarkdownText'
@@ -115,6 +115,10 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
   const [chatStreamContent, setChatStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
   const [revising, setRevising] = useState(false)
+  // Safety backstop: if the main process dies or the stream never sends done:true,
+  // clear the streaming state after 150s (server idle watchdog fires at 120s).
+  const chatSafetyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (chatSafetyTimer.current) clearTimeout(chatSafetyTimer.current) }, [])
 
   const api = window.electron
   const isTerminal = TERMINAL_STATUSES.includes(intent.status)
@@ -211,6 +215,13 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
       setChatThread((prev) => [...prev, p.message])
       setChatStreaming(true)
       setChatStreamContent('')
+      // Arm the safety backstop — 150s is longer than the server-side 120s idle watchdog,
+      // so the server error path normally fires first; this is a last-resort fallback.
+      if (chatSafetyTimer.current) clearTimeout(chatSafetyTimer.current)
+      chatSafetyTimer.current = setTimeout(() => {
+        setChatStreaming(false)
+        setChatError('The assistant stopped responding. Please try again.')
+      }, 150_000)
     })
     return off
   }, [intent.id])
@@ -221,6 +232,8 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
       const p = payload as { intentId: string; chunk: string; done: boolean; error?: string }
       if (p.intentId !== intent.id) return
       if (p.done) {
+        // Stream finished — clear the safety backstop
+        if (chatSafetyTimer.current) { clearTimeout(chatSafetyTimer.current); chatSafetyTimer.current = null }
         setChatStreaming(false)
         if (p.error) {
           setChatError(p.error)
@@ -234,6 +247,12 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
             .catch(console.error)
         }
       } else {
+        // Reset the safety backstop on each live chunk
+        if (chatSafetyTimer.current) clearTimeout(chatSafetyTimer.current)
+        chatSafetyTimer.current = setTimeout(() => {
+          setChatStreaming(false)
+          setChatError('The assistant stopped responding. Please try again.')
+        }, 150_000)
         setChatStreamContent((prev) => prev + p.chunk)
       }
     })

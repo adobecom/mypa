@@ -294,6 +294,8 @@ export function initSchema(db: Database.Database): void {
   // Structured action metadata on chat messages — carries pending/executed/dismissed
   // write-action proposals so the renderer can show Approve/Dismiss buttons (added 2026-06-18)
   tryExec('ALTER TABLE intent_chat_threads ADD COLUMN metadata TEXT')
+  // Same metadata column for plan-item chat threads — enables Approve/Dismiss chips in plan chat (added 2026-06-19)
+  tryExec('ALTER TABLE plan_item_threads ADD COLUMN metadata TEXT')
 
   // Data normalisation — revert pre-ceiling challenge drift (added 2026-06-18).
   // Before AUTO_ESCALATE_CEILING was introduced, repeated challenges could escalate a

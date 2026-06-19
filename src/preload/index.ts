@@ -12,7 +12,11 @@ const api: IpcApi = {
     getThread: (itemId) => ipcRenderer.invoke('plan:get-thread', itemId),
     cancelStream: (itemId) => ipcRenderer.invoke('plan:cancel-stream', itemId),
     getItem: (itemId) => ipcRenderer.invoke('plan:get-item', itemId),
-    openInMainWindow: (itemId) => ipcRenderer.invoke('plan:open-in-main-window', itemId)
+    openInMainWindow: (itemId) => ipcRenderer.invoke('plan:open-in-main-window', itemId),
+    approveChatAction: (itemId, messageId, editedPayload) =>
+      ipcRenderer.invoke('plan:approve-chat-action', itemId, messageId, editedPayload),
+    dismissChatAction: (itemId, messageId) =>
+      ipcRenderer.invoke('plan:dismiss-chat-action', itemId, messageId)
   },
   routines: {
     getAll: () => ipcRenderer.invoke('routines:get-all'),

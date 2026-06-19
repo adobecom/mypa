@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Check, Minus, MessageSquare, ChevronUp, CornerUpLeft, ExternalLink } from 'lucide-react'
 import ChatThread from './ChatThread'
 import type { PlanItem, ChatMessage } from '../../../../../../shared/types'
@@ -23,6 +23,8 @@ export default function PlanItemCard({
   const [streaming, setStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
+  const safetyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (safetyTimer.current) clearTimeout(safetyTimer.current) }, [])
 
   const api = window.electron
   const isDone = item.status === 'done'
@@ -39,16 +41,21 @@ export default function PlanItemCard({
       if (p.itemId !== item.id) return
       setThread((prev) => [...prev, p.message])
       setStreaming(true)
+      if (safetyTimer.current) clearTimeout(safetyTimer.current)
+      safetyTimer.current = setTimeout(() => {
+        setStreaming(false)
+        setChatError('The assistant stopped responding. Please try again.')
+      }, 150_000)
     })
     return unsub
   }, [item.id])
 
   useEffect(() => {
-    if (!expanded) return
     const unsub = api.on('plan:item-message', (payload) => {
       const p = payload as { itemId: string; chunk: string; done: boolean; error?: string }
       if (p.itemId !== item.id) return
       if (p.done) {
+        if (safetyTimer.current) { clearTimeout(safetyTimer.current); safetyTimer.current = null }
         setStreaming(false)
         setStreamContent('')
         if (p.error) {
@@ -57,12 +64,17 @@ export default function PlanItemCard({
           api.plan.getThread(item.id).then(setThread)
         }
       } else {
+        if (safetyTimer.current) clearTimeout(safetyTimer.current)
+        safetyTimer.current = setTimeout(() => {
+          setStreaming(false)
+          setChatError('The assistant stopped responding. Please try again.')
+        }, 150_000)
         setStreaming(true)
         setStreamContent((prev) => prev + p.chunk)
       }
     })
     return unsub
-  }, [expanded, item.id])
+  }, [item.id])
 
   const handleCheck = () => {
     if (readOnly) return
@@ -120,6 +132,22 @@ export default function PlanItemCard({
               onStop={handleStop}
               sendDisabled={streaming}
               error={chatError}
+              onApproveAction={async (msg, editedPayload) => {
+                try {
+                  const updated = await api.plan.approveChatAction(item.id, msg.id, editedPayload)
+                  setThread((prev) => prev.map((m) => m.id === msg.id ? { ...m, action: updated } : m))
+                } catch (e) {
+                  console.error('plan approveChatAction error:', e)
+                }
+              }}
+              onDismissAction={async (msg) => {
+                try {
+                  const updated = await api.plan.dismissChatAction(item.id, msg.id)
+                  setThread((prev) => prev.map((m) => m.id === msg.id ? { ...m, action: updated } : m))
+                } catch (e) {
+                  console.error('plan dismissChatAction error:', e)
+                }
+              }}
             />
           </div>
         )}

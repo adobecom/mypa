@@ -286,20 +286,39 @@ export function dbReproposeIntent(
   if (update.required_approval !== undefined) db.prepare('UPDATE intents SET required_approval = ? WHERE id = ?').run(update.required_approval ? 1 : 0, id)
 }
 
-export function dbAddPlanMessage(itemId: string, role: string, content: string): ChatMessage {
+export function dbAddPlanMessage(
+  itemId: string,
+  role: string,
+  content: string,
+  metadata?: Record<string, unknown>
+): ChatMessage {
   const id = uuidv4()
   const timestamp = new Date().toISOString()
   getDb()
-    .prepare('INSERT INTO plan_item_threads (id, item_id, role, content, timestamp) VALUES (?,?,?,?,?)')
-    .run(id, itemId, role, content, timestamp)
-  return { id, role: role as any, content, timestamp }
+    .prepare('INSERT INTO plan_item_threads (id, item_id, role, content, timestamp, metadata) VALUES (?,?,?,?,?,?)')
+    .run(id, itemId, role, content, timestamp, metadata ? JSON.stringify(metadata) : null)
+  const msg: ChatMessage = { id, role: role as any, content, timestamp }
+  if (metadata) (msg as any).action = metadata
+  return msg
 }
 
 export function dbGetPlanThread(itemId: string): ChatMessage[] {
   const rows = getDb()
     .prepare('SELECT * FROM plan_item_threads WHERE item_id = ? ORDER BY timestamp ASC')
     .all(itemId) as any[]
-  return rows.map((r) => ({ id: r.id, role: r.role, content: r.content, timestamp: r.timestamp }))
+  return rows.map((r) => {
+    const msg: ChatMessage = { id: r.id, role: r.role, content: r.content, timestamp: r.timestamp }
+    if (r.metadata) {
+      try { (msg as any).action = JSON.parse(r.metadata) } catch { /* corrupt metadata — ignore */ }
+    }
+    return msg
+  })
+}
+
+export function dbUpdatePlanMessageMetadata(messageId: string, metadata: Record<string, unknown>): void {
+  getDb()
+    .prepare('UPDATE plan_item_threads SET metadata = ? WHERE id = ?')
+    .run(JSON.stringify(metadata), messageId)
 }
 
 // ─── Plan Items ───────────────────────────────────────────────────────────────

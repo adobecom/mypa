@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import ChatThread from '../../widget/components/ChatThread'
 import type { PlanItem, ChatMessage } from '../../../../../../shared/types'
@@ -21,6 +21,8 @@ export default function PlanItemDetail({ itemId, onBack }: Props): React.ReactEl
   const [streaming, setStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
+  const safetyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (safetyTimer.current) clearTimeout(safetyTimer.current) }, [])
 
   const api = window.electron
 
@@ -47,6 +49,11 @@ export default function PlanItemDetail({ itemId, onBack }: Props): React.ReactEl
       if (p.itemId !== itemId) return
       setThread((prev) => [...prev, p.message])
       setStreaming(true)
+      if (safetyTimer.current) clearTimeout(safetyTimer.current)
+      safetyTimer.current = setTimeout(() => {
+        setStreaming(false)
+        setChatError('The assistant stopped responding. Please try again.')
+      }, 150_000)
     })
     return unsub
   }, [itemId])
@@ -57,6 +64,7 @@ export default function PlanItemDetail({ itemId, onBack }: Props): React.ReactEl
       const p = payload as { itemId: string; chunk: string; done: boolean; error?: string }
       if (p.itemId !== itemId) return
       if (p.done) {
+        if (safetyTimer.current) { clearTimeout(safetyTimer.current); safetyTimer.current = null }
         setStreaming(false)
         setStreamContent('')
         if (p.error) {
@@ -65,6 +73,11 @@ export default function PlanItemDetail({ itemId, onBack }: Props): React.ReactEl
           api.plan.getThread(itemId).then(setThread)
         }
       } else {
+        if (safetyTimer.current) clearTimeout(safetyTimer.current)
+        safetyTimer.current = setTimeout(() => {
+          setStreaming(false)
+          setChatError('The assistant stopped responding. Please try again.')
+        }, 150_000)
         setStreaming(true)
         setStreamContent((prev) => prev + p.chunk)
       }
@@ -136,6 +149,24 @@ export default function PlanItemDetail({ itemId, onBack }: Props): React.ReactEl
                 onStop={handleStop}
                 sendDisabled={streaming || item.status === 'done' || item.status === 'skipped'}
                 error={chatError}
+                onApproveAction={async (msg, editedPayload) => {
+                  if (!itemId) return
+                  try {
+                    const updated = await api.plan.approveChatAction(itemId, msg.id, editedPayload)
+                    setThread((prev) => prev.map((m) => m.id === msg.id ? { ...m, action: updated } : m))
+                  } catch (e) {
+                    console.error('plan approveChatAction error:', e)
+                  }
+                }}
+                onDismissAction={async (msg) => {
+                  if (!itemId) return
+                  try {
+                    const updated = await api.plan.dismissChatAction(itemId, msg.id)
+                    setThread((prev) => prev.map((m) => m.id === msg.id ? { ...m, action: updated } : m))
+                  } catch (e) {
+                    console.error('plan dismissChatAction error:', e)
+                  }
+                }}
               />
             </div>
           </div>
