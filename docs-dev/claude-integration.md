@@ -100,7 +100,7 @@ export async function streamChat(
 ): Promise<void>
 ```
 
-The model is selected via `selectModel(source, approxLen)` where `approxLen` is the combined char count of the system prompt and all message contents. If the stream fails before any output reaches the client (`code !== 0 && !full`), it is retried once at the escalated tier. User-cancelled streams (`'Cancelled'` error) are never retried.
+The model is selected via `selectModel(source, approxLen)` where `approxLen` is the combined char count of the system prompt and all message contents. If the stream fails before any output reaches the client (`code !== 0 && !full`), it is retried once at the escalated tier. User-cancelled streams (`'Cancelled'` error) and idle-timed-out streams (`'Stream timed out'` error) are never retried.
 
 The `source` param is threaded to `runClaudeStream`, which captures the `result` event from the CLI's NDJSON stream (the event carrying `usage` and `total_cost_usd`) and calls `recordUsage` on process exit.
 
@@ -232,6 +232,8 @@ This clause is appended in `inferIntent` (`inference.ts`) **after** `buildOwnerC
 `UsageSource` labels: `'plan_draft'`, `'routine_digest'`, `'routine_setup'`, `'routine_chat'`, `'plan_chat'`, `'checkin_chat'`, `'checkin_extract'`, `'inference'`, `'memory'`, `'suggest'`, `'chat'`, `'other'`.
 
 ## Changelog
+
+- 2026-06-18 — **Stream idle watchdog in `runClaudeStream`:** Added `STREAM_IDLE_TIMEOUT_MS = 120_000` constant and an idle timer inside `runClaudeStream`. The timer is armed immediately after spawn and resets on every `stdout` data event; if no output arrives for 120 s, the subprocess is killed with SIGTERM and the promise rejects with `'Stream timed out'`. A `settled` flag prevents the close handler from double-settling after the kill. Both the close and error handlers call `clearTimeout(idleTimer)`. The escalation loop in `streamChat` now treats `'Stream timed out'` as terminal (same as `'Cancelled'`) — no retry. Previously `runClaudeStream` was the only spawn path without a watchdog; this closes the gap that caused the "Chat about it" UI to hang forever when the agentic CLI subprocess wedged without producing output.
 
 - 2026-06-18 — **Live MCP in streaming chat (`enableMcp`):** `buildMcpInvocation()` helper extracted from `runClaudeWithMcp` — builds the `--mcp-config` temp file + `--allowedTools` list using `getKnownServerTools()` (survives dead in-process clients via `lastKnownTools` cache in `mcp.ts`). `runClaudeStream` and `streamChat` gain an optional `enableMcp?: boolean` param. When set: `runClaudeStream` calls `await ensureServersConnected()`, calls `buildMcpInvocation()`, appends the CLI flags, and `cleanup()`s the temp file on both close and error. `streamChat` appends `MCP_CHAT_SYSTEM_ADDENDUM` to the system prompt (read-only tool instructions + `<action>` block protocol for write proposals). All chat callers — `handleIntentChat`, `handleRunMessage`, `handlePlanMessage`, `handleCheckInMessage`, check-in briefing — pass `enableMcp: true`. `runClaudeWithMcp` now also uses `buildMcpInvocation()` internally (no behavior change, just deduplication).
 

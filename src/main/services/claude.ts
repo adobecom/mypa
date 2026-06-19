@@ -101,6 +101,13 @@ function claudeEnv(key?: string): NodeJS.ProcessEnv {
 }
 
 /**
+ * If the streaming CLI subprocess produces no stdout for this many milliseconds,
+ * it is killed and the stream resolves as an error. This catches agentic MCP hangs
+ * where the process is alive but produces no output and never closes.
+ */
+const STREAM_IDLE_TIMEOUT_MS = 120_000
+
+/**
  * Single-attempt one-shot Claude call. Public callers go through runClaude(),
  * which wraps this with automatic model selection and escalation on failure.
  */
@@ -285,13 +292,30 @@ async function runClaudeStream(
     let buf = ''
     let stderr = ''
     let cliResult: any = null
+    let settled = false
 
     const entry = { proc, killed: false }
     if (streamId) activeStreams.set(streamId, entry)
 
+    // Idle watchdog: if the subprocess produces no stdout for STREAM_IDLE_TIMEOUT_MS,
+    // kill it and reject. Reset on every data chunk so legitimate long streams are unaffected.
+    const fireIdleTimeout = () => {
+      if (settled) return
+      entry.killed = true
+      proc.kill('SIGTERM')
+      settled = true
+      if (streamId) activeStreams.delete(streamId)
+      mcpCleanup?.()
+      reject(new Error('Stream timed out'))
+    }
+    let idleTimer = setTimeout(fireIdleTimeout, STREAM_IDLE_TIMEOUT_MS)
+
     proc.stderr?.on('data', (data: Buffer) => { stderr += data.toString() })
 
     proc.stdout.on('data', (data: Buffer) => {
+      clearTimeout(idleTimer)
+      idleTimer = setTimeout(fireIdleTimeout, STREAM_IDLE_TIMEOUT_MS)
+
       buf += data.toString()
       const lines = buf.split('\n')
       buf = lines.pop() ?? ''
@@ -301,6 +325,9 @@ async function runClaudeStream(
     })
 
     proc.on('close', (code) => {
+      clearTimeout(idleTimer)
+      if (settled) return
+      settled = true
       if (buf.trim()) {
         full = parseStreamEvent(buf, full, onChunk, (ev) => { cliResult = ev })
       }
@@ -315,6 +342,9 @@ async function runClaudeStream(
       resolve(full)
     })
     proc.on('error', (err) => {
+      clearTimeout(idleTimer)
+      if (settled) return
+      settled = true
       if (streamId) activeStreams.delete(streamId)
       mcpCleanup?.()
       reject(err)
@@ -729,8 +759,9 @@ export async function streamChat(
       onDone(full)
       return
     } catch (err) {
-      // User-cancelled streams must not be retried — the UI has already stopped
-      if ((err as Error).message === 'Cancelled') throw err
+      // User-cancelled or idle-timed-out streams must not be retried
+      const msg = (err as Error).message
+      if (msg === 'Cancelled' || msg === 'Stream timed out') throw err
       const next = escalate(model)
       if (!next) throw err
       console.log(`[claude] stream: escalating ${model} → ${next} (${source})`)

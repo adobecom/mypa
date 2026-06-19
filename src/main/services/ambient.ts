@@ -804,8 +804,10 @@ function buildToolArgs(intent: Intent): Record<string, unknown> {
   if (intent.surface === 'jira') {
     const { _issue_key, body, comment, ...rest } = p
     const clean = Object.fromEntries(Object.entries(rest).filter(([k]) => !k.startsWith('_')))
-    // jira_add_comment typically uses issue_key + comment (body alias)
-    return { ...clean, issue_key: _issue_key, comment: body ?? comment }
+    // Send under both keys: mcp-atlassian tools use either "comment" or "body"
+    // depending on the server version; satisfying both avoids false pre-flight failures.
+    const text = body ?? comment
+    return { ...clean, issue_key: _issue_key, comment: text, body: text }
   }
 
   // Any future surface: strip _ fields and pass the rest verbatim
