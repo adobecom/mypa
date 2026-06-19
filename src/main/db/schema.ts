@@ -295,6 +295,17 @@ export function initSchema(db: Database.Database): void {
   // write-action proposals so the renderer can show Approve/Dismiss buttons (added 2026-06-18)
   tryExec('ALTER TABLE intent_chat_threads ADD COLUMN metadata TEXT')
 
+  // Data normalisation — revert pre-ceiling challenge drift (added 2026-06-18).
+  // Before AUTO_ESCALATE_CEILING was introduced, repeated challenges could escalate a
+  // surface:verb policy all the way to tier 3 (Locked) with tier_locked=0.  Once at
+  // tier 3, resolveTier() treated it as an absolute lock that recordApproval() refused
+  // to lower, making those action intents permanently un-actionable from the UI.
+  // This one-time statement is idempotent: after the ceiling cap is in effect, no new
+  // unlocked tier-3 rows can be created by challenges, so re-running it on subsequent
+  // boots is always a no-op.  Rows with tier_locked=1 are explicit user choices and
+  // are intentionally preserved.
+  db.prepare('UPDATE autonomy_policy SET tier = 2 WHERE tier = 3 AND tier_locked = 0').run()
+
   // Migrate signals from old UNIQUE(surface, external_id, fingerprint) → UNIQUE(surface, external_id).
   // The 3-column constraint allowed duplicate (surface, external_id) rows to accumulate, causing
   // UPDATE to fail when it tried to set a fingerprint that already existed on a sibling row.

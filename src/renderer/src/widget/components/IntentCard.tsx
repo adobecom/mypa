@@ -97,7 +97,12 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
   const hasDraft = ['body', 'text', 'comment', 'message'].some(
     (k) => typeof (intent.payload ?? {})[k] === 'string' && String((intent.payload ?? {})[k]).trim()
   )
-  const [expanded, setExpanded] = useState(hasDraft && intent.required_approval && !TERMINAL_STATUSES.includes(intent.status))
+  const [expanded, setExpanded] = useState(
+    hasDraft &&
+    intent.type !== 'suggestion' && intent.type !== 'flag' &&
+    intent.tier >= 2 &&
+    !TERMINAL_STATUSES.includes(intent.status)
+  )
   const [detailTab, setDetailTab] = useState('why')
   const [challenging, setChallenging] = useState(false)
   const [challengeReason, setChallengeReason] = useState('')
@@ -114,7 +119,10 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
   const api = window.electron
   const isTerminal = TERMINAL_STATUSES.includes(intent.status)
   const isObservation = intent.type === 'suggestion' || intent.type === 'flag'
-  const needsApproval = !isObservation && intent.required_approval && intent.tier >= 2
+  // Show the primary action button for any action the agent will not auto-run (tier >= 2).
+  // required_approval is a model hint that may be false even for actions requiring user
+  // initiation (e.g. tier-3 "Locked" intents), so we do not gate the button on it.
+  const needsApproval = !isObservation && intent.tier >= 2
   const agentWillHandle = !isObservation && !needsApproval && !isTerminal && intent.tier <= 1
 
   // Editable draft — initialized from the payload's body/text/comment/message field

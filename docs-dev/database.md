@@ -379,6 +379,8 @@ Vectors are stored as raw little-endian Float32 BLOBs and similarity search is p
 
 ## Changelog
 
+- 2026-06-18 — **`autonomy_policy` drift normalization:** one-time idempotent `UPDATE autonomy_policy SET tier = 2 WHERE tier = 3 AND tier_locked = 0` runs on every startup (in `schema.ts` after the `tryExec` migration block). Reverts rows whose tier drifted to 3 via repeated challenge feedback (which was previously uncapped) back to tier 2 (Approve). Rows with `tier_locked = 1` (explicit user Locks set via Settings) are intentionally preserved. The statement is safe to re-run: once `AUTO_ESCALATE_CEILING = 2` is in effect, no new `tier = 3 AND tier_locked = 0` rows can be created, so subsequent runs are always no-ops. No schema change.
+
 - 2026-06-18 — **`intent_chat_threads.metadata` column:** additive `ALTER TABLE` migration adds `metadata TEXT` (nullable JSON) to `intent_chat_threads`. Stores `ProposedChatAction` when a chat message carries a pending/executed/dismissed write-action proposal. `dbAddIntentChatMessage` gains optional `metadata?` param and includes it in the INSERT. `dbGetIntentChatThread` parses `metadata` into `message.action`. New helper `dbUpdateIntentChatMessageMetadata(messageId, metadata)` updates the column in-place (used by `approveChatAction`/`dismissChatAction`).
 
 - 2026-06-17 — **`intent_threads` deprecated:** the standalone Suggest re-proposal conversation table (`intent_threads`) is no longer written to — the Suggest flow was merged into the streaming Chat panel. No schema change; existing rows are preserved. All new conversation messages go to `intent_chat_threads`.
