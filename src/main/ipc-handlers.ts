@@ -37,7 +37,7 @@ import { reconnectServer, getServerStatus, connectAllServers, disconnectAllServe
 import { startDeviceFlow, pollDeviceFlow, startPkceFlow } from './services/oauth'
 import { detectClaudeMcpServers } from './services/claude-import'
 import { executeRoutine, handleRunMessage } from './services/routines'
-import { createPlanDraft, confirmPlanDraft, updatePlanItemStatus, deletePlanItem, handlePlanMessage } from './services/plan'
+import { createPlanDraft, confirmPlanDraft, updatePlanItemStatus, deletePlanItem, handlePlanMessage, approvePlanAction, dismissPlanAction } from './services/plan'
 import { generateRoutineSetup, cancelStream, detectClaudeBin } from './services/claude'
 import { refreshSchedules, refreshCheckinSchedule, stopScheduler } from './services/cron'
 import { startCheckIn, handleCheckInMessage, endCheckIn, cancelCheckinStream } from './services/checkin'
@@ -129,6 +129,18 @@ export function registerIpcHandlers(
     } else {
       win.webContents.once('did-finish-load', send)
     }
+  })
+
+  ipcMain.handle('plan:approve-chat-action', async (
+    _e, itemId: string, messageId: string, editedPayload?: Record<string, unknown>
+  ) => {
+    return approvePlanAction(itemId, messageId, editedPayload)
+  })
+
+  ipcMain.handle('plan:dismiss-chat-action', async (
+    _e, itemId: string, messageId: string
+  ) => {
+    return dismissPlanAction(itemId, messageId)
   })
 
   // ─── Routines ──────────────────────────────────────────────────────────────

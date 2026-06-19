@@ -604,6 +604,10 @@ export interface IpcApi {
     cancelStream(itemId: string): Promise<void>
     getItem(itemId: string): Promise<PlanItem | null>
     openInMainWindow(itemId: string): Promise<void>
+    /** Approve and execute a pending write action proposed in a plan-item chat message. */
+    approveChatAction(itemId: string, messageId: string, editedPayload?: Record<string, unknown>): Promise<ProposedChatAction>
+    /** Dismiss a pending write action proposed in a plan-item chat message. */
+    dismissChatAction(itemId: string, messageId: string): Promise<ProposedChatAction>
   }
   routines: {
     getAll(): Promise<Routine[]>

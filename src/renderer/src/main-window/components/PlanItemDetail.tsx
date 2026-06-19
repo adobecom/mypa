@@ -149,6 +149,24 @@ export default function PlanItemDetail({ itemId, onBack }: Props): React.ReactEl
                 onStop={handleStop}
                 sendDisabled={streaming || item.status === 'done' || item.status === 'skipped'}
                 error={chatError}
+                onApproveAction={async (msg, editedPayload) => {
+                  if (!itemId) return
+                  try {
+                    const updated = await api.plan.approveChatAction(itemId, msg.id, editedPayload)
+                    setThread((prev) => prev.map((m) => m.id === msg.id ? { ...m, action: updated } : m))
+                  } catch (e) {
+                    console.error('plan approveChatAction error:', e)
+                  }
+                }}
+                onDismissAction={async (msg) => {
+                  if (!itemId) return
+                  try {
+                    const updated = await api.plan.dismissChatAction(itemId, msg.id)
+                    setThread((prev) => prev.map((m) => m.id === msg.id ? { ...m, action: updated } : m))
+                  } catch (e) {
+                    console.error('plan dismissChatAction error:', e)
+                  }
+                }}
               />
             </div>
           </div>

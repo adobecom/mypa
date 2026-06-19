@@ -132,6 +132,22 @@ export default function PlanItemCard({
               onStop={handleStop}
               sendDisabled={streaming}
               error={chatError}
+              onApproveAction={async (msg, editedPayload) => {
+                try {
+                  const updated = await api.plan.approveChatAction(item.id, msg.id, editedPayload)
+                  setThread((prev) => prev.map((m) => m.id === msg.id ? { ...m, action: updated } : m))
+                } catch (e) {
+                  console.error('plan approveChatAction error:', e)
+                }
+              }}
+              onDismissAction={async (msg) => {
+                try {
+                  const updated = await api.plan.dismissChatAction(item.id, msg.id)
+                  setThread((prev) => prev.map((m) => m.id === msg.id ? { ...m, action: updated } : m))
+                } catch (e) {
+                  console.error('plan dismissChatAction error:', e)
+                }
+              }}
             />
           </div>
         )}

@@ -30,6 +30,8 @@ Manage plan items and their chat threads.
 | `getThread` | `(itemId) → ChatMessage[]` | Fetch the chat history for a plan item |
 | `cancelStream` | `(itemId) → void` | Cancel an active streaming response |
 | `openInMainWindow` | `(itemId) → void` | Open main window and navigate to the plan item's full chat view |
+| `approveChatAction` | `(itemId, messageId, editedPayload?) → ProposedChatAction` | Approve and execute a pending write action proposed in a plan-item chat message |
+| `dismissChatAction` | `(itemId, messageId) → ProposedChatAction` | Dismiss a pending write action in a plan-item chat message (no execution) |
 
 ### `routines`
 
@@ -247,6 +249,8 @@ Manage PA check-in sessions and their chat threads.
 | `openInMainWindow` | `(checkinId?) → void` | Open main window on Check-in page, expanding the given session |
 
 ## Changelog
+
+- 2026-06-19 — **Plan-chat write-action approval:** `plan.approveChatAction(itemId, messageId, editedPayload?)` and `plan.dismissChatAction(itemId, messageId)` added to `IpcApi.plan`. IPC channels: `plan:approve-chat-action`, `plan:dismiss-chat-action`. `PlanItemCard` and `PlanItemDetail` now pass `onApproveAction`/`onDismissAction` to `<ChatThread>`.
 
 - 2026-06-18 — **Live MCP in chat + in-chat write actions:** All streaming chat paths (`handleIntentChat`, `handleRunMessage`, `handlePlanMessage`, `handleCheckInMessage`, check-in briefing) now pass `enableMcp: true` to `streamChat`, which wires `--mcp-config` + `--allowedTools` into the spawned claude CLI. Read-only tools are pre-approved; the allowed-tools list is built from `getKnownServerTools()` (survives dead in-process clients via `lastKnownTools` cache). When the model proposes a write action in an intent chat via `<action>{...}</action>`, mypa parses it post-stream, merges parent-intent routing identifiers, computes the trust tier, and either auto-executes (tier 0) or persists it as a pending action on the chat message (`intent_chat_threads.metadata`). New IPC: `ambient.approveChatAction(intentId, messageId, editedPayload?)` and `ambient.dismissChatAction(intentId, messageId)`. New push channels `ambient:chat-message` and `ambient:chat-user-message` added to the typed `on()` union. `ChatMessage` gains optional `action?: ProposedChatAction`; renderer shows Approve/Dismiss chips with editable draft text.
 

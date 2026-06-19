@@ -22,6 +22,8 @@ import {
   dbAddIntentChatMessage,
   dbGetIntentChatThread,
   dbUpdateIntentChatMessageMetadata,
+  dbGetPlanThread,
+  dbUpdatePlanMessageMetadata,
 } from '../db/index'
 import { readConfig } from './config'
 import { violatesScope } from './scope'
@@ -746,7 +748,11 @@ function enrichPayloadForRouting(obj: IntentObject, focusNodes: GraphNode[]): vo
 // Verb → MCP tool mapping. Only mapped (surface, verb) pairs may be executed.
 // verbToTool returns null for unmapped pairs to prevent arbitrary tool invocation.
 const VERB_TO_TOOL: Record<string, Record<string, string>> = {
-  github: { comment: 'add_issue_comment', label: 'add_labels_to_issue' },
+  github: {
+    comment: 'add_issue_comment',
+    label:   'add_labels_to_issue',
+    approve: 'create_pull_request_review',
+  },
   jira:   { comment: 'jira_add_comment' },
   slack:  { reply: 'conversations_add_message', send: 'conversations_add_message' }
 }
@@ -790,15 +796,32 @@ function buildToolArgs(intent: Intent): Record<string, unknown> {
   }
 
   if (intent.surface === 'github') {
-    const { _owner, _repo, _issue_number, body, labels, ...rest } = p
+    const {
+      _owner, _repo, _issue_number,
+      // Explicit fallback fields the model may provide (no underscore prefix)
+      owner: payloadOwner, repo: payloadRepo,
+      issue_number: payloadIssueNumber, pull_number: payloadPullNumber,
+      body, labels,
+      ...rest
+    } = p
     const clean = Object.fromEntries(Object.entries(rest).filter(([k]) => !k.startsWith('_')))
-    const issueNum = _issue_number !== undefined ? Number(_issue_number) : undefined
+
+    // Routing: _-prefixed injected values win; model-provided payload values are the fallback
+    const owner = (_owner as string | undefined) ?? (payloadOwner as string | undefined)
+    const repo  = (_repo  as string | undefined) ?? (payloadRepo  as string | undefined)
+    const rawNum = _issue_number ?? payloadIssueNumber ?? payloadPullNumber
+    const issueNum = rawNum !== undefined ? Number(rawNum) : undefined
+
     if (intent.verb === 'label') {
       // add_labels_to_issue requires owner, repo, issue_number, labels
-      return { ...clean, owner: _owner, repo: _repo, issue_number: issueNum, labels: labels ?? [] }
+      return { ...clean, owner, repo, issue_number: issueNum, labels: labels ?? [] }
     }
-    // add_issue_comment and other verbs (close, assign, merge): owner + repo + issue_number + body
-    return { ...clean, owner: _owner, repo: _repo, issue_number: issueNum, body }
+    if (intent.verb === 'approve') {
+      // create_pull_request_review — PRs use pull_number (same value as issue_number for PRs)
+      return { ...clean, owner, repo, pull_number: issueNum, event: 'APPROVE', ...(body ? { body } : {}) }
+    }
+    // add_issue_comment and other verbs: owner + repo + issue_number + body
+    return { ...clean, owner, repo, issue_number: issueNum, body }
   }
 
   if (intent.surface === 'jira') {
@@ -1054,6 +1077,127 @@ async function executeChatAction(
 // Regex to detect <action>{...}</action> blocks emitted by the model.
 const ACTION_BLOCK_RE = /<action>([\s\S]*?)<\/action>/g
 
+// ─── Typed-approval helpers ───────────────────────────────────────────────────
+
+/** Phrases treated as "yes, execute the pending action". */
+const AFFIRMATIVE_RE = /^\s*(go ahead|approve it|approve|yes do it|yes|do it|send it|post it|ship it|confirm|go for it)\s*\.?\s*$/i
+
+/** Phrases treated as "no, dismiss the pending action". */
+const DISMISSAL_RE = /^\s*(no|cancel|don'?t|don't|do not|dismiss|nevermind|never mind|stop|abort|skip it)\s*\.?\s*$/i
+
+/** Return true if the user message is an unambiguous short affirmative. */
+export function isAffirmative(text: string): boolean { return AFFIRMATIVE_RE.test(text.trim()) }
+
+/** Return true if the user message is an unambiguous short dismissal. */
+export function isDismissal(text: string): boolean { return DISMISSAL_RE.test(text.trim()) }
+
+/**
+ * Return the most recent pending-action message in a thread, or null.
+ * Only messages with action.status === 'pending' are eligible.
+ */
+export function findLatestPendingAction(thread: ChatMessage[]): ChatMessage | null {
+  for (let i = thread.length - 1; i >= 0; i--) {
+    const msg = thread[i]
+    if (msg.action?.status === 'pending') return msg
+  }
+  return null
+}
+
+/**
+ * Parse <action> blocks out of one response segment, strip them from visible text,
+ * and either auto-execute (tier 0) or persist a pending chip (tier ≥ 1).
+ *
+ * @param seg              - raw streamed segment (may contain <action>…</action>)
+ * @param routingPayload   - _ -prefixed routing identifiers from the parent context
+ *                           (intent.payload for intent chat; {} for plan chat where
+ *                            the model supplies routing in the payload itself)
+ * @param persistAssistant - save the clean text and action chips to the DB
+ *                           (function receives content + optional metadata)
+ * @param logId            - label for console warnings (e.g. "intent:abc" or "plan:xyz")
+ * @returns the cleaned segment text (action blocks stripped)
+ */
+export async function stageChatActionsFromSegment(
+  seg: string,
+  routingPayload: Record<string, unknown>,
+  persistAssistant: (content: string, metadata?: Record<string, unknown>) => void,
+  logId: string
+): Promise<string> {
+  const actions: { surface: string; verb: string; target: string; payload: Record<string, unknown> }[] = []
+  // Reset lastIndex between calls (global regex retains state)
+  ACTION_BLOCK_RE.lastIndex = 0
+  const cleanSeg = seg.replace(ACTION_BLOCK_RE, (_, json) => {
+    try {
+      const parsed = JSON.parse(json.trim())
+      if (parsed.surface && parsed.verb) actions.push(parsed)
+    } catch { /* invalid JSON — ignore */ }
+    return ''
+  }).trim()
+
+  // Persist the clean text (empty if the segment was only action tags)
+  if (cleanSeg) {
+    persistAssistant(cleanSeg)
+  }
+
+  // Stage each action
+  for (const action of actions) {
+    if (!verbToTool(action.surface, action.verb)) {
+      console.warn(`[ambient] chat(${logId}): ignoring unsupported action ${action.surface}:${action.verb}`)
+      continue
+    }
+
+    // Merge routing identifiers from parent context (win over model-provided routing)
+    const routingEntries = Object.entries(routingPayload).filter(([k]) => k.startsWith('_'))
+    const mergedPayload: Record<string, unknown> = {
+      ...Object.fromEntries(routingEntries),
+      ...action.payload
+    }
+
+    // Compute trust tier using a synthesized IntentObject
+    const synthObj: IntentObject = {
+      type: 'action',
+      confidence: 0.8,
+      urgency: 0.5,
+      proposed_action: {
+        surface: action.surface as IntentSurface,
+        verb: action.verb,
+        target: action.target ?? '',
+        payload: mergedPayload
+      },
+      rationale: action.target ?? `${action.surface}:${action.verb}`,
+      reversibility: 'reversible',
+      required_approval: true
+    }
+    const tier = resolveTier(synthObj)
+
+    if (shouldAutoExecute(tier) && AUTO_EXECUTABLE.has(`${action.surface}:${action.verb}`)) {
+      // Tier 0: auto-execute, append a result note
+      try {
+        await ensureServersConnected()
+        const result = await executeChatAction(action.surface, action.verb, mergedPayload)
+        recordExecution(`${action.surface}:${action.verb}`)
+        const note = `Action completed: ${action.surface}:${action.verb} — ${result.slice(0, 200)}`
+        persistAssistant(note)
+      } catch (execErr: any) {
+        const errNote = `Action failed: ${execErr?.message ?? String(execErr)}`
+        persistAssistant(errNote)
+      }
+    } else {
+      // Tier ≥ 1: surface for approval — persist an empty-content message with action metadata
+      const actionMeta: ProposedChatAction = {
+        surface: action.surface as IntentSurface,
+        verb: action.verb,
+        target: action.target ?? '',
+        payload: mergedPayload,
+        tier,
+        status: 'pending'
+      }
+      persistAssistant('', actionMeta as unknown as Record<string, unknown>)
+    }
+  }
+
+  return cleanSeg
+}
+
 /**
  * Handle one message in a streaming "Chat about it" conversation for an intent.
  *
@@ -1077,9 +1221,63 @@ export async function handleIntentChat(intentId: string, userMessage: string): P
   if (!intent) throw new Error(`Intent ${intentId} not found`)
 
   const userMsg = dbAddIntentChatMessage(intentId, 'user', userMessage)
+
+  // Load the full thread (includes the just-added user message at the end)
+  const fullThread = dbGetIntentChatThread(intentId)
+  // History for streaming = everything except the last message (the user turn we just added)
+  const rawHistory = fullThread.slice(0, -1)
+
+  // ── Fix 2: typed approval / dismissal ────────────────────────────────────
+  // Only activate if the LAST message in the thread is a pending action (i.e., it was
+  // the immediately preceding message). This avoids silently approving an older stale
+  // pending chip when the user is replying to a newer conversational message.
+  const lastMsg = rawHistory.length > 0 ? rawHistory[rawHistory.length - 1] : null
+  const pendingMsg = lastMsg?.action?.status === 'pending' ? lastMsg : null
+  if (pendingMsg && isAffirmative(userMessage)) {
+    try {
+      const result = await approveChatAction(intentId, pendingMsg.id)
+      const note = result.status === 'executed'
+        ? `Done — ${result.surface}:${result.verb} executed. ${result.resultText ? result.resultText.slice(0, 300) : ''}`.trim()
+        : `Action ${result.status}${result.resultText ? ': ' + result.resultText.slice(0, 300) : ''}.`
+      dbAddIntentChatMessage(intentId, 'assistant', note)
+    } catch (err: any) {
+      dbAddIntentChatMessage(intentId, 'assistant', `Failed to execute action: ${err?.message ?? String(err)}`)
+    }
+    // Broadcast user message and done together — no streaming indicator needed for this path
+    broadcast('ambient:chat-user-message', { intentId, message: userMsg })
+    broadcast('ambient:chat-message', { intentId, chunk: '', done: true })
+    return
+  }
+  if (pendingMsg && isDismissal(userMessage)) {
+    dismissChatAction(intentId, pendingMsg.id)
+    dbAddIntentChatMessage(intentId, 'assistant', 'Action dismissed — nothing was posted.')
+    broadcast('ambient:chat-user-message', { intentId, message: userMsg })
+    broadcast('ambient:chat-message', { intentId, chunk: '', done: true })
+    return
+  }
+
+  // Normal streamed path: broadcast user message to start the streaming indicator
   broadcast('ambient:chat-user-message', { intentId, message: userMsg })
 
-  const history = dbGetIntentChatThread(intentId).slice(0, -1)
+  // ── Fix 1: render action-bearing messages into history the model can read ──
+  // Action-only messages have empty content — replace with a synthetic status line
+  // so the model knows what was proposed and what its current state is.
+  const history = rawHistory.map((m) => {
+    const action = m.action
+    if (!action) return m
+    const statusDesc: Record<string, string> = {
+      pending:   'queued — awaiting the user\'s Approve/Dismiss (NOT yet executed)',
+      executed:  'executed successfully',
+      failed:    'failed to execute',
+      dismissed: 'dismissed by the user',
+    }
+    const desc = statusDesc[action.status] ?? action.status
+    const resultNote = action.resultText ? ` (${action.resultText.slice(0, 150)})` : ''
+    return {
+      ...m,
+      content: `[proposed ${action.surface}:${action.verb} on "${action.target}" — status: ${desc}${resultNote}]`
+    }
+  })
 
   // Build context string from the intent's proposal and context packet
   const cp = intent.context_packet as Record<string, unknown> | undefined
@@ -1116,91 +1314,19 @@ export async function handleIntentChat(intentId: string, userMessage: string): P
       true  // enableMcp — wire read-only tools and the write-action protocol
     )
 
-    // Parse <action> blocks from the full streamed text.
-    // Strip them from the visible text; process them as write-action proposals.
-    const win = getWidgetWin?.() ?? null
+    // Parse <action> blocks from each streamed segment.
+    // Strip them from visible text; auto-execute or surface for approval.
+    const routingPayload = (intent.payload ?? {}) as Record<string, unknown>
     const toSave = segments.filter((s) => s.trim())
 
     for (const seg of toSave) {
       if (!seg.trim()) continue
-
-      // Extract any action blocks from this segment
-      const actions: { surface: string; verb: string; target: string; payload: Record<string, unknown> }[] = []
-      const cleanSeg = seg.replace(ACTION_BLOCK_RE, (_, json) => {
-        try {
-          const parsed = JSON.parse(json.trim())
-          if (parsed.surface && parsed.verb) actions.push(parsed)
-        } catch { /* invalid JSON — ignore */ }
-        return ''
-      }).trim()
-
-      // Persist the clean text (action blocks stripped)
-      // Use cleanSeg directly: if the segment was only action tags (valid or malformed),
-      // cleanSeg is '' and nothing is persisted — avoids leaking raw <action> markup.
-      const persistContent = cleanSeg
-      if (persistContent.trim()) {
-        dbAddIntentChatMessage(intentId, 'assistant', persistContent)
-      }
-
-      // Process each proposed action
-      for (const action of actions) {
-        if (!verbToTool(action.surface, action.verb)) {
-          // Unsupported surface:verb — ignore silently (won't execute arbitrary tools)
-          console.warn(`[ambient] chat: ignoring unsupported action ${action.surface}:${action.verb}`)
-          continue
-        }
-
-        // Merge routing identifiers from the parent intent's payload
-        const routingEntries = Object.entries((intent.payload ?? {}) as Record<string, unknown>)
-          .filter(([k]) => k.startsWith('_'))
-        const mergedPayload: Record<string, unknown> = {
-          ...Object.fromEntries(routingEntries),
-          ...action.payload
-        }
-
-        // Compute trust tier using a synthesized IntentObject
-        const synthObj: IntentObject = {
-          type: 'action',
-          confidence: 0.8,
-          urgency: 0.5,
-          proposed_action: {
-            surface: action.surface as IntentSurface,
-            verb: action.verb,
-            target: action.target ?? '',
-            payload: mergedPayload
-          },
-          rationale: action.target ?? `${action.surface}:${action.verb}`,
-          reversibility: 'reversible',
-          required_approval: true
-        }
-        const tier = resolveTier(synthObj)
-
-        if (shouldAutoExecute(tier) && AUTO_EXECUTABLE.has(`${action.surface}:${action.verb}`)) {
-          // Tier 0: auto-execute, append a system note with the result
-          try {
-            await ensureServersConnected()
-            const result = await executeChatAction(action.surface, action.verb, mergedPayload)
-            recordExecution(`${action.surface}:${action.verb}`)
-            const note = `Action completed: ${action.surface}:${action.verb} — ${result.slice(0, 200)}`
-            dbAddIntentChatMessage(intentId, 'assistant', note)
-          } catch (execErr: any) {
-            const errNote = `Action failed: ${execErr?.message ?? String(execErr)}`
-            dbAddIntentChatMessage(intentId, 'assistant', errNote)
-          }
-        } else {
-          // Tier ≥ 1: surface for approval. Persist the (empty) assistant message
-          // with action metadata so the renderer can show Approve / Dismiss buttons.
-          const actionMeta: ProposedChatAction = {
-            surface: action.surface as IntentSurface,
-            verb: action.verb,
-            target: action.target ?? '',
-            payload: mergedPayload,
-            tier,
-            status: 'pending'
-          }
-          dbAddIntentChatMessage(intentId, 'assistant', '', actionMeta as unknown as Record<string, unknown>)
-        }
-      }
+      await stageChatActionsFromSegment(
+        seg,
+        routingPayload,
+        (content, metadata) => dbAddIntentChatMessage(intentId, 'assistant', content, metadata),
+        `intent:${intentId}`
+      )
     }
 
     broadcast('ambient:chat-message', { intentId, chunk: '', done: true })
@@ -1286,6 +1412,59 @@ export function dismissChatAction(
 
   const updated: ProposedChatAction = { ...msg.action, status: 'dismissed' }
   dbUpdateIntentChatMessageMetadata(messageId, updated as unknown as Record<string, unknown>)
+  return updated
+}
+
+/**
+ * Approve and execute a pending write action in a plan-item chat thread.
+ * Mirrors approveChatAction but reads from plan_item_threads and does not
+ * reference an intent (no action_log entry — plan items have no intent FK).
+ */
+export async function approvePlanAction(
+  itemId: string,
+  messageId: string,
+  editedPayload?: Record<string, unknown>
+): Promise<ProposedChatAction> {
+  const thread = dbGetPlanThread(itemId)
+  const msg = thread.find((m) => m.id === messageId)
+  if (!msg?.action) throw new Error(`Plan message ${messageId} not found or has no pending action`)
+
+  const action = msg.action
+  if (action.status !== 'pending') return action  // idempotent
+
+  const finalPayload = editedPayload && Object.keys(editedPayload).length > 0
+    ? { ...action.payload, ...editedPayload }
+    : action.payload
+
+  let updated: ProposedChatAction
+  try {
+    await ensureServersConnected()
+    const resultText = await executeChatAction(action.surface, action.verb, finalPayload)
+    recordApproval(`${action.surface}:${action.verb}`)
+    updated = { ...action, payload: finalPayload, status: 'executed', resultText: resultText.slice(0, 500) }
+  } catch (err: any) {
+    updated = { ...action, status: 'failed', resultText: (err?.message ?? String(err)).slice(0, 500) }
+  }
+
+  dbUpdatePlanMessageMetadata(messageId, updated as unknown as Record<string, unknown>)
+  return updated
+}
+
+/**
+ * Dismiss a pending write action in a plan-item chat thread (no execution).
+ */
+export function dismissPlanAction(
+  itemId: string,
+  messageId: string
+): ProposedChatAction {
+  const thread = dbGetPlanThread(itemId)
+  const msg = thread.find((m) => m.id === messageId)
+  if (!msg?.action) throw new Error(`Plan message ${messageId} not found or has no pending action`)
+
+  if (msg.action.status !== 'pending') return msg.action  // idempotent
+
+  const updated: ProposedChatAction = { ...msg.action, status: 'dismissed' }
+  dbUpdatePlanMessageMetadata(messageId, updated as unknown as Record<string, unknown>)
   return updated
 }
 
