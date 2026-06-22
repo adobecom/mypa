@@ -192,7 +192,19 @@ Provider configurations (client IDs, scopes, token endpoints) live in `src/share
 | `oauthConnectedAt` | ISO timestamp of last successful auth |
 | `oauthStaleDays` | Days since last auth (if stale, show re-auth prompt) |
 
+## MCP in the Agent SDK
+
+Since the Agent SDK migration, MCP servers are passed to AI calls via `options.mcpServers` on the SDK query — not via a `--mcp-config` temp file written to disk. `agent.ts` calls `getKnownServerTools()` from `mcp.ts` to build the server list; the same `lastKnownTools` cache that survives dead in-process clients is used, so live MCP state is not required for the list to be non-empty.
+
+The `canUseTool` callback in `agent.ts` replaces the old `--allowedTools` CLI flag:
+- Read-only tool names (prefix: `get`, `list`, `search`, `read`, `fetch`, `find`, `describe`, `view`, `show`, `check`, `query`, `inspect`) are auto-allowed.
+- Write tools block the stream and broadcast `chat:tool-approval-request` until the user responds via `resolveToolApproval()`.
+
+The in-process `ask_user` MCP server (created by `buildAskUserServer`) is registered under server key `mypa_builtin` and is always allowed by `canUseTool`.
+
 ## Changelog
+
+- 2026-06-22 — **Agent SDK migration — MCP wiring changed:** MCP servers are now passed via `options.mcpServers` in the SDK query (not via a `--mcp-config` temp file). The `--allowedTools` CLI flag is replaced by the `canUseTool` SDK callback in `agent.ts` (read-only prefix auto-allow; write tools await user approval via `chat:tool-approval-request`). A new in-process `ask_user` MCP server (`mypa_builtin`) is registered alongside the user's configured servers for every chat stream.
 
 - 2026-06-17 — **Fix "Test connection" false-negative + stderr diagnostics:** `mcp.ts` — `reconnectServer` now probes the live client with `listTools` when the server is already connected (non-destructive); only falls back to a full `connectServer` call when the server is not in the Map or the probe fails. This fixes the symptom where clicking "Test connection" on a healthy Slack server reported `connect slack timed out after 30s` because the old implementation always called `disconnectServer` first, killing the working subprocess. Additionally, `connectServer` now uses `stderr: 'pipe'` on the `StdioClientTransport` with a re-emitting line listener (`[mcp:<name>]` prefix) and a 30-line ring buffer; genuine timeouts append the last 5 buffered stderr lines to the error returned to the UI.
 

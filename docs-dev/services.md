@@ -4,19 +4,37 @@ All services live in `src/main/services/`. They run in the Node.js main process 
 
 ---
 
-## `claude.ts` — Claude CLI integration
+## `agent.ts` — Claude Agent SDK integration
 
-Spawns the `claude` CLI for all AI work. See [claude-integration.md](claude-integration.md) for the detailed write-up.
+Implements all AI calls using `@anthropic-ai/claude-agent-sdk` directly (no subprocess spawn). See [claude-integration.md](claude-integration.md) for the detailed write-up.
 
 **Key exports:**
 
 | Export | Description |
 |---|---|
-| `detectClaudeBin()` | Non-throwing resolver: returns the absolute path to the `claude` CLI or `null`; used by the runtime and by `setup:check-prerequisites` / `setup:get-health` so both code paths use identical detection logic |
-| `runClaude(systemPrompt, userPrompt, source?, timeoutMs?, expectJson?)` | One-shot JSON completion; model auto-selected via `model-router.ts`; escalates to next tier on failure; records usage per attempt |
-| `runClaudeWithMcp(systemPrompt, userPrompt, source?)` | One-shot with live MCP access; writes a temp `--mcp-config` file from connected servers, passes a read-only `--allowedTools` allowlist (tools whose names start with `get`/`list`/`search`/`read`/`fetch`/`view`/`find`/`show`/`describe`/`query`/`lookup`/`check`), then falls back to `runClaude` if no servers are connected |
-| `streamChat(history, userMessage, onChunk, onDone, rawContext?, streamId?, source?)` | Streaming multi-turn chat; records usage on completion |
-| `cancelStream(streamId)` | Kill an active stream by ID; returns `true` if found |
+| `runAgent(systemPrompt, userPrompt, source?, timeoutMs?, expectJson?)` | One-shot completion via SDK `query()` with `maxTurns:1`; model auto-selected via `model-router.ts`; escalates to next tier on failure; records usage per attempt |
+| `runAgentWithMcp(systemPrompt, userPrompt, source?)` | One-shot with live MCP servers passed via `options.mcpServers`; falls back to `runAgent` if no servers are connected |
+| `streamAgentChat(history, userMessage, onChunk, onDone, rawContext?, streamId?, source?, enableMcp?)` | Streaming multi-turn chat via async generator; when `enableMcp` is true, MCP servers are wired in via `options.mcpServers` and `canUseTool` gates write tools on user approval |
+| `cancelAgentChat(streamId)` | Interrupt an active stream via `Query.interrupt()`; returns `true` if found |
+| `resolveToolApproval(approvalId, allow, editedInput?)` | Unblock a pending `canUseTool` write-gate; called by the `chat:resolve-tool-approval` IPC handler |
+| `resolveQuestion(questionId, answer)` | Unblock a pending `ask_user` tool invocation; called by the `chat:answer-question` IPC handler |
+| `buildAskUserServer(streamId)` | Internal: creates the in-process MCP server exposing the `ask_user` tool |
+
+---
+
+## `claude.ts` — thin shim layer
+
+Forwards calls to `agent.ts`. The subprocess-spawn code has been removed. See [claude-integration.md](claude-integration.md) for details.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `detectClaudeBin()` | Non-throwing resolver: returns the absolute path to the `claude` CLI or `null`; used by `setup:check-prerequisites` / `setup:get-health` |
+| `runClaude(systemPrompt, userPrompt, source?, timeoutMs?, expectJson?)` | Shim → `runAgent(...)` |
+| `runClaudeWithMcp(systemPrompt, userPrompt, source?)` | Shim → `runAgentWithMcp(...)` |
+| `streamChat(history, userMessage, onChunk, onDone, rawContext?, streamId?, source?, enableMcp?)` | Shim → `streamAgentChat(...)` |
+| `cancelStream(streamId)` | Shim → `cancelAgentChat(streamId)` |
 | `generatePlanDraft(intent)` | Parse free-text intent → `PlanDraft` |
 | `generateRoutineDigest(name, promptTemplate, rawOutput)` | Summarize MCP output → `RoutineDigest` (`{ summary, body }`) |
 | `generateRoutineSetup(intent, servers)` | Natural-language intent → validated `RoutineSetupDraft` |
@@ -314,6 +332,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-06-22 — **Agent SDK migration complete:** added `agent.ts` as the new AI entry point (`@anthropic-ai/claude-agent-sdk`); `claude.ts` is now a thin shim layer forwarding `runClaude` → `runAgent`, `streamChat` → `streamAgentChat`, `cancelStream` → `cancelAgentChat`; subprocess spawn code removed from `claude.ts`; removed `stageChatActionsFromSegment`, `executeChatAction`, and `ACTION_BLOCK_RE` from `ambient.ts` (superseded by SDK `canUseTool` gating).
 
 - 2026-06-19 — **Chat write-action correctness + plan-chat parity (`ambient.ts`, `plan.ts`, `claude.ts`, `db/index.ts`, `db/schema.ts`).** Four fixes: (1) `MCP_CHAT_SYSTEM_ADDENDUM` rewritten — the model is told emitting an `<action>` block only queues the write (never posts it) and must say "queued for approval" rather than claiming success. `github:approve` added to the valid pairs list. (2) Typed approval: at the start of `handleIntentChat` and `handlePlanMessage`, `findLatestPendingAction` + `isAffirmative`/`isDismissal` detect a short affirmative/dismissal reply ("go ahead", "approve", "yes", "no", "cancel", etc.); if a pending action is in the thread, `approveChatAction`/`dismissChatAction` is called directly and the function returns without streaming — the chip flips to `executed`/`dismissed` and a confirmation note is appended. (3) Action-state rendered into model history: `rawHistory` is mapped before being passed to `streamChat`; messages with a `.action` field get their empty `content` replaced with a synthetic status line (`[proposed github:comment — status: pending, awaiting the user's Approve/Dismiss (NOT yet executed)]`), so the model has accurate state and stops hallucinating "done". (4) `github:approve` verb: `VERB_TO_TOOL.github` gains `approve → create_pull_request_review`; `buildToolArgs` GitHub branch gains an `approve` case producing `{ owner, repo, pull_number, event: 'APPROVE', body? }`; routing falls back to model-provided `owner`/`repo`/`issue_number`/`pull_number` when `_`-prefixed injected values are absent. Plan-chat parity: `stageChatActionsFromSegment` extracted as an exported shared helper from the intent-chat action-processing block; `handlePlanMessage` now calls it for every segment (strips action tags, stages chips) instead of saving raw segments. `approvePlanAction`/`dismissPlanAction` added to `ambient.ts` (mirrors intent equivalents; no `action_log` entry). `plan_item_threads` gains `metadata TEXT` column (additive migration). `dbAddPlanMessage`/`dbGetPlanThread`/`dbUpdatePlanMessageMetadata` in `db/index.ts` updated to handle the new column.
 

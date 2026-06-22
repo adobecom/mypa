@@ -235,13 +235,17 @@ Located in `src/renderer/src/` (shared between widget and main window):
 
 | Component | Description |
 |---|---|
-| `ChatThread` | Renders a `ChatMessage[]` history with a streaming-capable input box |
+| `ChatThread` | Renders a `ChatMessage[]` history with a streaming-capable input box. When `chat:tool-approval-request` fires during a stream, an `InlineToolApproval` block appears inline in the live message; when `chat:ask-question` fires, a `QuestionChip` cluster appears. Both block the stream until resolved. |
+| `InlineToolApproval` | Rendered inside `ChatThread` when a `PendingToolApproval` push event arrives. Shows the tool name and proposed arguments, with Approve / Deny buttons (and an optional editable input for the payload). Clicking Approve calls `window.electron.chat.resolveToolApproval(approvalId, true, editedInput?)`; Deny calls it with `allow: false`. Disappears once the stream resumes. |
+| `QuestionChip` | Rendered inside `ChatThread` when a `PendingQuestion` push event arrives. Shows the model's prompt and one clickable chip per option. Clicking a chip calls `window.electron.chat.answerQuestion(questionId, answer)` and the stream resumes. Both single-select and multi-select modes are supported. |
 | `cronUtils.ts` | Human-readable cron expression parser (used in `RoutineForm`) |
 | `components/MarkdownText.tsx` | Renders a markdown string via `ReactMarkdown` + `remark-gfm` wrapped in `<div className="md-text">`. Handles external link clicks via `window.electron.system.openExternal`. Used in `IntentCard`, `DigestView`, and `ChatThread`. |
 | `components/Tabs.tsx` | Reusable underline-tab strip. Props: `items: TabItem[]`, `active: string`, `onChange: (id: string) => void`. `TabItem` has `id`, `label`, optional `icon` and `count`. Active tab gets accent underline + bold; count shows a colored pill. CSS classes: `.tabs`, `.tab`, `.tab--active`, `.tab__count`, `.tab__count--active` (in `components.css`). |
 | `components.css` | Shared component stylesheet imported by both renderer entry points before their window-specific `index.css`. Contains `.routine-card*`, `.intent-card*`, `.intent-detail*`, `.intent-chip*`, `.plan-review-card*`, `.review-field*`, `.section-header`, `.section-subheader`, `.tabs`, `.tab*`. |
 
 ## Changelog
+
+- 2026-06-22 — **Agent SDK migration — `InlineToolApproval` and `QuestionChip` in ChatThread:** `ChatThread.tsx` now handles two new push events from `agent.ts`. `chat:tool-approval-request` renders an `InlineToolApproval` block inline in the active message — shows tool name and arguments, Approve/Deny buttons, and an optional editable input for the payload; resolves via `window.electron.chat.resolveToolApproval`. `chat:ask-question` renders a `QuestionChip` cluster — shows the model's question and one chip per option; resolves via `window.electron.chat.answerQuestion`. Both components disappear once the stream resumes. Driven entirely by push events; no polling.
 
 - 2026-06-18 — **IntentCard: restore primary action button.** `IntentCard.tsx:117` — `needsApproval` computation changed from `!isObservation && intent.required_approval && intent.tier >= 2` to `!isObservation && intent.tier >= 2`. The `intent.required_approval` term was silently hiding the Approve/Send button for action intents where the model emitted `required_approval=false` (e.g. tier-3 Locked intents that are user-initiated by definition). Any non-observation action at tier ≥ 2 now shows the primary button unconditionally — the model hint is advisory and should not gate user-facing controls. Comment added explaining the rationale. `agentWillHandle` (line 118) is unchanged: only tier 0/1 intents get the "agent will handle" chip.
 

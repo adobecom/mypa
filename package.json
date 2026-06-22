@@ -73,7 +73,8 @@
     ],
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**",
-      "**/node_modules/onnxruntime-node/**"
+      "**/node_modules/onnxruntime-node/**",
+      "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**"
     ],
     "publish": [
       {

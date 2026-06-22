@@ -128,6 +128,19 @@ Ambient intelligence — intents, digests, policy, tray state.
 | `pollNow` | `() → void` | Trigger an immediate ambient poll cycle |
 | `getLog` | `(limit?) → ActionLogEntry[]` | Recent autonomy event log |
 
+### `chat`
+
+Real-time resolution of in-stream agent decisions — tool approvals and user questions.
+
+| Method | Signature | Description |
+|---|---|---|
+| `resolveToolApproval` | `(approvalId: string, allow: boolean, editedInput?: Record<string, unknown>) → void` | Unblock a pending write-tool gate. `allow: false` causes the SDK to skip the tool call. Pass `editedInput` to send a user-modified version of the tool arguments. |
+| `answerQuestion` | `(questionId: string, answer: string) → void` | Unblock a pending `ask_user` tool invocation with the user's chosen answer. The stream resumes immediately after this call. |
+
+IPC channels: `chat:resolve-tool-approval`, `chat:answer-question`.
+
+---
+
 ### `memory`
 
 Knowledge graph — nodes, edges, memories.
@@ -168,6 +181,8 @@ Subscribed with `window.electron.on(channel, listener)`. Returns an unsubscribe 
 | `ambient:action-executed` | `Intent` | A tier-0 intent was auto-executed (success only) | **widget + main** |
 | `ambient:chat-user-message` | `{ intentId: string; message: ChatMessage }` | User message persisted to an intent's "Chat about it" thread (fires immediately before streaming begins) | **widget + main** |
 | `ambient:chat-message` | `{ intentId: string; chunk: string; done: boolean; error?: string }` | Streaming chunk for an intent's "Chat about it" reply. `done: true` signals completion or error. | **widget + main** |
+| `chat:tool-approval-request` | `PendingToolApproval` | An agent stream reached a write tool and is paused waiting for user approval. The renderer should show an inline approval UI. Resolved by calling `window.electron.chat.resolveToolApproval(approvalId, allow, editedInput?)`. | **widget + main** |
+| `chat:ask-question` | `PendingQuestion` | The model called the `ask_user` tool and the stream is paused waiting for the user's selection. The renderer shows clickable option chips. Resolved by calling `window.electron.chat.answerQuestion(questionId, answer)`. | **widget + main** |
 
 **`routine:run-started` and `routine:run-completed` are broadcast to both windows** via `broadcast()` in `src/main/windows.ts`. The main window uses them to drive in-app toast notifications. The widget uses them to update its inline run card. All other events remain window-specific.
 
@@ -249,6 +264,8 @@ Manage PA check-in sessions and their chat threads.
 | `openInMainWindow` | `(checkinId?) → void` | Open main window on Check-in page, expanding the given session |
 
 ## Changelog
+
+- 2026-06-22 — **Agent SDK migration — new `chat` namespace + push channels:** Added `IpcApi.chat` namespace with `resolveToolApproval(approvalId, allow, editedInput?)` and `answerQuestion(questionId, answer)` (IPC channels `chat:resolve-tool-approval`, `chat:answer-question`). Added push channels `chat:tool-approval-request` (payload: `PendingToolApproval`) and `chat:ask-question` (payload: `PendingQuestion`). Added `PendingToolApproval` and `PendingQuestion` interfaces to `src/shared/types.ts`.
 
 - 2026-06-19 — **Plan-chat write-action approval:** `plan.approveChatAction(itemId, messageId, editedPayload?)` and `plan.dismissChatAction(itemId, messageId)` added to `IpcApi.plan`. IPC channels: `plan:approve-chat-action`, `plan:dismiss-chat-action`. `PlanItemCard` and `PlanItemDetail` now pass `onApproveAction`/`onDismissAction` to `<ChatThread>`.
 

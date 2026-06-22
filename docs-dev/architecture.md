@@ -65,12 +65,12 @@ External APIs (GitHub, Jira, Slack)
         └──► OS notification
 
 User input (QuickAddBar)
-        │  plan.ts → claude.ts
+        │  plan.ts → claude.ts → agent.ts
         ▼
   plan_items table (DB)  →  widget renderer (plan tab)
 
 Scheduled routines (node-cron)
-        │  routines.ts → mcp.ts → claude.ts
+        │  routines.ts → mcp.ts → claude.ts → agent.ts
         ▼
   routine_runs table (DB)  →  widget renderer (routines tab) + OS notification
 ```
@@ -112,6 +112,8 @@ Configured in `electron.vite.config.ts` and `tsconfig.*.json`:
 See [ipc.md](ipc.md) for the full reference.
 
 ## Changelog
+
+- 2026-06-22 — **Agent SDK migration:** updated data-flow diagram to show `claude.ts → agent.ts` in the routine and plan paths. `agent.ts` (`@anthropic-ai/claude-agent-sdk`) is now the actual AI entry point; `claude.ts` is a thin shim.
 
 - 2026-06-07 — `src/main/windows.ts` gained `broadcast(channel, ...args)` — sends an IPC event to every open, non-destroyed window (widget + main); used by `routines.ts` and `ambient.ts` for events that should reach both windows
 - 2026-06-06 — initial documentation
