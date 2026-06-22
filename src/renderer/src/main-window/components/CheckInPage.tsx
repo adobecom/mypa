@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { CheckCircle, Loader2, AlertCircle, MessageSquare } from 'lucide-react'
 import ChatThread from '../../widget/components/ChatThread'
-import type { CheckIn, ChatMessage, CheckInExtractionSummary, PendingToolApproval } from '../../../../../../shared/types'
+import type { CheckIn, ChatMessage, CheckInExtractionSummary, PendingToolApproval, PendingQuestion } from '../../../../../../shared/types'
 
 function formatTs(ts: string): string {
   return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -23,6 +23,7 @@ function CheckInDetail({ checkin, onCheckinUpdated }: CheckInDetailProps): React
   const [streamContent, setStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
   const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null)
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
   const [current, setCurrent] = useState<CheckIn>(checkin)
   const api = window.electron
 
@@ -37,6 +38,7 @@ function CheckInDetail({ checkin, onCheckinUpdated }: CheckInDetailProps): React
       if (p.checkinId !== current.id) return
       if (p.done) {
         setPendingToolApproval(null)
+        setPendingQuestion(null)
         setStreaming(false)
         setStreamContent('')
         if (p.error) {
@@ -68,6 +70,15 @@ function CheckInDetail({ checkin, onCheckinUpdated }: CheckInDetailProps): React
       const p = payload as PendingToolApproval
       if (p.streamId !== current.id) return
       setPendingToolApproval(p)
+    })
+    return unsub
+  }, [current.id])
+
+  useEffect(() => {
+    const unsub = api.on('chat:ask-question', (payload) => {
+      const p = payload as PendingQuestion
+      if (p.streamId !== current.id) return
+      setPendingQuestion(p)
     })
     return unsub
   }, [current.id])
@@ -177,6 +188,12 @@ function CheckInDetail({ checkin, onCheckinUpdated }: CheckInDetailProps): React
           if (!pendingToolApproval) return
           await api.chat.resolveToolApproval(pendingToolApproval.approvalId, false)
           setPendingToolApproval(null)
+        }}
+        pendingQuestion={pendingQuestion}
+        onAnswerQuestion={async (answer) => {
+          if (!pendingQuestion) return
+          await api.chat.answerQuestion(pendingQuestion.questionId, answer)
+          setPendingQuestion(null)
         }}
       />
     </div>

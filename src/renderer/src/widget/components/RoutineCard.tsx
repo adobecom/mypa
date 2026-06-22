@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { ChevronDown, Settings, ExternalLink, GitBranch, SquareKanban, MessageSquare } from 'lucide-react'
 import ChatThread from './ChatThread'
-import type { RoutineRun, ChatMessage, CoveredEntity, Intent, PendingToolApproval } from '../../../../../../shared/types'
+import type { RoutineRun, ChatMessage, CoveredEntity, Intent, PendingToolApproval, PendingQuestion } from '../../../../../../shared/types'
 
 interface Props {
   run: RoutineRun
@@ -45,6 +45,7 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
   const [streamContent, setStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
   const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null)
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
 
   const api = window.electron
   const digest = parseDigest(run.digest)
@@ -69,6 +70,7 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
       if (p.runId !== run.id) return
       if (p.done) {
         setPendingToolApproval(null)
+        setPendingQuestion(null)
         setStreaming(false)
         setStreamContent('')
         if (p.error) {
@@ -94,6 +96,15 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
       const p = payload as PendingToolApproval
       if (p.streamId !== run.id) return
       setPendingToolApproval(p)
+    })
+    return unsub
+  }, [run.id])
+
+  useEffect(() => {
+    const unsub = api.on('chat:ask-question', (payload) => {
+      const p = payload as PendingQuestion
+      if (p.streamId !== run.id) return
+      setPendingQuestion(p)
     })
     return unsub
   }, [run.id])
@@ -212,6 +223,12 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
               if (!pendingToolApproval) return
               await api.chat.resolveToolApproval(pendingToolApproval.approvalId, false)
               setPendingToolApproval(null)
+            }}
+            pendingQuestion={pendingQuestion}
+            onAnswerQuestion={async (answer) => {
+              if (!pendingQuestion) return
+              await api.chat.answerQuestion(pendingQuestion.questionId, answer)
+              setPendingQuestion(null)
             }}
           />
 

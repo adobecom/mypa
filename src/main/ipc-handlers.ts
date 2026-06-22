@@ -39,7 +39,7 @@ import { detectClaudeMcpServers } from './services/claude-import'
 import { executeRoutine, handleRunMessage } from './services/routines'
 import { createPlanDraft, confirmPlanDraft, updatePlanItemStatus, deletePlanItem, handlePlanMessage, approvePlanAction, dismissPlanAction } from './services/plan'
 import { generateRoutineSetup, cancelStream, detectClaudeBin } from './services/claude'
-import { resolveToolApproval } from './services/agent'
+import { resolveToolApproval, resolveQuestion } from './services/agent'
 import { refreshSchedules, refreshCheckinSchedule, stopScheduler } from './services/cron'
 import { startCheckIn, handleCheckInMessage, endCheckIn, cancelCheckinStream } from './services/checkin'
 import {
@@ -663,5 +663,13 @@ export function registerIpcHandlers(
     editedInput?: Record<string, unknown>
   ) => {
     resolveToolApproval(approvalId, allow, editedInput)
+  })
+
+  ipcMain.handle('chat:answer-question', (
+    _e,
+    questionId: string,
+    answer: string | string[]
+  ) => {
+    resolveQuestion(questionId, answer)
   })
 }

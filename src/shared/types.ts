@@ -125,6 +125,18 @@ export interface PendingToolApproval {
   editableValue?: string
 }
 
+/**
+ * In-flight ask_user question emitted by the tool handler during an active chat stream.
+ * Broadcast on 'chat:ask-question'; resolved via chat.answerQuestion().
+ */
+export interface PendingQuestion {
+  streamId: string
+  questionId: string
+  prompt: string
+  options: string[]
+  multiSelect?: boolean
+}
+
 export interface ChatMessage {
   id: string
   role: MessageRole
@@ -730,6 +742,8 @@ export interface IpcApi {
   chat: {
     /** Resolve a pending canUseTool gate. allow=true executes; allow=false denies. */
     resolveToolApproval(approvalId: string, allow: boolean, editedInput?: Record<string, unknown>): Promise<void>
+    /** Deliver the user's answer to a pending ask_user question. */
+    answerQuestion(questionId: string, answer: string | string[]): Promise<void>
   }
   on(
     channel:
@@ -759,7 +773,8 @@ export interface IpcApi {
       | 'update:progress'
       | 'update:downloaded'
       | 'update:error'
-      | 'chat:tool-approval-request',
+      | 'chat:tool-approval-request'
+      | 'chat:ask-question',
     listener: (...args: unknown[]) => void
   ): () => void
 }

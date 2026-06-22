@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import ChatThread from '../../widget/components/ChatThread'
-import type { RoutineRun, ChatMessage, RunStatus, PendingToolApproval } from '../../../../../../shared/types'
+import type { RoutineRun, ChatMessage, RunStatus, PendingToolApproval, PendingQuestion } from '../../../../../../shared/types'
 
 function formatTs(ts: string): string {
   return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -31,6 +31,7 @@ function RunDetail({ run, defaultView = 'chat', onRunChange }: RunDetailProps): 
   const [streamContent, setStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
   const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null)
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
   const api = window.electron
 
   useEffect(() => {
@@ -51,6 +52,7 @@ function RunDetail({ run, defaultView = 'chat', onRunChange }: RunDetailProps): 
       if (p.runId !== run.id) return
       if (p.done) {
         setPendingToolApproval(null)
+        setPendingQuestion(null)
         setStreaming(false)
         setStreamContent('')
         if (p.error) {
@@ -71,6 +73,15 @@ function RunDetail({ run, defaultView = 'chat', onRunChange }: RunDetailProps): 
       const p = payload as PendingToolApproval
       if (p.streamId !== run.id) return
       setPendingToolApproval(p)
+    })
+    return unsub
+  }, [run.id])
+
+  useEffect(() => {
+    const unsub = api.on('chat:ask-question', (payload) => {
+      const p = payload as PendingQuestion
+      if (p.streamId !== run.id) return
+      setPendingQuestion(p)
     })
     return unsub
   }, [run.id])
@@ -150,6 +161,12 @@ function RunDetail({ run, defaultView = 'chat', onRunChange }: RunDetailProps): 
               if (!pendingToolApproval) return
               await api.chat.resolveToolApproval(pendingToolApproval.approvalId, false)
               setPendingToolApproval(null)
+            }}
+            pendingQuestion={pendingQuestion}
+            onAnswerQuestion={async (answer) => {
+              if (!pendingQuestion) return
+              await api.chat.answerQuestion(pendingQuestion.questionId, answer)
+              setPendingQuestion(null)
             }}
           />
           <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>

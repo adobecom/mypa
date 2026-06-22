@@ -1,10 +1,11 @@
-import { query } from '@anthropic-ai/claude-agent-sdk'
+import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
 import type { Query, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk'
+import { z } from 'zod'
 import { recordUsage } from './usage'
 import { selectModel, escalate } from './model-router'
 import { readConfig, buildOwnerClause } from './config'
 import { broadcast } from '../windows'
-import type { UsageSource, ChatMessage, PendingToolApproval } from '@shared/types'
+import type { UsageSource, ChatMessage, PendingToolApproval, PendingQuestion } from '@shared/types'
 
 const STREAM_IDLE_TIMEOUT_MS = 120_000
 
@@ -19,6 +20,10 @@ const activeAgentChats = new Map<string, ActiveAgentChat>()
 const pendingToolApprovals = new Map<string, (allow: boolean, editedInput?: Record<string, unknown>) => void>()
 // Cancel functions for in-flight approval prompts, keyed by streamId
 const pendingApprovalCancels = new Map<string, () => void>()
+// Pending ask_user question answers, keyed by questionId
+const pendingQuestions = new Map<string, (answer: string | string[]) => void>()
+// Cancel functions for in-flight questions, keyed by streamId
+const pendingQuestionCancels = new Map<string, () => void>()
 
 /** Resolve a pending canUseTool gate from the renderer side. */
 export function resolveToolApproval(
@@ -31,6 +36,52 @@ export function resolveToolApproval(
     pendingToolApprovals.delete(approvalId)
     resolve(allow, editedInput)
   }
+}
+
+/** Deliver a user answer to a pending ask_user question. */
+export function resolveQuestion(questionId: string, answer: string | string[]): void {
+  const resolve = pendingQuestions.get(questionId)
+  if (resolve) {
+    pendingQuestions.delete(questionId)
+    resolve(answer)
+  }
+}
+
+/** Build the in-process MCP server that exposes ask_user for this stream. */
+function buildAskUserServer(streamId: string) {
+  const askUserTool = tool(
+    'ask_user',
+    'Ask the user to select from a list of options. Use this whenever you need the user to make a choice — never list options as bullet points and never fabricate a selection.',
+    {
+      prompt: z.string().describe('The question to present to the user'),
+      options: z.array(z.string()).min(2).max(6).describe('The available choices (2–6 items)'),
+      multiSelect: z.boolean().optional().describe('Allow the user to select multiple options'),
+    },
+    async (args) => {
+      const questionId = crypto.randomUUID()
+      const question: PendingQuestion = {
+        streamId,
+        questionId,
+        prompt: args.prompt,
+        options: args.options,
+        multiSelect: args.multiSelect ?? false,
+      }
+      let cancelFn: (() => void) | undefined
+      const answerPromise = new Promise<string | string[]>((resolve) => {
+        pendingQuestions.set(questionId, (ans) => resolve(ans))
+        cancelFn = () => { pendingQuestions.delete(questionId); resolve(args.options[0]) }
+      })
+      pendingQuestionCancels.set(streamId, () => cancelFn?.())
+      broadcast('chat:ask-question', question)
+      const answer = await answerPromise
+      pendingQuestions.delete(questionId)
+      pendingQuestionCancels.delete(streamId)
+      const text = Array.isArray(answer) ? answer.join(', ') : answer
+      return { content: [{ type: 'text' as const, text }] }
+    },
+    { alwaysLoad: true },
+  )
+  return createSdkMcpServer({ name: 'mypa_builtin', tools: [askUserTool], alwaysLoad: true })
 }
 
 const READ_ONLY_PREFIXES = [
@@ -204,8 +255,14 @@ export function cancelAgentChat(streamId: string): boolean {
     cancelApproval()
     pendingApprovalCancels.delete(streamId)
   }
+  // Cancel any pending ask_user question
+  const cancelQuestion = pendingQuestionCancels.get(streamId)
+  if (cancelQuestion) {
+    cancelQuestion()
+    pendingQuestionCancels.delete(streamId)
+  }
   const entry = activeAgentChats.get(streamId)
-  if (!entry) return !!cancelApproval
+  if (!entry) return !!(cancelApproval || cancelQuestion)
   entry.interrupted = true
   activeAgentChats.delete(streamId)
   entry.q.interrupt().catch(() => {})
@@ -230,9 +287,10 @@ export async function streamAgentChat(
   const cfg = readConfig()
   const persona = cfg.persona?.trim() || 'a personal assistant'
   const ownerClause = buildOwnerClause()
+  const askUserGuidance = 'When you need the user to choose between options, always call the ask_user tool — never list options as bullet points and never select an answer yourself.'
   const systemPrompt = rawContext
-    ? `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.\n\nOriginal data collected:\n${rawContext}`
-    : `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.`
+    ? `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented. ${askUserGuidance}\n\nOriginal data collected:\n${rawContext}`
+    : `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented. ${askUserGuidance}`
 
   // Build SDK mcpServers map from config when MCP is requested
   const sdkMcpServers: Record<string, { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }> = {}
@@ -292,18 +350,27 @@ async function streamAgentChatOnce(
     idleTimer = setTimeout(() => { timedOut = true; ac.abort() }, STREAM_IDLE_TIMEOUT_MS)
   }
 
+  // Always attach the ask_user in-process server so the model can ask questions
+  const allMcpServers: Record<string, any> = { ...(mcpServers ?? {}) }  // eslint-disable-line @typescript-eslint/no-explicit-any
+  if (streamId) allMcpServers['__mypa_builtin__'] = buildAskUserServer(streamId)
+  const hasMcp = Object.keys(allMcpServers).length > 0
+
   const q = query({
     prompt,
     options: {
       systemPrompt,
       model,
-      maxTurns: mcpServers ? 10 : 1,
+      maxTurns: hasMcp ? 10 : 1,
       permissionMode: 'default',
-      ...(mcpServers ? { mcpServers } : {}),
+      ...(hasMcp ? { mcpServers: allMcpServers } : {}),
       canUseTool: async (toolName: string, toolInput: unknown) => {
         // Extract the base tool name after the mcp__server__ prefix
         const parts = toolName.split('__')
+        const serverName = parts.length >= 2 ? parts[1] : ''
         const baseName = parts.length >= 3 ? parts.slice(2).join('__') : toolName
+
+        // Always allow our own built-in tools (ask_user etc.)
+        if (serverName === '__mypa_builtin__') return { behavior: 'allow' }
 
         if (isReadOnlyTool(baseName)) return { behavior: 'allow' }
 
