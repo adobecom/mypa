@@ -17,6 +17,8 @@ const activeAgentChats = new Map<string, ActiveAgentChat>()
 
 // Pending canUseTool approval requests, keyed by approvalId
 const pendingToolApprovals = new Map<string, (allow: boolean, editedInput?: Record<string, unknown>) => void>()
+// Cancel functions for in-flight approval prompts, keyed by streamId
+const pendingApprovalCancels = new Map<string, () => void>()
 
 /** Resolve a pending canUseTool gate from the renderer side. */
 export function resolveToolApproval(
@@ -38,7 +40,7 @@ const READ_ONLY_PREFIXES = [
 
 function isReadOnlyTool(toolName: string): boolean {
   const lower = toolName.toLowerCase()
-  return READ_ONLY_PREFIXES.some((p) => lower.startsWith(p))
+  return READ_ONLY_PREFIXES.some((p) => lower === p || lower.startsWith(p + '_'))
 }
 
 function buildPendingToolApproval(
@@ -50,7 +52,7 @@ function buildPendingToolApproval(
   // toolName format from SDK: 'mcp__<server>__<tool>' or just '<tool>'
   const parts = toolName.split('__')
   const serverName = parts.length >= 2 ? parts[1] : ''
-  const baseTool = parts.length >= 3 ? parts.slice(2).join('_') : toolName
+  const baseTool = parts.length >= 3 ? parts.slice(2).join('__') : toolName
   const displayLabel = [
     serverName && serverName.charAt(0).toUpperCase() + serverName.slice(1),
     baseTool.replace(/_/g, ' '),
@@ -196,8 +198,14 @@ function recordSdkUsage(source: UsageSource, model: string, result: SDKResultMes
 // ─── Streaming chat ───────────────────────────────────────────────────────────
 
 export function cancelAgentChat(streamId: string): boolean {
+  // Cancel any pending tool approval so canUseTool can return and the generator can exit
+  const cancelApproval = pendingApprovalCancels.get(streamId)
+  if (cancelApproval) {
+    cancelApproval()
+    pendingApprovalCancels.delete(streamId)
+  }
   const entry = activeAgentChats.get(streamId)
-  if (!entry) return false
+  if (!entry) return !!cancelApproval
   entry.interrupted = true
   activeAgentChats.delete(streamId)
   entry.q.interrupt().catch(() => {})
@@ -308,11 +316,18 @@ async function streamAgentChatOnce(
         const approval = buildPendingToolApproval(
           approvalId, toolName, (toolInput as Record<string, unknown>) ?? {}, streamId,
         )
+        let cancelFn: (() => void) | undefined
         const resultPromise = new Promise<{ allow: boolean; editedInput?: Record<string, unknown> }>(
-          (resolve) => { pendingToolApprovals.set(approvalId, (a, ei) => resolve({ allow: a, editedInput: ei })) },
+          (resolve) => {
+            pendingToolApprovals.set(approvalId, (a, ei) => resolve({ allow: a, editedInput: ei }))
+            cancelFn = () => { pendingToolApprovals.delete(approvalId); resolve({ allow: false }) }
+          },
         )
+        pendingApprovalCancels.set(streamId, () => cancelFn?.())
         broadcast('chat:tool-approval-request', approval)
         const { allow, editedInput } = await resultPromise
+        pendingToolApprovals.delete(approvalId)
+        pendingApprovalCancels.delete(streamId)
         if (!allow) return { behavior: 'deny', message: 'Dismissed by user' }
         return editedInput ? { behavior: 'allow', updatedInput: editedInput } : { behavior: 'allow' }
       },
