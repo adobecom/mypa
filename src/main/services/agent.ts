@@ -177,10 +177,13 @@ async function runAgentOnce(
       options: {
         systemPrompt,
         model,
-        maxTurns: 1,
+        // Allow up to 3 turns so the model can recover if it attempts a built-in tool call
+        // (canUseTool denies it, injecting a tool_result that costs a turn before the model
+        // can produce its actual text response). Keeping this small (not 10) preserves the
+        // one-shot intent — text must arrive quickly and no real tool work should happen.
+        maxTurns: 3,
         permissionMode: 'default',
         // Deny all tools — this is a pure text-generation call, not an agentic session.
-        // Keeps one-shot calls deterministic and prevents Claude Code built-ins from running.
         canUseTool: async () => ({ behavior: 'deny', message: 'one-shot mode — no tools' }),
         abortController: ac,
       }
