@@ -7,7 +7,7 @@ import { readConfig, buildOwnerClause } from './config'
 import { recordUsage } from './usage'
 import { getKnownServerTools, ensureServersConnected } from './mcp'
 import { selectModel, escalate } from './model-router'
-import { runAgent } from './agent'
+import { runAgent, streamAgentChat, cancelAgentChat } from './agent'
 import type { PlanDraft, PlanItemTiming, ChatMessage, McpServerStatus, RoutineAction, RoutineSetupDraft, UsageSource } from '@shared/types'
 
 
@@ -334,6 +334,9 @@ async function runClaudeStream(
 }
 
 export function cancelStream(streamId: string): boolean {
+  // SDK path (Phase 2+): streaming chat now runs via streamAgentChat
+  if (cancelAgentChat(streamId)) return true
+  // CLI process path (legacy / non-chat callers)
   const entry = activeStreams.get(streamId)
   if (!entry) return false
   entry.killed = true
@@ -721,37 +724,7 @@ export async function streamChat(
   rawContext?: string,
   streamId?: string,
   source: UsageSource = 'chat',
-  enableMcp?: boolean
+  _enableMcp?: boolean  // MCP wired in Phase 3; accepted here so callers need no change
 ): Promise<void> {
-  const messages = [
-    ...history.map((m) => ({ role: m.role, content: m.content })),
-    { role: 'user', content: userMessage }
-  ]
-
-  const persona = readConfig().persona?.trim() || 'a personal assistant'
-  const ownerClause = buildOwnerClause()
-  const basePrompt = rawContext
-    ? `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.\n\nOriginal data collected:\n${rawContext}`
-    : `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.`
-  const systemPrompt = basePrompt  // addendum injected inside runClaudeStream only when MCP is actually wired
-
-  // Approximate total chars for model selection (system prompt + all message content)
-  const approxLen = systemPrompt.length + messages.reduce((n, m) => n + m.content.length, 0)
-  let model = selectModel(source, approxLen)
-
-  while (true) {
-    try {
-      const full = await runClaudeStream(systemPrompt, messages, onChunk, streamId, source, model, enableMcp)
-      onDone(full)
-      return
-    } catch (err) {
-      // User-cancelled or idle-timed-out streams must not be retried
-      const msg = (err as Error).message
-      if (msg === 'Cancelled' || msg === 'Stream timed out') throw err
-      const next = escalate(model)
-      if (!next) throw err
-      console.log(`[claude] stream: escalating ${model} → ${next} (${source})`)
-      model = next
-    }
-  }
+  return streamAgentChat(history, userMessage, onChunk, onDone, rawContext, streamId, source)
 }
