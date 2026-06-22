@@ -255,6 +255,7 @@ async function streamAgentChatOnce(
   clearTimeout(idleTimer)
   if (streamId) activeAgentChats.delete(streamId)
   if (timedOut) throw new Error('Stream timed out')
+  if (entry.interrupted) throw new Error('Cancelled')
 
   if (resultMsg) {
     recordSdkUsage(source, model, resultMsg)
@@ -271,7 +272,8 @@ async function streamAgentChatOnce(
     const r = typeof (resultMsg as any).result === 'string' ? (resultMsg as any).result as string : ''
     if (r && !r.startsWith('{') && !r.startsWith('[')) {
       full = r
-      onChunk(r)
+      // Don't onChunk here — onDone(full) in the outer loop delivers it atomically,
+      // avoiding a double-send if this attempt is later superseded by escalation.
     }
   }
 
