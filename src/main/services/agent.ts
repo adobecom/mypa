@@ -352,7 +352,7 @@ async function streamAgentChatOnce(
 
   // Always attach the ask_user in-process server so the model can ask questions
   const allMcpServers: Record<string, any> = { ...(mcpServers ?? {}) }  // eslint-disable-line @typescript-eslint/no-explicit-any
-  if (streamId) allMcpServers['__mypa_builtin__'] = buildAskUserServer(streamId)
+  if (streamId) allMcpServers['mypa_builtin'] = buildAskUserServer(streamId)
   const hasMcp = Object.keys(allMcpServers).length > 0
 
   const q = query({
@@ -370,7 +370,7 @@ async function streamAgentChatOnce(
         const baseName = parts.length >= 3 ? parts.slice(2).join('__') : toolName
 
         // Always allow our own built-in tools (ask_user etc.)
-        if (serverName === '__mypa_builtin__') return { behavior: 'allow' }
+        if (serverName === 'mypa_builtin') return { behavior: 'allow' }
 
         if (isReadOnlyTool(baseName)) return { behavior: 'allow' }
 
