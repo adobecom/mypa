@@ -43,7 +43,10 @@ async function runAgentOnce(
   expectJson: boolean
 ): Promise<string> {
   const ac = new AbortController()
-  const timer = setTimeout(() => ac.abort(), timeoutMs)
+  // Dedicated flag — avoids the race where ac.abort() fires just before clearTimeout
+  // and ac.signal.aborted would give a false positive after the loop already completed.
+  let timedOut = false
+  const timer = setTimeout(() => { timedOut = true; ac.abort() }, timeoutMs)
 
   let text = ''
   let resultMsg: SDKResultMessage | null = null
@@ -73,27 +76,34 @@ async function runAgentOnce(
     }
   } catch (err) {
     clearTimeout(timer)
-    if (ac.signal.aborted) throw new Error('Agent timed out')
+    if (timedOut) throw new Error('Agent timed out')
     throw err
   }
 
   clearTimeout(timer)
-  if (ac.signal.aborted) throw new Error('Agent timed out')
+  if (timedOut) throw new Error('Agent timed out')
 
-  if (resultMsg) {
-    recordSdkUsage(source, model, resultMsg)
-    if (resultMsg.is_error) {
-      throw new Error(
-        typeof (resultMsg as any).result === 'string'
-          ? (resultMsg as any).result
-          : 'Agent returned an error'
-      )
-    }
-    // Fallback: if no assistant text blocks were emitted, use the result field
-    if (!text && typeof (resultMsg as any).result === 'string') {
-      const r = (resultMsg as any).result as string
-      if (r && !r.startsWith('{') && !r.startsWith('[')) text = r
-    }
+  if (!resultMsg) {
+    throw new Error('Agent returned no result message')
+  }
+
+  recordSdkUsage(source, model, resultMsg)
+
+  if (resultMsg.is_error) {
+    throw new Error(
+      typeof (resultMsg as any).result === 'string'
+        ? (resultMsg as any).result
+        : 'Agent returned an error'
+    )
+  }
+
+  // Fallback: if no assistant text blocks were emitted, use the result field.
+  // Intentionally excludes JSON strings (startsWith { or [) — those indicate the
+  // model put its response in the result envelope rather than an assistant block,
+  // which triggers expectJson escalation just as the old CLI path did.
+  if (!text) {
+    const r = typeof (resultMsg as any).result === 'string' ? (resultMsg as any).result as string : ''
+    if (r && !r.startsWith('{') && !r.startsWith('[')) text = r
   }
 
   if (expectJson && !text.includes('{') && !text.includes('[')) {
