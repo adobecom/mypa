@@ -109,6 +109,22 @@ export interface ProposedChatAction {
   resultText?: string
 }
 
+/**
+ * In-flight tool-approval request emitted by canUseTool during an active chat stream.
+ * Broadcast on 'chat:tool-approval-request'; resolved via chat.resolveToolApproval().
+ */
+export interface PendingToolApproval {
+  streamId: string
+  approvalId: string
+  toolName: string
+  toolInput: Record<string, unknown>
+  /** Human-readable label, e.g. "GitHub · add issue comment". */
+  displayLabel: string
+  /** Input field the user can edit before approving (body/message/text). */
+  editableField?: string
+  editableValue?: string
+}
+
 export interface ChatMessage {
   id: string
   role: MessageRole
@@ -711,6 +727,10 @@ export interface IpcApi {
     checkNow(): Promise<void>
     install(): Promise<void>
   }
+  chat: {
+    /** Resolve a pending canUseTool gate. allow=true executes; allow=false denies. */
+    resolveToolApproval(approvalId: string, allow: boolean, editedInput?: Record<string, unknown>): Promise<void>
+  }
   on(
     channel:
       | 'routine:run-started'
@@ -738,7 +758,8 @@ export interface IpcApi {
       | 'update:available'
       | 'update:progress'
       | 'update:downloaded'
-      | 'update:error',
+      | 'update:error'
+      | 'chat:tool-approval-request',
     listener: (...args: unknown[]) => void
   ): () => void
 }

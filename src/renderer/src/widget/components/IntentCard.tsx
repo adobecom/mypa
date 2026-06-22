@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { GitBranch, SquareKanban, MessageSquare, ChevronDown, Wand2, Zap, MessagesSquare } from 'lucide-react'
-import type { Intent, ChatMessage, RoutineRun } from '../../../../../../shared/types'
+import type { Intent, ChatMessage, RoutineRun, PendingToolApproval } from '../../../../../../shared/types'
 import MarkdownText from '@renderer/components/MarkdownText'
 import Tabs from '@renderer/components/Tabs'
 import ChatThread from './ChatThread'
@@ -115,6 +115,7 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
   const [chatStreamContent, setChatStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
   const [revising, setRevising] = useState(false)
+  const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null)
   // Safety backstop: if the main process dies or the stream never sends done:true,
   // clear the streaming state after 150s (server idle watchdog fires at 120s).
   const chatSafetyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -234,6 +235,7 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
       if (p.done) {
         // Stream finished — clear the safety backstop
         if (chatSafetyTimer.current) { clearTimeout(chatSafetyTimer.current); chatSafetyTimer.current = null }
+        setPendingToolApproval(null)
         setChatStreaming(false)
         if (p.error) {
           setChatError(p.error)
@@ -257,6 +259,15 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
       }
     })
     return off
+  }, [intent.id])
+
+  useEffect(() => {
+    const unsub = api.on('chat:tool-approval-request', (payload) => {
+      const p = payload as PendingToolApproval
+      if (p.streamId !== intent.id) return
+      setPendingToolApproval(p)
+    })
+    return unsub
   }, [intent.id])
 
   async function handleChatSend(message: string): Promise<void> {
@@ -534,6 +545,17 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
             onStop={handleChatStop}
             error={chatError}
             sendDisabled={chatStreaming}
+            pendingToolApproval={pendingToolApproval}
+            onApproveToolUse={async (editedInput) => {
+              if (!pendingToolApproval) return
+              await api.chat.resolveToolApproval(pendingToolApproval.approvalId, true, editedInput)
+              setPendingToolApproval(null)
+            }}
+            onDenyToolUse={async () => {
+              if (!pendingToolApproval) return
+              await api.chat.resolveToolApproval(pendingToolApproval.approvalId, false)
+              setPendingToolApproval(null)
+            }}
             onApproveAction={async (msg, editedPayload) => {
               try {
                 const updated = await api.ambient.approveChatAction(intent.id, msg.id, editedPayload)

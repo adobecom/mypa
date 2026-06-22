@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { ChevronDown, Settings, ExternalLink, GitBranch, SquareKanban, MessageSquare } from 'lucide-react'
 import ChatThread from './ChatThread'
-import type { RoutineRun, ChatMessage, CoveredEntity, Intent } from '../../../../../../shared/types'
+import type { RoutineRun, ChatMessage, CoveredEntity, Intent, PendingToolApproval } from '../../../../../../shared/types'
 
 interface Props {
   run: RoutineRun
@@ -44,6 +44,7 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
   const [streaming, setStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
+  const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null)
 
   const api = window.electron
   const digest = parseDigest(run.digest)
@@ -67,6 +68,7 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
       const p = payload as { runId: string; chunk: string; done: boolean; error?: string }
       if (p.runId !== run.id) return
       if (p.done) {
+        setPendingToolApproval(null)
         setStreaming(false)
         setStreamContent('')
         if (p.error) {
@@ -85,6 +87,15 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
       }
     })
     return () => { unsubMsg(); unsubStream() }
+  }, [run.id])
+
+  useEffect(() => {
+    const unsub = api.on('chat:tool-approval-request', (payload) => {
+      const p = payload as PendingToolApproval
+      if (p.streamId !== run.id) return
+      setPendingToolApproval(p)
+    })
+    return unsub
   }, [run.id])
 
   const handleSend = async (msg: string) => {
@@ -191,6 +202,17 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
             onStop={handleStop}
             sendDisabled={streaming || run.status === 'running'}
             error={chatError}
+            pendingToolApproval={pendingToolApproval}
+            onApproveToolUse={async (editedInput) => {
+              if (!pendingToolApproval) return
+              await api.chat.resolveToolApproval(pendingToolApproval.approvalId, true, editedInput)
+              setPendingToolApproval(null)
+            }}
+            onDenyToolUse={async () => {
+              if (!pendingToolApproval) return
+              await api.chat.resolveToolApproval(pendingToolApproval.approvalId, false)
+              setPendingToolApproval(null)
+            }}
           />
 
           <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>

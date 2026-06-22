@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import ChatThread from '../../widget/components/ChatThread'
-import type { RoutineRun, ChatMessage, RunStatus } from '../../../../../../shared/types'
+import type { RoutineRun, ChatMessage, RunStatus, PendingToolApproval } from '../../../../../../shared/types'
 
 function formatTs(ts: string): string {
   return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -30,6 +30,7 @@ function RunDetail({ run, defaultView = 'chat', onRunChange }: RunDetailProps): 
   const [streaming, setStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
+  const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null)
   const api = window.electron
 
   useEffect(() => {
@@ -49,6 +50,7 @@ function RunDetail({ run, defaultView = 'chat', onRunChange }: RunDetailProps): 
       const p = payload as { runId: string; chunk: string; done: boolean; error?: string }
       if (p.runId !== run.id) return
       if (p.done) {
+        setPendingToolApproval(null)
         setStreaming(false)
         setStreamContent('')
         if (p.error) {
@@ -62,6 +64,15 @@ function RunDetail({ run, defaultView = 'chat', onRunChange }: RunDetailProps): 
       }
     })
     return () => { unsubMsg(); unsubStream() }
+  }, [run.id])
+
+  useEffect(() => {
+    const unsub = api.on('chat:tool-approval-request', (payload) => {
+      const p = payload as PendingToolApproval
+      if (p.streamId !== run.id) return
+      setPendingToolApproval(p)
+    })
+    return unsub
   }, [run.id])
 
   const handleSend = async (msg: string) => {
@@ -129,6 +140,17 @@ function RunDetail({ run, defaultView = 'chat', onRunChange }: RunDetailProps): 
             onStop={handleStop}
             sendDisabled={streaming || run.status === 'running'}
             error={chatError}
+            pendingToolApproval={pendingToolApproval}
+            onApproveToolUse={async (editedInput) => {
+              if (!pendingToolApproval) return
+              await api.chat.resolveToolApproval(pendingToolApproval.approvalId, true, editedInput)
+              setPendingToolApproval(null)
+            }}
+            onDenyToolUse={async () => {
+              if (!pendingToolApproval) return
+              await api.chat.resolveToolApproval(pendingToolApproval.approvalId, false)
+              setPendingToolApproval(null)
+            }}
           />
           <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
             {run.status !== 'dismissed' && run.status !== 'resolved' && (

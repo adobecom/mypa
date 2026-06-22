@@ -1314,19 +1314,9 @@ export async function handleIntentChat(intentId: string, userMessage: string): P
       true  // enableMcp — wire read-only tools and the write-action protocol
     )
 
-    // Parse <action> blocks from each streamed segment.
-    // Strip them from visible text; auto-execute or surface for approval.
-    const routingPayload = (intent.payload ?? {}) as Record<string, unknown>
     const toSave = segments.filter((s) => s.trim())
-
     for (const seg of toSave) {
-      if (!seg.trim()) continue
-      await stageChatActionsFromSegment(
-        seg,
-        routingPayload,
-        (content, metadata) => dbAddIntentChatMessage(intentId, 'assistant', content, metadata),
-        `intent:${intentId}`
-      )
+      dbAddIntentChatMessage(intentId, 'assistant', seg)
     }
 
     broadcast('ambient:chat-message', { intentId, chunk: '', done: true })

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { CheckCircle, Loader2, AlertCircle, MessageSquare } from 'lucide-react'
 import ChatThread from '../../widget/components/ChatThread'
-import type { CheckIn, ChatMessage, CheckInExtractionSummary } from '../../../../../../shared/types'
+import type { CheckIn, ChatMessage, CheckInExtractionSummary, PendingToolApproval } from '../../../../../../shared/types'
 
 function formatTs(ts: string): string {
   return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -22,6 +22,7 @@ function CheckInDetail({ checkin, onCheckinUpdated }: CheckInDetailProps): React
   const [streaming, setStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
+  const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null)
   const [current, setCurrent] = useState<CheckIn>(checkin)
   const api = window.electron
 
@@ -35,6 +36,7 @@ function CheckInDetail({ checkin, onCheckinUpdated }: CheckInDetailProps): React
       const p = payload as { checkinId: string; chunk: string; done: boolean; error?: string }
       if (p.checkinId !== current.id) return
       if (p.done) {
+        setPendingToolApproval(null)
         setStreaming(false)
         setStreamContent('')
         if (p.error) {
@@ -59,6 +61,15 @@ function CheckInDetail({ checkin, onCheckinUpdated }: CheckInDetailProps): React
       unsubMsg()
       unsubStatus()
     }
+  }, [current.id])
+
+  useEffect(() => {
+    const unsub = api.on('chat:tool-approval-request', (payload) => {
+      const p = payload as PendingToolApproval
+      if (p.streamId !== current.id) return
+      setPendingToolApproval(p)
+    })
+    return unsub
   }, [current.id])
 
   const handleSend = async (msg: string): Promise<void> => {
@@ -156,6 +167,17 @@ function CheckInDetail({ checkin, onCheckinUpdated }: CheckInDetailProps): React
         onStop={handleStop}
         sendDisabled={streaming || isExtracting || isComplete || isError}
         error={chatError}
+        pendingToolApproval={pendingToolApproval}
+        onApproveToolUse={async (editedInput) => {
+          if (!pendingToolApproval) return
+          await api.chat.resolveToolApproval(pendingToolApproval.approvalId, true, editedInput)
+          setPendingToolApproval(null)
+        }}
+        onDenyToolUse={async () => {
+          if (!pendingToolApproval) return
+          await api.chat.resolveToolApproval(pendingToolApproval.approvalId, false)
+          setPendingToolApproval(null)
+        }}
       />
     </div>
   )

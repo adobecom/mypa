@@ -117,6 +117,10 @@ const api: IpcApi = {
     checkNow: () => ipcRenderer.invoke('update:check-now'),
     install:  () => ipcRenderer.invoke('update:install')
   },
+  chat: {
+    resolveToolApproval: (approvalId, allow, editedInput) =>
+      ipcRenderer.invoke('chat:resolve-tool-approval', approvalId, allow, editedInput)
+  },
   on: (channel, listener) => {
     const wrapped = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => listener(...args)
     ipcRenderer.on(channel, wrapped)

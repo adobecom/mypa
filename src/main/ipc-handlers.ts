@@ -39,6 +39,7 @@ import { detectClaudeMcpServers } from './services/claude-import'
 import { executeRoutine, handleRunMessage } from './services/routines'
 import { createPlanDraft, confirmPlanDraft, updatePlanItemStatus, deletePlanItem, handlePlanMessage, approvePlanAction, dismissPlanAction } from './services/plan'
 import { generateRoutineSetup, cancelStream, detectClaudeBin } from './services/claude'
+import { resolveToolApproval } from './services/agent'
 import { refreshSchedules, refreshCheckinSchedule, stopScheduler } from './services/cron'
 import { startCheckIn, handleCheckInMessage, endCheckIn, cancelCheckinStream } from './services/checkin'
 import {
@@ -653,5 +654,14 @@ export function registerIpcHandlers(
 
   ipcMain.handle('update:install', () => {
     installUpdate()
+  })
+
+  ipcMain.handle('chat:resolve-tool-approval', (
+    _e,
+    approvalId: string,
+    allow: boolean,
+    editedInput?: Record<string, unknown>
+  ) => {
+    resolveToolApproval(approvalId, allow, editedInput)
   })
 }

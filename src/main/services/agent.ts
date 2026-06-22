@@ -3,7 +3,8 @@ import type { Query, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk'
 import { recordUsage } from './usage'
 import { selectModel, escalate } from './model-router'
 import { readConfig, buildOwnerClause } from './config'
-import type { UsageSource, ChatMessage } from '@shared/types'
+import { broadcast } from '../windows'
+import type { UsageSource, ChatMessage, PendingToolApproval } from '@shared/types'
 
 const STREAM_IDLE_TIMEOUT_MS = 120_000
 
@@ -13,6 +14,62 @@ interface ActiveAgentChat {
 }
 
 const activeAgentChats = new Map<string, ActiveAgentChat>()
+
+// Pending canUseTool approval requests, keyed by approvalId
+const pendingToolApprovals = new Map<string, (allow: boolean, editedInput?: Record<string, unknown>) => void>()
+
+/** Resolve a pending canUseTool gate from the renderer side. */
+export function resolveToolApproval(
+  approvalId: string,
+  allow: boolean,
+  editedInput?: Record<string, unknown>,
+): void {
+  const resolve = pendingToolApprovals.get(approvalId)
+  if (resolve) {
+    pendingToolApprovals.delete(approvalId)
+    resolve(allow, editedInput)
+  }
+}
+
+const READ_ONLY_PREFIXES = [
+  'get', 'list', 'search', 'read', 'fetch', 'view', 'find',
+  'show', 'describe', 'query', 'lookup', 'check',
+]
+
+function isReadOnlyTool(toolName: string): boolean {
+  const lower = toolName.toLowerCase()
+  return READ_ONLY_PREFIXES.some((p) => lower.startsWith(p))
+}
+
+function buildPendingToolApproval(
+  approvalId: string,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  streamId: string,
+): PendingToolApproval {
+  // toolName format from SDK: 'mcp__<server>__<tool>' or just '<tool>'
+  const parts = toolName.split('__')
+  const serverName = parts.length >= 2 ? parts[1] : ''
+  const baseTool = parts.length >= 3 ? parts.slice(2).join('_') : toolName
+  const displayLabel = [
+    serverName && serverName.charAt(0).toUpperCase() + serverName.slice(1),
+    baseTool.replace(/_/g, ' '),
+  ].filter(Boolean).join(' · ')
+
+  const editableField = ['body', 'message', 'text', 'comment'].find(
+    (k) => typeof toolInput[k] === 'string',
+  )
+
+  return {
+    streamId,
+    approvalId,
+    toolName,
+    toolInput,
+    displayLabel,
+    editableField,
+    editableValue: editableField ? String(toolInput[editableField]) : undefined,
+  }
+}
 
 /**
  * One-shot Claude call via the Agent SDK, with automatic model selection and
@@ -155,24 +212,44 @@ export async function streamAgentChat(
   rawContext?: string,
   streamId?: string,
   source: UsageSource = 'chat',
+  enableMcp = false,
 ): Promise<void> {
   const messages = [
     ...history.map((m) => ({ role: m.role, content: m.content })),
     { role: 'user', content: userMessage },
   ]
 
-  const persona = readConfig().persona?.trim() || 'a personal assistant'
+  const cfg = readConfig()
+  const persona = cfg.persona?.trim() || 'a personal assistant'
   const ownerClause = buildOwnerClause()
   const systemPrompt = rawContext
     ? `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.\n\nOriginal data collected:\n${rawContext}`
     : `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented.`
+
+  // Build SDK mcpServers map from config when MCP is requested
+  const sdkMcpServers: Record<string, { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }> = {}
+  if (enableMcp) {
+    for (const srv of cfg.mcp_servers) {
+      if (!srv.command) continue
+      const safeName = srv.name.replace(/[^a-zA-Z0-9_-]/g, '_')
+      sdkMcpServers[safeName] = {
+        type: 'stdio',
+        command: srv.command,
+        ...(srv.args?.length ? { args: srv.args } : {}),
+        ...(Object.keys(srv.env ?? {}).length ? { env: srv.env } : {}),
+      }
+    }
+  }
 
   const approxLen = systemPrompt.length + messages.reduce((n, m) => n + m.content.length, 0)
   let model = selectModel(source, approxLen)
 
   while (true) {
     try {
-      const full = await streamAgentChatOnce(model, systemPrompt, messages, onChunk, streamId, source)
+      const full = await streamAgentChatOnce(
+        model, systemPrompt, messages, onChunk, streamId, source,
+        Object.keys(sdkMcpServers).length > 0 ? sdkMcpServers : undefined,
+      )
       onDone(full)
       return
     } catch (err) {
@@ -193,9 +270,9 @@ async function streamAgentChatOnce(
   onChunk: (chunk: string) => void,
   streamId: string | undefined,
   source: UsageSource,
+  mcpServers?: Record<string, { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }>,
 ): Promise<string> {
-  // Format conversation as a flat prompt — mirrors the CLI's -p approach so
-  // callers don't need to change; multi-turn MCP sessions come in Phase 3.
+  // Format conversation as a flat prompt — mirrors the CLI's -p approach.
   const prompt = messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')
 
   const ac = new AbortController()
@@ -212,9 +289,33 @@ async function streamAgentChatOnce(
     options: {
       systemPrompt,
       model,
-      maxTurns: 1,
+      maxTurns: mcpServers ? 10 : 1,
       permissionMode: 'default',
-      canUseTool: async () => ({ behavior: 'deny', message: 'tools available from Phase 3' }),
+      ...(mcpServers ? { mcpServers } : {}),
+      canUseTool: async (toolName: string, toolInput: unknown) => {
+        // Extract the base tool name after the mcp__server__ prefix
+        const parts = toolName.split('__')
+        const baseName = parts.length >= 3 ? parts.slice(2).join('__') : toolName
+
+        if (isReadOnlyTool(baseName)) return { behavior: 'allow' }
+
+        if (!mcpServers || !streamId) {
+          return { behavior: 'deny', message: 'Write tools require an active MCP-enabled chat session' }
+        }
+
+        // Gate write tools via user approval
+        const approvalId = crypto.randomUUID()
+        const approval = buildPendingToolApproval(
+          approvalId, toolName, (toolInput as Record<string, unknown>) ?? {}, streamId,
+        )
+        const resultPromise = new Promise<{ allow: boolean; editedInput?: Record<string, unknown> }>(
+          (resolve) => { pendingToolApprovals.set(approvalId, (a, ei) => resolve({ allow: a, editedInput: ei })) },
+        )
+        broadcast('chat:tool-approval-request', approval)
+        const { allow, editedInput } = await resultPromise
+        if (!allow) return { behavior: 'deny', message: 'Dismissed by user' }
+        return editedInput ? { behavior: 'allow', updatedInput: editedInput } : { behavior: 'allow' }
+      },
       abortController: ac,
     },
   })
@@ -278,4 +379,117 @@ async function streamAgentChatOnce(
   }
 
   return full
+}
+
+// ─── One-shot with MCP reads ──────────────────────────────────────────────────
+
+/**
+ * One-shot call with native MCP read-only tools available.
+ * Replaces runClaudeWithMcp() — write tools are always denied; only
+ * tools whose name starts with a read-only prefix are allowed.
+ */
+export async function runAgentWithMcp(
+  systemPrompt: string,
+  userPrompt: string,
+  source: UsageSource = 'suggest',
+  timeoutMs = 180_000,
+): Promise<string> {
+  const cfg = readConfig()
+  const sdkMcpServers: Record<string, { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }> = {}
+  for (const srv of cfg.mcp_servers) {
+    if (!srv.command) continue
+    const safeName = srv.name.replace(/[^a-zA-Z0-9_-]/g, '_')
+    sdkMcpServers[safeName] = {
+      type: 'stdio',
+      command: srv.command,
+      ...(srv.args?.length ? { args: srv.args } : {}),
+      ...(Object.keys(srv.env ?? {}).length ? { env: srv.env } : {}),
+    }
+  }
+  if (Object.keys(sdkMcpServers).length === 0) {
+    return runAgent(systemPrompt, userPrompt, source, timeoutMs)
+  }
+
+  let model = selectModel(source, systemPrompt.length + userPrompt.length)
+  while (true) {
+    try {
+      return await runAgentWithMcpOnce(model, systemPrompt, userPrompt, source, timeoutMs, false, sdkMcpServers)
+    } catch (err) {
+      const msg = (err as Error).message
+      if (msg === 'Agent timed out') throw err
+      const next = escalate(model)
+      if (!next) throw err
+      console.log(`[agent] MCP escalating ${model} → ${next} (${source}): ${msg}`)
+      model = next
+    }
+  }
+}
+
+// Internal overload of runAgentOnce that accepts mcpServers
+async function runAgentWithMcpOnce(
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  source: UsageSource,
+  timeoutMs: number,
+  expectJson: boolean,
+  mcpServers: Record<string, { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }>,
+): Promise<string> {
+  const ac = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => { timedOut = true; ac.abort() }, timeoutMs)
+
+  let text = ''
+  let resultMsg: SDKResultMessage | null = null
+
+  try {
+    for await (const msg of query({
+      prompt: userPrompt,
+      options: {
+        systemPrompt,
+        model,
+        maxTurns: 10,
+        permissionMode: 'default',
+        mcpServers,
+        canUseTool: async (toolName: string) => {
+          const parts = toolName.split('__')
+          const baseName = parts.length >= 3 ? parts.slice(2).join('__') : toolName
+          if (isReadOnlyTool(baseName)) return { behavior: 'allow' }
+          return { behavior: 'deny', message: 'write tools not available in one-shot MCP mode' }
+        },
+        abortController: ac,
+      },
+    })) {
+      if (msg.type === 'assistant') {
+        for (const block of msg.message?.content ?? []) {
+          if ((block as any).type === 'text') text += (block as any).text
+        }
+      }
+      if (msg.type === 'result') resultMsg = msg
+    }
+  } catch (err) {
+    clearTimeout(timer)
+    if (timedOut) throw new Error('Agent timed out')
+    throw err
+  }
+
+  clearTimeout(timer)
+  if (timedOut) throw new Error('Agent timed out')
+  if (!resultMsg) throw new Error('Agent returned no result message')
+  recordSdkUsage(source, model, resultMsg)
+  if (resultMsg.is_error) {
+    throw new Error(
+      typeof (resultMsg as any).result === 'string'
+        ? (resultMsg as any).result
+        : 'Agent returned an error',
+    )
+  }
+  if (!text) {
+    const r = typeof (resultMsg as any).result === 'string' ? (resultMsg as any).result as string : ''
+    if (r && !r.startsWith('{') && !r.startsWith('[')) text = r
+  }
+  if (expectJson && !text.includes('{') && !text.includes('[')) {
+    throw new Error('Agent returned non-JSON response when JSON was expected')
+  }
+  return text
 }

@@ -7,7 +7,7 @@ import { readConfig, buildOwnerClause } from './config'
 import { recordUsage } from './usage'
 import { getKnownServerTools, ensureServersConnected } from './mcp'
 import { selectModel, escalate } from './model-router'
-import { runAgent, streamAgentChat, cancelAgentChat } from './agent'
+import { runAgent, runAgentWithMcp, streamAgentChat, cancelAgentChat } from './agent'
 import type { PlanDraft, PlanItemTiming, ChatMessage, McpServerStatus, RoutineAction, RoutineSetupDraft, UsageSource } from '@shared/types'
 
 
@@ -550,171 +550,16 @@ Cron rules:
 
 // ─── MCP-enabled one-shot call (for Suggest re-proposal) ─────────────────────
 
-/**
- * Prefixes for tool names considered safe for read-only access during Suggest.
- * Only tools whose names start with one of these are included in the allowlist.
- * Write-capable tools (create/post/send/delete/etc.) are excluded at this layer
- * in addition to the VERB_TO_TOOL allowlist that guards actual execution.
- */
-const READ_ONLY_PREFIXES = [
-  'get', 'list', 'search', 'read', 'fetch', 'view', 'find',
-  'show', 'describe', 'query', 'lookup', 'check'
-]
-
-function isReadOnlyTool(toolName: string): boolean {
-  const lower = toolName.toLowerCase()
-  return READ_ONLY_PREFIXES.some((p) => lower.startsWith(p))
-}
-
-/**
- * Build the --mcp-config temp file and --allowedTools list for the claude CLI.
- *
- * Uses getKnownServerTools() instead of getServerStatus() so that read-only
- * tool names are still allowlisted even when the in-process client has died —
- * the CLI spawns its own fresh MCP subprocess from the config file.
- *
- * Returns null mcpConfigPath when no servers are configured.
- * Always call cleanup() when the CLI process exits (both success and error).
- */
-function buildMcpInvocation(): {
-  mcpConfigPath: string | null
-  allowedTools: string[]
-  cleanup: () => void
-} {
-  const cfg = readConfig()
-  const mcpConfig: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> = {}
-  const allowedTools: string[] = []
-
-  for (const srv of cfg.mcp_servers) {
-    if (!srv.command) continue
-    const safeName = srv.name.replace(/[^a-zA-Z0-9_-]/g, '_')
-    mcpConfig[safeName] = {
-      command: srv.command,
-      ...(srv.args && srv.args.length > 0 ? { args: srv.args } : {}),
-      ...(srv.env && Object.keys(srv.env).length > 0 ? { env: srv.env } : {})
-    }
-  }
-
-  // Build allowedTools from the last-known tool list so it survives dead clients.
-  for (const status of getKnownServerTools()) {
-    if (status.tools.length === 0) continue  // no known tools for this server
-    const safeName = status.name.replace(/[^a-zA-Z0-9_-]/g, '_')
-    for (const tool of status.tools) {
-      if (isReadOnlyTool(tool.name)) {
-        allowedTools.push(`mcp__${safeName}__${tool.name}`)
-      }
-    }
-  }
-
-  if (Object.keys(mcpConfig).length === 0) {
-    return { mcpConfigPath: null, allowedTools: [], cleanup: () => {} }
-  }
-
-  const mcpConfigPath = join(tmpdir(), `mypa-mcp-${Date.now()}.json`)
-  try {
-    writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: mcpConfig }, null, 2))
-  } catch {
-    return { mcpConfigPath: null, allowedTools: [], cleanup: () => {} }
-  }
-
-  const cleanup = () => { try { unlinkSync(mcpConfigPath) } catch { /* best-effort */ } }
-  return { mcpConfigPath, allowedTools, cleanup }
-}
-
-/**
- * Run a one-shot Claude call with the configured MCP servers wired in.
- * Only read-only tools are pre-approved; write tools are never CLI-allowlisted.
- *
- * The MCP config is written to a temp file, passed via --mcp-config, and
- * cleaned up after the call regardless of outcome.
- *
- * Returns the raw text output (may be a JSON envelope if the caller used
- * a structured response prompt).
- */
+/** Delegates to runAgentWithMcp in agent.ts — kept for call-site compat. */
 export async function runClaudeWithMcp(
   systemPrompt: string,
   userPrompt: string,
   source: UsageSource = 'suggest'
 ): Promise<string> {
-  const cfg = readConfig()
-  const fullPromptLen = systemPrompt.length + userPrompt.length + 2
-  const model = selectModel(source, fullPromptLen)
-
-  const { mcpConfigPath, allowedTools, cleanup } = buildMcpInvocation()
-
-  if (!mcpConfigPath) {
-    // No MCP servers configured — fall back to plain runClaude
-    return runClaude(systemPrompt, userPrompt, source)
-  }
-
-  const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
-  const args = [
-    '-p', fullPrompt,
-    '--output-format', 'json',
-    '--mcp-config', mcpConfigPath,
-    ...modelArgs(model)
-  ]
-  if (allowedTools.length > 0) {
-    args.push('--allowedTools', allowedTools.join(','))
-  }
-
-  return new Promise((resolve, reject) => {
-    const proc = spawn(getClaude(), args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: claudeEnv(cfg.claude.apiKey)
-    })
-    let stdout = ''
-    let stderr = ''
-    const timer = setTimeout(() => { proc.kill(); reject(new Error('Claude (MCP) timed out')) }, 180_000)
-    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString() })
-    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
-    proc.on('close', (code) => {
-      clearTimeout(timer)
-      cleanup()
-      if (code !== 0) {
-        reject(new Error(`Claude (MCP) failed: ${stderr || stdout}`))
-        return
-      }
-      try {
-        const parsed = JSON.parse(stdout.trim())
-        recordUsage(source, model, parsed)
-        if (parsed.is_error) {
-          reject(new Error(String(parsed.result ?? parsed.error ?? 'Claude returned an error')))
-          return
-        }
-        resolve(typeof parsed.result === 'string' ? parsed.result : stdout.trim())
-      } catch {
-        resolve(stdout.trim())
-      }
-    })
-    proc.on('error', (err) => {
-      cleanup()
-      clearTimeout(timer)
-      reject(err)
-    })
-  })
+  return runAgentWithMcp(systemPrompt, userPrompt, source)
 }
 
 // ─── Streaming chat ───────────────────────────────────────────────────────────
-
-// Added to the system prompt when MCP tools are available in a chat turn.
-// Tells the model it can use read-only tools freely and how to propose writes.
-const MCP_CHAT_SYSTEM_ADDENDUM = `
-You have live read-only MCP tools available. Call them freely to look up current state (e.g. check PR comments, Jira status, Slack threads) before answering. Read/lookup tool calls are always approved.
-
-To propose a write action, end your reply with one action block:
-<action>{ "surface": "github", "verb": "comment", "target": "<PR or issue title>", "payload": { "body": "<your comment text>" } }</action>
-
-CRITICAL: emitting the action block does NOT post or execute anything. It queues the write for the user's approval (they see Approve/Dismiss buttons, or they can type "go ahead" / "yes" / "approve it"). You will be told the result on the next turn once they actually approve or dismiss. Never claim or imply the write has happened — say "I've queued this for your approval" or similar.
-
-Valid surface:verb pairs: github:comment, github:label, github:approve, jira:comment, slack:reply, slack:send.
-- github:comment — post a comment on a PR or issue. payload: { "body": "..." }
-- github:label   — add labels to a PR or issue. payload: { "labels": ["label-name"] }
-- github:approve — submit a formal APPROVE review on a PR. payload: {} (optional "body" for a review message). This flips the PR's review state, not just a comment.
-- jira:comment   — add a comment to a Jira issue. payload: { "body": "..." }
-- slack:reply / slack:send — post to Slack. payload: { "message": "..." }
-Do NOT call write tools directly — only read-only lookups are CLI-approved. Use the action block for writes.
-Routing details (owner, repo, pull/issue number, channel, etc.) are injected automatically — you do not need to provide them. If you do provide owner/repo/issue_number in the payload they will be used as a fallback.`.trim()
 
 export async function streamChat(
   history: ChatMessage[],
@@ -724,7 +569,7 @@ export async function streamChat(
   rawContext?: string,
   streamId?: string,
   source: UsageSource = 'chat',
-  _enableMcp?: boolean  // MCP wired in Phase 3; accepted here so callers need no change
+  enableMcp?: boolean
 ): Promise<void> {
-  return streamAgentChat(history, userMessage, onChunk, onDone, rawContext, streamId, source)
+  return streamAgentChat(history, userMessage, onChunk, onDone, rawContext, streamId, source, enableMcp ?? false)
 }
