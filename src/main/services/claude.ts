@@ -7,6 +7,7 @@ import { readConfig, buildOwnerClause } from './config'
 import { recordUsage } from './usage'
 import { getKnownServerTools, ensureServersConnected } from './mcp'
 import { selectModel, escalate } from './model-router'
+import { runAgent } from './agent'
 import type { PlanDraft, PlanItemTiming, ChatMessage, McpServerStatus, RoutineAction, RoutineSetupDraft, UsageSource } from '@shared/types'
 
 
@@ -170,14 +171,8 @@ async function runClaudeOnce(
 
 /**
  * One-shot Claude call with automatic model selection and failure escalation.
- *
- * The model is chosen by selectModel() based on the task's source and prompt
- * length. If the call fails (error, is_error, bad JSON when expectJson=true),
- * the call is automatically retried once at the next-stronger model tier.
- * No further escalation is attempted once the top tier is reached.
- *
- * Pass expectJson=true for tasks that require a valid JSON response body —
- * a non-JSON result will trigger escalation rather than silently resolving.
+ * Delegates to runAgent() (Agent SDK) — kept for backward compatibility with
+ * existing callers. New code should import runAgent from './agent' directly.
  */
 export async function runClaude(
   systemPrompt: string,
@@ -186,21 +181,7 @@ export async function runClaude(
   timeoutMs: number = 120_000,
   expectJson: boolean = false
 ): Promise<string> {
-  const fullPrompt = `${systemPrompt}\n\n${userPrompt}`
-  let model = selectModel(source, fullPrompt.length)
-  while (true) {
-    try {
-      return await runClaudeOnce(model, fullPrompt, source, timeoutMs, expectJson)
-    } catch (err) {
-      // Timeouts are a resource/latency constraint, not a capability gap — escalating to
-      // a slower model with the same budget would just repeat the timeout. Fail fast.
-      if ((err as Error).message === 'Claude timed out') throw err
-      const next = escalate(model)
-      if (!next) throw err
-      console.log(`[claude] escalating ${model} → ${next} (${source}): ${(err as Error).message}`)
-      model = next
-    }
-  }
+  return runAgent(systemPrompt, userPrompt, source, timeoutMs, expectJson)
 }
 
 function parseStreamEvent(
