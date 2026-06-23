@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { recordUsage } from './usage'
 import { selectModel, escalate } from './model-router'
 import { readConfig, buildOwnerClause } from './config'
+import { buildAgentEnv } from './auth'
 import { broadcast } from '../windows'
 import type { UsageSource, ChatMessage, PendingToolApproval, PendingQuestion } from '@shared/types'
 
@@ -186,6 +187,7 @@ async function runAgentOnce(
         // Deny all tools — this is a pure text-generation call, not an agentic session.
         canUseTool: async () => ({ behavior: 'deny', message: 'one-shot mode — no tools' }),
         abortController: ac,
+        env: buildAgentEnv(),
       }
     })) {
       if (msg.type === 'assistant') {
@@ -366,6 +368,7 @@ async function streamAgentChatOnce(
       maxTurns: hasMcp ? 10 : 1,
       permissionMode: 'default',
       ...(hasMcp ? { mcpServers: allMcpServers } : {}),
+      env: buildAgentEnv(),
       canUseTool: async (toolName: string, toolInput: unknown) => {
         // Extract the base tool name after the mcp__server__ prefix
         const parts = toolName.split('__')
@@ -542,6 +545,7 @@ async function runAgentWithMcpOnce(
         maxTurns: 10,
         permissionMode: 'default',
         mcpServers,
+        env: buildAgentEnv(),
         canUseTool: async (toolName: string) => {
           const parts = toolName.split('__')
           const baseName = parts.length >= 3 ? parts.slice(2).join('__') : toolName

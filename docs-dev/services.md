@@ -4,6 +4,21 @@ All services live in `src/main/services/`. They run in the Node.js main process 
 
 ---
 
+## `auth.ts` — Claude authentication resolver
+
+Determines and injects Claude credentials for every SDK call.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `resolveAuthSource()` | Returns `{ ok: boolean; source: AuthSource }` — probes in order: stored config API key → `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN` env var → `~/.claude/.credentials.json` → `'none'`. Used by `setup:check-prerequisites` / `setup:get-health`. |
+| `buildAgentEnv()` | Returns `{ ...process.env, ANTHROPIC_API_KEY: key }` when a key is stored, or `undefined` otherwise. Passed as `options.env` to all `query()` calls in `agent.ts`. |
+
+`AuthSource` type: `'apikey' | 'env' | 'cli-login' | 'none'` (exported from `@shared/types`).
+
+---
+
 ## `agent.ts` — Claude Agent SDK integration
 
 Implements all AI calls using `@anthropic-ai/claude-agent-sdk` directly (no subprocess spawn). See [claude-integration.md](claude-integration.md) for the detailed write-up.
@@ -30,7 +45,6 @@ Forwards calls to `agent.ts`. The subprocess-spawn code has been removed. See [c
 
 | Export | Description |
 |---|---|
-| `detectClaudeBin()` | Non-throwing resolver: returns the absolute path to the `claude` CLI or `null`; used by `setup:check-prerequisites` / `setup:get-health` |
 | `runClaude(systemPrompt, userPrompt, source?, timeoutMs?, expectJson?)` | Shim → `runAgent(...)` |
 | `runClaudeWithMcp(systemPrompt, userPrompt, source?)` | Shim → `runAgentWithMcp(...)` |
 | `streamChat(history, userMessage, onChunk, onDone, rawContext?, streamId?, source?, enableMcp?)` | Shim → `streamAgentChat(...)` |
@@ -332,6 +346,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-06-22 — **New `auth.ts` service; `detectClaudeBin` removed:** added `src/main/services/auth.ts` with `buildAgentEnv()` (returns `{ ...process.env, ANTHROPIC_API_KEY }` when a key is stored, or `undefined` to inherit ambient creds) and `resolveAuthSource()` (priority probe: stored key → env var → `~/.claude/.credentials.json` → none). All three `query()` call sites in `agent.ts` now pass `env: buildAgentEnv()`. `detectClaudeBin()`, `nvmClaudePaths()`, `npmGlobalBin()` and their `execSync`/`readdirSync` imports removed from `claude.ts` — no subprocess is needed for auth probing or inference.
 
 - 2026-06-22 — **Inference: empty-sentinel guard + Jira URL reconstruction (`inference.ts`, `ingestion.ts`).** (1) `isEmptySentinel(obj)` helper added to `inference.ts` — detects when the model copies the "nothing actionable" fallback template with a non-zero confidence (bypassing the confidence floor) by checking `type==='flag' && verb==='none' && (rationale==='nothing actionable' || target==='nothing')`. Applied before all other floor checks in both `inferIntent` and `inferRoutineIntents`; drops with a new `'empty-sentinel'` discriminant in `InferIntentResult.dropReason`. (2) `makeJiraAdapter` poll in `ingestion.ts` now reconstructs the URL when `i.url` is absent: reads `JIRA_URL` from the configured `jira` MCP server's env and builds `${JIRA_URL}/browse/${key}`. This flows through `normalize()` → `signals.url` → graph-node `attrs.url` → `context_packet`, enabling clickable links on Jira intent cards.
 

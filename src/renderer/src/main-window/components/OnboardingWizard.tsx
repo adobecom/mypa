@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { Check, Copy, ExternalLink, RefreshCw, Wand2, AlertTriangle } from 'lucide-react'
+import { Check, RefreshCw, Wand2, AlertTriangle, KeyRound } from 'lucide-react'
 import LogoMark from '../../LogoMark'
 import ServerCatalogPicker from './ServerCatalogPicker'
 import { useToast } from '../toast/ToastProvider'
-import type { AppConfig, McpServerConfig, OAuthAppCredential, OAuthProvider, ResolvedOwnerHandles } from '@shared/types'
+import type { AppConfig, McpServerConfig, OAuthAppCredential, OAuthProvider, ResolvedOwnerHandles, AuthSource } from '@shared/types'
 
 interface Props {
   onComplete: () => void
@@ -13,12 +13,13 @@ type Step = 1 | 2 | 3 | 4 | 5
 
 export default function OnboardingWizard({ onComplete }: Props): React.ReactElement {
   const [step, setStep] = useState<Step>(1)
-  const [cliOk, setCliOk] = useState<boolean | null>(null)
-  const [checkingCli, setCheckingCli] = useState(false)
+  const [authState, setAuthState] = useState<{ ok: boolean; source: AuthSource } | null>(null)
+  const [checkingAuth, setCheckingAuth] = useState(false)
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [savingKey, setSavingKey] = useState(false)
   const [existingServers, setExistingServers] = useState<McpServerConfig[]>([])
   const [serversAdded, setServersAdded] = useState<McpServerConfig[]>([])
   const [oauthCreds, setOauthCreds] = useState<AppConfig['oauth_apps']>({})
-  const [copied, setCopied] = useState(false)
   const [transitioning, setTransitioning] = useState(false)
   const [ownerName, setOwnerName] = useState('')
   const [ownerHandles, setOwnerHandles] = useState<NonNullable<AppConfig['owner']>['handles']>({})
@@ -39,22 +40,22 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
       .catch(() => toast.error('Could not load config', { message: 'Some settings may not be pre-filled.' }))
   }, [api])
 
-  const checkCli = useCallback(async () => {
-    setCheckingCli(true)
+  const checkAuth = useCallback(async () => {
+    setCheckingAuth(true)
     try {
-      const { claudeCli } = await api.setup.checkPrerequisites()
-      setCliOk(claudeCli)
+      const result = await api.setup.checkPrerequisites()
+      setAuthState(result)
     } catch {
-      setCliOk(false)
+      setAuthState({ ok: false, source: 'none' })
       toast.error('Check failed', { message: 'Could not reach the main process. Try restarting mypa.' })
     } finally {
-      setCheckingCli(false)
+      setCheckingAuth(false)
     }
   }, [api, toast])
 
   useEffect(() => {
-    if (step === 2 && cliOk === null) checkCli()
-  }, [step, cliOk, checkCli])
+    if (step === 2 && authState === null) checkAuth()
+  }, [step, authState, checkAuth])
 
   const handleNext = async () => {
     if (transitioning) return
@@ -145,10 +146,18 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
     }
   }
 
-  const copyInstallCommand = () => {
-    navigator.clipboard.writeText('npm install -g @anthropic-ai/claude-code')
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+  const handleSaveApiKey = async () => {
+    if (!apiKeyInput.trim()) return
+    setSavingKey(true)
+    try {
+      await api.config.setClaudeKey(apiKeyInput.trim())
+      setApiKeyInput('')
+      await checkAuth()
+    } catch {
+      toast.error('Could not save API key', { message: 'Please try again.' })
+    } finally {
+      setSavingKey(false)
+    }
   }
 
   return (
@@ -196,21 +205,21 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
           </div>
         )}
 
-        {/* ── Step 2: Prerequisites ────────────────────────────────────────── */}
+        {/* ── Step 2: Connect Claude ───────────────────────────────────────── */}
         {step === 2 && (
           <div>
             <div style={{ marginBottom: 28 }}>
-              <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Check prerequisites</div>
+              <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Connect Claude</div>
               <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                mypa uses the Claude Code CLI to run AI tasks — it must be installed locally.
+                mypa needs access to the Claude AI API. Provide an API key or use your existing Claude login.
               </div>
             </div>
 
             <div className="card" style={{ padding: '16px 20px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                {checkingCli ? (
+                {checkingAuth ? (
                   <span className="spinner" />
-                ) : cliOk === true ? (
+                ) : authState?.ok ? (
                   <div style={{
                     width: 22, height: 22, borderRadius: '50%',
                     background: 'var(--color-success, #22c55e)',
@@ -218,7 +227,7 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
                   }}>
                     <Check size={13} color="white" strokeWidth={3} />
                   </div>
-                ) : cliOk === false ? (
+                ) : authState && !authState.ok ? (
                   <div style={{
                     width: 22, height: 22, borderRadius: '50%',
                     background: 'var(--color-error, #ef4444)',
@@ -227,19 +236,23 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
                   }}>✕</div>
                 ) : null}
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600 }}>Claude Code CLI</div>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>Claude authentication</div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 1 }}>
-                    {checkingCli
+                    {checkingAuth
                       ? 'Checking…'
-                      : cliOk
-                        ? 'Detected — you\'re ready to go'
-                        : 'Not found — install it to continue'}
+                      : authState?.ok
+                        ? authState.source === 'apikey'
+                          ? 'API key configured'
+                          : authState.source === 'env'
+                            ? 'Using environment credentials'
+                            : 'Claude login detected'
+                        : 'No credentials detected'}
                   </div>
                 </div>
-                {!checkingCli && (
+                {!checkingAuth && (
                   <button
                     className="btn btn--ghost btn--sm"
-                    onClick={checkCli}
+                    onClick={checkAuth}
                     style={{ display: 'flex', alignItems: 'center', gap: 4 }}
                   >
                     <RefreshCw size={12} />
@@ -248,39 +261,48 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
                 )}
               </div>
 
-              {cliOk === false && (
+              {authState && !authState.ok && (
                 <div style={{
                   marginTop: 16, padding: '12px 14px',
                   background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)'
                 }}>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
-                    Install the Claude Code CLI:
+                    Enter an Anthropic API key to authenticate:
                   </div>
-                  <div style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    background: 'var(--bg-base)', borderRadius: 'var(--radius-sm)',
-                    padding: '8px 12px', fontFamily: 'monospace', fontSize: 13
-                  }}>
-                    <span style={{ flex: 1, color: 'var(--text-secondary)' }}>
-                      npm install -g @anthropic-ai/claude-code
-                    </span>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      type="password"
+                      placeholder="sk-ant-…"
+                      value={apiKeyInput}
+                      onChange={(e) => setApiKeyInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleSaveApiKey() }}
+                      style={{
+                        flex: 1, fontFamily: 'monospace', fontSize: 13,
+                        padding: '7px 10px', borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border)', background: 'var(--bg-base)',
+                        color: 'var(--text-primary)', outline: 'none'
+                      }}
+                    />
                     <button
-                      className="btn btn--ghost btn--sm"
-                      onClick={copyInstallCommand}
-                      style={{ padding: '2px 6px' }}
+                      className="btn btn--primary btn--sm"
+                      onClick={handleSaveApiKey}
+                      disabled={!apiKeyInput.trim() || savingKey}
+                      style={{ display: 'flex', alignItems: 'center', gap: 4 }}
                     >
-                      {copied ? <Check size={12} /> : <Copy size={12} />}
+                      {savingKey ? <span className="spinner" /> : <KeyRound size={13} />}
+                      Save
                     </button>
                   </div>
-                  <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-muted)' }}>
-                    Or download from{' '}
+                  <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
+                    Get a key at{' '}
                     <a
                       href="#"
-                      onClick={(e) => { e.preventDefault(); window.open('https://claude.ai/download') }}
-                      style={{ color: 'var(--accent)', display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                      onClick={(e) => { e.preventDefault(); window.open('https://console.anthropic.com/settings/keys') }}
+                      style={{ color: 'var(--accent)' }}
                     >
-                      claude.ai/download <ExternalLink size={11} />
+                      console.anthropic.com
                     </a>
+                    . Already logged in with Claude? Hit Retry — your session will be detected.
                   </div>
                 </div>
               )}
@@ -289,7 +311,7 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
             <WizardNav
               onBack={handleBack}
               onNext={handleNext}
-              nextDisabled={!cliOk || transitioning}
+              nextDisabled={(!!apiKeyInput.trim() && !authState?.ok) || transitioning}
               backDisabled={transitioning}
               nextLabel="Next →"
             />
@@ -447,7 +469,7 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
             </div>
 
             <div className="card" style={{ padding: '14px 18px', marginBottom: 24 }}>
-              <SummaryRow ok label="Claude Code CLI detected" />
+              <SummaryRow ok={authState?.ok ?? false} label={authState?.ok ? 'Claude authenticated' : 'Claude not authenticated — add a key in Settings'} />
               <SummaryRow ok label="Model selection: automatic" />
               {serversAdded.length > 0 ? (
                 <SummaryRow ok label={`${serversAdded.length} tool${serversAdded.length === 1 ? '' : 's'} connected`} />

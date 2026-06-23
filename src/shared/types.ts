@@ -602,6 +602,9 @@ export interface UsageBreakdownRow {
 
 // ─── Setup / Health ───────────────────────────────────────────────────────────
 
+/** Where the active Claude authentication credential is coming from. */
+export type AuthSource = 'apikey' | 'env' | 'cli-login' | 'none'
+
 export interface SetupHealthServer {
   name: string
   connected: boolean
@@ -614,7 +617,8 @@ export interface SetupHealthServer {
 }
 
 export interface SetupHealth {
-  claudeCli: boolean
+  /** Active Claude auth source. ok=false means no credentials were detected. */
+  auth: { ok: boolean; source: AuthSource }
   servers: SetupHealthServer[]
 }
 
@@ -667,7 +671,7 @@ export interface IpcApi {
     startPkce(provider: 'notion' | 'linear'): Promise<string>
   }
   setup: {
-    checkPrerequisites(): Promise<{ claudeCli: boolean }>
+    checkPrerequisites(): Promise<{ ok: boolean; source: AuthSource }>
     getHealth(): Promise<SetupHealth>
     detectClaudeMcp(): Promise<DetectedMcpServer[]>
     resolveOwnerHandles(): Promise<ResolvedOwnerHandles>

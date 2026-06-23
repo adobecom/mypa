@@ -217,13 +217,12 @@ Data: `window.electron.usage.*` — all five calls made in parallel on mount and
 
 #### Onboarding wizard
 
-`OnboardingWizard` walks first-time users through (6 steps):
+`OnboardingWizard` walks first-time users through (5 steps):
 1. Welcome.
-2. Installing / verifying the Claude CLI.
-3. Choosing a model.
-4. Connecting MCP servers / OAuth providers.
-5. **About you** — name + per-surface handles with auto-fill button; saves to `AppConfig.owner`.
-6. All set — summary.
+2. **Connect Claude** — calls `setup:check-prerequisites` to probe for credentials (`AuthSource`). Shows the detected source (API key / env vars / Claude login) or an inline API-key input field when none are found. Soft gate: Next is enabled once a source is detected or a key has been entered. Does NOT require a standalone Claude Code CLI binary.
+3. Connecting MCP servers / OAuth providers.
+4. **About you** — name + per-surface handles with auto-fill button; saves to `AppConfig.owner`.
+5. All set — summary showing auth status, tool count, and identity.
 
 Completes by setting `onboarding_complete: true` in config.
 
@@ -244,6 +243,8 @@ Located in `src/renderer/src/` (shared between widget and main window):
 | `components.css` | Shared component stylesheet imported by both renderer entry points before their window-specific `index.css`. Contains `.routine-card*`, `.intent-card*`, `.intent-detail*`, `.intent-chip*`, `.plan-review-card*`, `.review-field*`, `.section-header`, `.section-subheader`, `.tabs`, `.tab*`. |
 
 ## Changelog
+
+- 2026-06-22 — **Onboarding Step 2 rework — "Connect Claude":** `OnboardingWizard.tsx` step 2 rewritten. Old: hard gate on detecting the `claude` CLI binary (`detectClaudeBin`). New: calls `setup:check-prerequisites` (returns `{ ok, source: AuthSource }`) and shows which auth source is active. When no credentials are found, renders an inline API-key password input that saves via `api.config.setClaudeKey` and re-checks. Next button is a soft gate (enabled once auth is detected or a key is entered). Step 5 summary row is now dynamic: "Claude authenticated" (ok) or "Claude not authenticated" (not ok). Removed `cliOk`, `checkingCli`, `copied` state; added `authState`, `checkingAuth`, `apiKeyInput`, `savingKey`. Removed `copyInstallCommand`; added `handleSaveApiKey`. Imports: removed `Copy`, `ExternalLink`; added `KeyRound`, `AuthSource`.
 
 - 2026-06-22 — **RoutineCard: collapsible tracked items + clickable tracked-item links.** The "Tracked items" section inside a routine card is now collapsed by default (shows only a toggle row: "Tracked items · N" + rotating chevron); the chat is visible first without scrolling. Clicking the toggle row expands/collapses the list. When a tracked entity has a URL (`CoveredEntity.url`), its title is rendered as a clickable link (cursor pointer, accent color on hover, inline `ExternalLink` icon) that calls `window.electron.system.openExternal(url)`. New CSS: `.routine-card__tracked-toggle`, `.routine-card__tracked-title--link`.
 

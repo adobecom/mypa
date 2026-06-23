@@ -1,79 +1,7 @@
-import { execSync } from 'child_process'
-import { existsSync, readdirSync } from 'fs'
-import { join } from 'path'
 import cron from 'node-cron'
 import { readConfig, buildOwnerClause } from './config'
 import { runAgent, runAgentWithMcp, streamAgentChat, cancelAgentChat } from './agent'
 import type { PlanDraft, PlanItemTiming, ChatMessage, McpServerStatus, RoutineAction, RoutineSetupDraft, UsageSource } from '@shared/types'
-
-
-/** All ~/.nvm/versions/node/<ver>/bin dirs, newest version first. */
-function nvmClaudePaths(home: string): string[] {
-  const versionsDir = join(home, '.nvm', 'versions', 'node')
-  try {
-    return readdirSync(versionsDir)
-      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
-      .map((v) => join(versionsDir, v, 'bin', 'claude'))
-  } catch {
-    return []
-  }
-}
-
-// undefined = not yet probed; null = probed, not found; string = probed, found
-let _npmGlobalBin: string | null | undefined = undefined
-
-/** Best-effort: resolve `npm prefix -g`/bin via a subprocess. Cached for process lifetime. */
-function npmGlobalBin(): string | null {
-  if (_npmGlobalBin !== undefined) return _npmGlobalBin
-  try {
-    const prefix = execSync('npm prefix -g', { shell: '/bin/sh', encoding: 'utf8', timeout: 3000 }).trim()
-    _npmGlobalBin = prefix ? join(prefix, 'bin') : null
-  } catch {
-    _npmGlobalBin = null
-  }
-  return _npmGlobalBin
-}
-
-/**
- * Resolve the claude CLI binary without throwing.
- * Order:
- *   1. PATH lookup via `which` (inherits the PATH that fixPath() already patched).
- *   2. Static list of well-known absolute install locations, including every
- *      nvm node-version bin dir (enumerated from disk, newest version first).
- * Returns an absolute path, or null if not found.
- */
-export function detectClaudeBin(): string | null {
-  // 1. PATH lookup
-  try {
-    const out = process.platform === 'win32'
-      ? execSync('where claude', { encoding: 'utf8' }).split(/\r?\n/)[0].trim()
-      : execSync('which claude', { shell: '/bin/sh', encoding: 'utf8' }).trim()
-    if (out && existsSync(out)) return out
-  } catch {
-    // fall through to static candidates
-  }
-
-  // 2. Known absolute install locations
-  const home = process.env.HOME || ''
-  const candidates: string[] = []
-  if (home) {
-    candidates.push(join(home, '.claude', 'local', 'claude'))   // official installer
-    candidates.push(join(home, '.npm-global', 'bin', 'claude')) // npm prefix -g default
-    candidates.push(join(home, '.local', 'bin', 'claude'))
-    candidates.push(join(home, '.bun', 'bin', 'claude'))
-    candidates.push(...nvmClaudePaths(home))                    // nvm: all node versions
-  }
-  candidates.push('/opt/homebrew/bin/claude')
-  candidates.push('/usr/local/bin/claude')
-  // best-effort: custom npm global prefix
-  const npmBin = npmGlobalBin()
-  if (npmBin) candidates.push(join(npmBin, 'claude'))
-
-  for (const p of candidates) {
-    try { if (existsSync(p)) return p } catch { /* unreadable, skip */ }
-  }
-  return null
-}
 
 /**
  * One-shot Claude call — delegates to runAgent() (Agent SDK).

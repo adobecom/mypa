@@ -38,7 +38,8 @@ import { startDeviceFlow, pollDeviceFlow, startPkceFlow } from './services/oauth
 import { detectClaudeMcpServers } from './services/claude-import'
 import { executeRoutine, handleRunMessage } from './services/routines'
 import { createPlanDraft, confirmPlanDraft, updatePlanItemStatus, deletePlanItem, handlePlanMessage, approvePlanAction, dismissPlanAction } from './services/plan'
-import { generateRoutineSetup, cancelStream, detectClaudeBin } from './services/claude'
+import { generateRoutineSetup, cancelStream } from './services/claude'
+import { resolveAuthSource } from './services/auth'
 import { resolveToolApproval, resolveQuestion } from './services/agent'
 import { refreshSchedules, refreshCheckinSchedule, stopScheduler } from './services/cron'
 import { startCheckIn, handleCheckInMessage, endCheckIn, cancelCheckinStream } from './services/checkin'
@@ -296,12 +297,12 @@ export function registerIpcHandlers(
 
   // ─── Setup / Health ────────────────────────────────────────────────────────
 
-  ipcMain.handle('setup:check-prerequisites', async (): Promise<{ claudeCli: boolean }> => {
-    return { claudeCli: detectClaudeBin() !== null }
+  ipcMain.handle('setup:check-prerequisites', async () => {
+    return resolveAuthSource()
   })
 
   ipcMain.handle('setup:get-health', async (): Promise<SetupHealth> => {
-    const claudeCli = detectClaudeBin() !== null
+    const auth = resolveAuthSource()
 
     const config = readConfig()
     const statuses = getServerStatus()
@@ -369,7 +370,7 @@ export function registerIpcHandlers(
       }
     })
 
-    return { claudeCli, servers }
+    return { auth, servers }
   })
 
   ipcMain.handle('setup:detect-claude-mcp', () => detectClaudeMcpServers())

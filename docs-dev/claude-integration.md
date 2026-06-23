@@ -4,24 +4,25 @@ All AI work in mypa goes through `src/main/services/agent.ts`, which uses `@anth
 
 ---
 
-## Binary discovery
+## Authentication
 
-`detectClaudeBin(): string | null` (exported from `claude.ts`) is retained for the setup/health IPC handlers. It never throws.
+mypa does **not** require a standalone Claude Code CLI installation. The `@anthropic-ai/claude-agent-sdk` carries its own bundled executable.
 
-Priority order:
+Credentials are resolved in priority order by `resolveAuthSource()` in `src/main/services/auth.ts`:
 
-1. `which claude` against the PATH that `fixPath()` patched (covers Homebrew, nvm, npm-global when PATH is correctly inherited or repaired).
-2. Static candidate list, checked with `existsSync`, in order:
-   - `~/.claude/local/claude` — official installer
-   - `~/.npm-global/bin/claude` — default npm global prefix
-   - `~/.local/bin/claude`
-   - `~/.bun/bin/claude`
-   - `~/.nvm/versions/node/<ver>/bin/claude` — all installed nvm node versions, newest first (enumerated from disk via `readdirSync`, no shell)
-   - `/opt/homebrew/bin/claude`
-   - `/usr/local/bin/claude`
-   - `$(npm prefix -g)/bin/claude` — best-effort custom prefix (3 s timeout, never blocks startup)
+| Source | Condition | `AuthSource` value |
+|---|---|---|
+| Stored API key | `config.claude.apiKey` is non-empty | `'apikey'` |
+| Env var | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` in `process.env` | `'env'` |
+| Claude login | `~/.claude/.credentials.json` exists | `'cli-login'` |
+| None | None of the above | `'none'` |
 
-`path-fix.ts` (`fixPath()`) also enumerates all nvm node-version bin dirs via `nvmBinDirs()` and adds `~/.claude/local`, `~/.npm-global/bin`, `~/.bun/bin`, and `~/.volta/bin` to `process.env.PATH`.
+**Important macOS caveat:** A Keychain-stored Claude Code login token is not readable by the file-based probe in step 3. `resolveAuthSource()` may return `{ ok: false, source: 'none' }` even when valid Keychain credentials exist. The onboarding wizard and Settings health panel treat this as a soft warning, not a hard error.
+
+`buildAgentEnv()` (also in `auth.ts`) returns the `env` override to pass to `query()`:
+- When an API key is configured: `{ ...process.env, ANTHROPIC_API_KEY: key }`.  
+  The SDK `options.env` **replaces** the subprocess env entirely — `process.env` must be spread first to preserve `PATH`, `HOME`, etc.
+- When no key is stored: `undefined` — the SDK inherits `process.env` unchanged, picking up ambient credentials.
 
 ---
 
@@ -180,7 +181,7 @@ Unblocks a pending `ask_user` invocation with the user's chosen answer. Called b
 | `runClaude(...)` | `runAgent(...)` in `agent.ts` |
 | `streamChat(...)` | `streamAgentChat(...)` in `agent.ts` |
 | `cancelStream(streamId)` | `cancelAgentChat(streamId)` in `agent.ts` |
-| `detectClaudeBin()` | Still implemented here; used by setup/health IPC handlers |
+| `detectClaudeBin()` | Removed — replaced by `resolveAuthSource()` in `auth.ts` |
 
 `runClaudeWithMcp` delegates to `runAgentWithMcp` in `agent.ts`.
 
@@ -279,6 +280,8 @@ This clause is appended in `inferIntent` (`inference.ts`) after `buildOwnerClaus
 `@anthropic-ai/claude-agent-sdk` platform binaries (e.g. `@anthropic-ai/claude-agent-sdk-darwin-arm64`) must be spawnable from a packaged app. The `package.json` build config includes `**/node_modules/@anthropic-ai/claude-agent-sdk-*/**` in `asarUnpack` so the native binary is extracted from the ASAR archive at install time.
 
 ## Changelog
+
+- 2026-06-22 — **Dual-source auth, CLI dependency removed:** new `src/main/services/auth.ts` with `buildAgentEnv()` (injects stored API key into `query()` options.env, spreading process.env to preserve PATH/HOME) and `resolveAuthSource()` (priority probe: stored key → env var → ~/.claude/.credentials.json → none). All three `query()` call sites in `agent.ts` now pass `env: buildAgentEnv()`. `detectClaudeBin()` and all CLI-detection helpers removed from `claude.ts`. `SetupHealth.claudeCli` replaced by `SetupHealth.auth: { ok, source: AuthSource }`. Onboarding Step 2 reworked from "install Claude Code CLI" to "Connect Claude" with inline API-key entry; no longer a hard block. Settings health row updated to show auth source instead of CLI presence.
 
 - 2026-06-22 — **Agent SDK migration complete:** replaced `claude` CLI subprocess with `@anthropic-ai/claude-agent-sdk`. All AI calls now go through `src/main/services/agent.ts`. `runClaude`/`streamChat`/`cancelStream` in `claude.ts` are now thin shims delegating to `runAgent`/`streamAgentChat`/`cancelAgentChat`. Removed dead subprocess spawn code. MCP servers are passed via `options.mcpServers` (not `--mcp-config` temp file). `canUseTool` callback gates write tools on user approval by broadcasting `chat:tool-approval-request`; read-only prefixes are auto-allowed. New `ask_user` in-process MCP tool broadcasts `chat:ask-question` to block the stream on user input. New `PendingToolApproval` and `PendingQuestion` interfaces in `src/shared/types.ts`. New `IpcApi.chat` namespace with `resolveToolApproval()` and `answerQuestion()`. SDK platform binary added to `asarUnpack` in `package.json`. Removed `stageChatActionsFromSegment` and `ACTION_BLOCK_RE` from `ambient.ts` (text-sentinel write-action layer, superseded by SDK `canUseTool` gating).
 
