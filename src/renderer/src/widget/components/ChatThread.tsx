@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, KeyboardEvent } from 'react'
 import { Sparkles, ArrowUp, Square, Check, X } from 'lucide-react'
-import type { ChatMessage, ProposedChatAction } from '../../../../../../shared/types'
+import type { ChatMessage, ProposedChatAction, PendingToolApproval, PendingQuestion } from '../../../../../../shared/types'
 import MarkdownText from '@renderer/components/MarkdownText'
 import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 
@@ -16,6 +16,13 @@ interface Props {
   onApproveAction?: (message: ChatMessage, editedPayload?: Record<string, unknown>) => Promise<void>
   /** Called when the user dismisses a pending write action. */
   onDismissAction?: (message: ChatMessage) => Promise<void>
+  /** In-flight canUseTool gate: shown while the stream is paused awaiting user decision. */
+  pendingToolApproval?: PendingToolApproval | null
+  onApproveToolUse?: (editedInput?: Record<string, unknown>) => Promise<void>
+  onDenyToolUse?: () => Promise<void>
+  /** In-flight ask_user question: shown while the stream awaits a user choice. */
+  pendingQuestion?: PendingQuestion | null
+  onAnswerQuestion?: (answer: string | string[]) => Promise<void>
 }
 
 export default function ChatThread({
@@ -27,7 +34,12 @@ export default function ChatThread({
   error,
   onStop,
   onApproveAction,
-  onDismissAction
+  onDismissAction,
+  pendingToolApproval,
+  onApproveToolUse,
+  onDenyToolUse,
+  pendingQuestion,
+  onAnswerQuestion
 }: Props): React.ReactElement {
   const [input, setInput] = useState('')
   const threadRef = useRef<HTMLDivElement>(null)
@@ -99,6 +111,19 @@ export default function ChatThread({
             </>
           )
         })()}
+        {pendingToolApproval && (
+          <InlineToolApproval
+            approval={pendingToolApproval}
+            onApprove={onApproveToolUse}
+            onDeny={onDenyToolUse}
+          />
+        )}
+        {pendingQuestion && (
+          <QuestionChip
+            question={pendingQuestion}
+            onAnswer={onAnswerQuestion}
+          />
+        )}
         {error && !streaming && (
           <div className="chat-message chat-message--assistant chat-message--error">
             <div className="chat-message__avatar"><Sparkles size={10} /></div>
@@ -250,6 +275,125 @@ function ActionChip({
   return (
     <div className="chat-action-chip chat-action-chip--dismissed">
       <X size={11} /> {chipLabel} · Dismissed
+    </div>
+  )
+}
+
+function QuestionChip({
+  question,
+  onAnswer
+}: {
+  question: PendingQuestion
+  onAnswer?: (answer: string | string[]) => Promise<void>
+}): React.ReactElement {
+  const [busy, setBusy] = useState(false)
+  const [selected, setSelected] = useState<string[]>([])
+
+  const handleSelect = async (opt: string) => {
+    if (busy || !onAnswer) return
+    if (question.multiSelect) {
+      setSelected((prev) =>
+        prev.includes(opt) ? prev.filter((o) => o !== opt) : [...prev, opt]
+      )
+    } else {
+      setBusy(true)
+      try { await onAnswer(opt) } finally { setBusy(false) }
+    }
+  }
+
+  const handleConfirm = async () => {
+    if (busy || !onAnswer || selected.length === 0) return
+    setBusy(true)
+    try { await onAnswer(selected) } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="chat-action-chip chat-action-chip--pending">
+      <div className="chat-action-chip__label">{question.prompt}</div>
+      <div className="chat-action-chip__buttons" style={{ flexWrap: 'wrap', gap: 4 }}>
+        {question.options.map((opt) => (
+          <button
+            key={opt}
+            className={`btn btn--sm ${
+              question.multiSelect && selected.includes(opt) ? 'btn--primary' : 'btn--ghost'
+            }`}
+            onClick={() => handleSelect(opt)}
+            disabled={busy}
+          >
+            {opt}
+          </button>
+        ))}
+      </div>
+      {question.multiSelect && (
+        <div style={{ marginTop: 4, display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            className="btn btn--primary btn--sm"
+            onClick={handleConfirm}
+            disabled={busy || selected.length === 0}
+          >
+            <Check size={11} /> Confirm
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function InlineToolApproval({
+  approval,
+  onApprove,
+  onDeny
+}: {
+  approval: PendingToolApproval
+  onApprove?: (editedInput?: Record<string, unknown>) => Promise<void>
+  onDeny?: () => Promise<void>
+}): React.ReactElement {
+  const [busy, setBusy] = useState(false)
+  const [draft, setDraft] = useState(approval.editableValue ?? '')
+  const draftRef = useAutoGrowTextarea(draft)
+
+  const handleApprove = async () => {
+    if (busy || !onApprove) return
+    setBusy(true)
+    try {
+      const edited = approval.editableField && draft.trim()
+        ? { [approval.editableField]: draft }
+        : undefined
+      await onApprove(edited)
+    } finally { setBusy(false) }
+  }
+
+  const handleDeny = async () => {
+    if (busy || !onDeny) return
+    setBusy(true)
+    try { await onDeny() } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="chat-action-chip chat-action-chip--pending">
+      <div className="chat-action-chip__label">{approval.displayLabel}</div>
+      {approval.editableField && (
+        <textarea
+          ref={draftRef}
+          className="chat-action-chip__draft"
+          rows={2}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          disabled={busy}
+        />
+      )}
+      <div className="chat-action-chip__buttons">
+        <button className="btn btn--ghost btn--sm" onClick={handleDeny} disabled={busy}>
+          <X size={11} /> Deny
+        </button>
+        <button
+          className="btn btn--primary btn--sm"
+          onClick={handleApprove}
+          disabled={busy || (!!approval.editableField && !draft.trim())}
+        >
+          <Check size={11} /> Approve
+        </button>
+      </div>
     </div>
   )
 }

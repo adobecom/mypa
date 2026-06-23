@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import ChatThread from '../../widget/components/ChatThread'
-import type { PlanItem, ChatMessage } from '../../../../../../shared/types'
+import type { PlanItem, ChatMessage, PendingToolApproval, PendingQuestion } from '../../../../../../shared/types'
 
 interface Props {
   itemId: string | null
@@ -21,6 +21,8 @@ export default function PlanItemDetail({ itemId, onBack }: Props): React.ReactEl
   const [streaming, setStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
+  const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null)
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
   const safetyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (safetyTimer.current) clearTimeout(safetyTimer.current) }, [])
 
@@ -65,6 +67,8 @@ export default function PlanItemDetail({ itemId, onBack }: Props): React.ReactEl
       if (p.itemId !== itemId) return
       if (p.done) {
         if (safetyTimer.current) { clearTimeout(safetyTimer.current); safetyTimer.current = null }
+        setPendingToolApproval(null)
+        setPendingQuestion(null)
         setStreaming(false)
         setStreamContent('')
         if (p.error) {
@@ -81,6 +85,26 @@ export default function PlanItemDetail({ itemId, onBack }: Props): React.ReactEl
         setStreaming(true)
         setStreamContent((prev) => prev + p.chunk)
       }
+    })
+    return unsub
+  }, [itemId])
+
+  useEffect(() => {
+    if (!itemId) return
+    const unsub = api.on('chat:tool-approval-request', (payload) => {
+      const p = payload as PendingToolApproval
+      if (p.streamId !== itemId) return
+      setPendingToolApproval(p)
+    })
+    return unsub
+  }, [itemId])
+
+  useEffect(() => {
+    if (!itemId) return
+    const unsub = api.on('chat:ask-question', (payload) => {
+      const p = payload as PendingQuestion
+      if (p.streamId !== itemId) return
+      setPendingQuestion(p)
     })
     return unsub
   }, [itemId])
@@ -149,6 +173,23 @@ export default function PlanItemDetail({ itemId, onBack }: Props): React.ReactEl
                 onStop={handleStop}
                 sendDisabled={streaming || item.status === 'done' || item.status === 'skipped'}
                 error={chatError}
+                pendingToolApproval={pendingToolApproval}
+                onApproveToolUse={async (editedInput) => {
+                  if (!pendingToolApproval) return
+                  await api.chat.resolveToolApproval(pendingToolApproval.approvalId, true, editedInput)
+                  setPendingToolApproval(null)
+                }}
+                onDenyToolUse={async () => {
+                  if (!pendingToolApproval) return
+                  await api.chat.resolveToolApproval(pendingToolApproval.approvalId, false)
+                  setPendingToolApproval(null)
+                }}
+                pendingQuestion={pendingQuestion}
+                onAnswerQuestion={async (answer) => {
+                  if (!pendingQuestion) return
+                  await api.chat.answerQuestion(pendingQuestion.questionId, answer)
+                  setPendingQuestion(null)
+                }}
                 onApproveAction={async (msg, editedPayload) => {
                   if (!itemId) return
                   try {

@@ -1042,14 +1042,6 @@ export function ambientGetIntentChatThread(id: string): ChatMessage[] {
   return dbGetIntentChatThread(id)
 }
 
-/**
- * Execute a write action proposed mid-chat.
- *
- * Validates the verb is in VERB_TO_TOOL, builds tool args from the merged
- * payload (routing identifiers come from the parent intent), validates required
- * args against the MCP server's input schema, and calls the tool in-process.
- * Returns the raw tool result string on success, throws on failure.
- */
 async function executeChatAction(
   surface: string,
   verb: string,
@@ -1058,7 +1050,6 @@ async function executeChatAction(
   const tool = verbToTool(surface, verb)
   if (!tool) throw new Error(`Unsupported action: ${surface}:${verb}`)
 
-  // buildToolArgs reads intent.surface/verb/payload — pass a minimal shaped object
   const pseudoIntent = { surface, verb, payload } as unknown as Intent
   const toolArgs = buildToolArgs(pseudoIntent)
 
@@ -1073,9 +1064,6 @@ async function executeChatAction(
 
   return callTool(surface, tool, toolArgs)
 }
-
-// Regex to detect <action>{...}</action> blocks emitted by the model.
-const ACTION_BLOCK_RE = /<action>([\s\S]*?)<\/action>/g
 
 // ─── Typed-approval helpers ───────────────────────────────────────────────────
 
@@ -1104,117 +1092,14 @@ export function findLatestPendingAction(thread: ChatMessage[]): ChatMessage | nu
 }
 
 /**
- * Parse <action> blocks out of one response segment, strip them from visible text,
- * and either auto-execute (tier 0) or persist a pending chip (tier ≥ 1).
- *
- * @param seg              - raw streamed segment (may contain <action>…</action>)
- * @param routingPayload   - _ -prefixed routing identifiers from the parent context
- *                           (intent.payload for intent chat; {} for plan chat where
- *                            the model supplies routing in the payload itself)
- * @param persistAssistant - save the clean text and action chips to the DB
- *                           (function receives content + optional metadata)
- * @param logId            - label for console warnings (e.g. "intent:abc" or "plan:xyz")
- * @returns the cleaned segment text (action blocks stripped)
- */
-export async function stageChatActionsFromSegment(
-  seg: string,
-  routingPayload: Record<string, unknown>,
-  persistAssistant: (content: string, metadata?: Record<string, unknown>) => void,
-  logId: string
-): Promise<string> {
-  const actions: { surface: string; verb: string; target: string; payload: Record<string, unknown> }[] = []
-  // Reset lastIndex between calls (global regex retains state)
-  ACTION_BLOCK_RE.lastIndex = 0
-  const cleanSeg = seg.replace(ACTION_BLOCK_RE, (_, json) => {
-    try {
-      const parsed = JSON.parse(json.trim())
-      if (parsed.surface && parsed.verb) actions.push(parsed)
-    } catch { /* invalid JSON — ignore */ }
-    return ''
-  }).trim()
-
-  // Persist the clean text (empty if the segment was only action tags)
-  if (cleanSeg) {
-    persistAssistant(cleanSeg)
-  }
-
-  // Stage each action
-  for (const action of actions) {
-    if (!verbToTool(action.surface, action.verb)) {
-      console.warn(`[ambient] chat(${logId}): ignoring unsupported action ${action.surface}:${action.verb}`)
-      continue
-    }
-
-    // Merge routing identifiers from parent context (win over model-provided routing)
-    const routingEntries = Object.entries(routingPayload).filter(([k]) => k.startsWith('_'))
-    const mergedPayload: Record<string, unknown> = {
-      ...Object.fromEntries(routingEntries),
-      ...action.payload
-    }
-
-    // Compute trust tier using a synthesized IntentObject
-    const synthObj: IntentObject = {
-      type: 'action',
-      confidence: 0.8,
-      urgency: 0.5,
-      proposed_action: {
-        surface: action.surface as IntentSurface,
-        verb: action.verb,
-        target: action.target ?? '',
-        payload: mergedPayload
-      },
-      rationale: action.target ?? `${action.surface}:${action.verb}`,
-      reversibility: 'reversible',
-      required_approval: true
-    }
-    const tier = resolveTier(synthObj)
-
-    if (shouldAutoExecute(tier) && AUTO_EXECUTABLE.has(`${action.surface}:${action.verb}`)) {
-      // Tier 0: auto-execute, append a result note
-      try {
-        await ensureServersConnected()
-        const result = await executeChatAction(action.surface, action.verb, mergedPayload)
-        recordExecution(`${action.surface}:${action.verb}`)
-        const note = `Action completed: ${action.surface}:${action.verb} — ${result.slice(0, 200)}`
-        persistAssistant(note)
-      } catch (execErr: any) {
-        const errNote = `Action failed: ${execErr?.message ?? String(execErr)}`
-        persistAssistant(errNote)
-      }
-    } else {
-      // Tier ≥ 1: surface for approval — persist an empty-content message with action metadata
-      const actionMeta: ProposedChatAction = {
-        surface: action.surface as IntentSurface,
-        verb: action.verb,
-        target: action.target ?? '',
-        payload: mergedPayload,
-        tier,
-        status: 'pending'
-      }
-      persistAssistant('', actionMeta as unknown as Record<string, unknown>)
-    }
-  }
-
-  return cleanSeg
-}
-
-/**
  * Handle one message in a streaming "Chat about it" conversation for an intent.
  *
  * Persists the user turn, streams the assistant reply via streamChat with live
  * read-only MCP tools wired in, persists each response segment, and broadcasts
- * chunk events to the renderer.
- *
- * When the model proposes a write action via <action>...</action>, mypa:
- *   - strips the tag from the visible text
- *   - merges routing identifiers from the parent intent's payload
- *   - computes the trust tier
- *   - at tier 0 (auto-execute): runs the action immediately, appends a result note
- *   - at tier ≥ 1 (approval required): persists the message with action metadata
- *     so the renderer can render Approve / Dismiss buttons
- *
- * Available on every intent, including failed/terminal ones, so the user can
- * always discuss and understand what went wrong.
+ * chunk events to the renderer. Write-tool requests are gated by canUseTool in
+ * agent.ts, which broadcasts chat:tool-approval-request and awaits user approval
+ * via the InlineToolApproval chip. Available on every intent, including
+ * failed/terminal ones, so the user can always discuss what went wrong.
  */
 export async function handleIntentChat(intentId: string, userMessage: string): Promise<void> {
   const intent = dbGetIntent(intentId)
@@ -1314,19 +1199,9 @@ export async function handleIntentChat(intentId: string, userMessage: string): P
       true  // enableMcp — wire read-only tools and the write-action protocol
     )
 
-    // Parse <action> blocks from each streamed segment.
-    // Strip them from visible text; auto-execute or surface for approval.
-    const routingPayload = (intent.payload ?? {}) as Record<string, unknown>
     const toSave = segments.filter((s) => s.trim())
-
     for (const seg of toSave) {
-      if (!seg.trim()) continue
-      await stageChatActionsFromSegment(
-        seg,
-        routingPayload,
-        (content, metadata) => dbAddIntentChatMessage(intentId, 'assistant', content, metadata),
-        `intent:${intentId}`
-      )
+      dbAddIntentChatMessage(intentId, 'assistant', seg)
     }
 
     broadcast('ambient:chat-message', { intentId, chunk: '', done: true })

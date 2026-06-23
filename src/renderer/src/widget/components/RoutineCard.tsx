@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { ChevronDown, Settings, ExternalLink, GitBranch, SquareKanban, MessageSquare } from 'lucide-react'
 import ChatThread from './ChatThread'
-import type { RoutineRun, ChatMessage, CoveredEntity, Intent } from '../../../../../../shared/types'
+import type { RoutineRun, ChatMessage, CoveredEntity, Intent, PendingToolApproval, PendingQuestion } from '../../../../../../shared/types'
 
 interface Props {
   run: RoutineRun
@@ -40,10 +40,13 @@ function formatTime(ts: string): string {
 
 export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIntent }: Props): React.ReactElement {
   const [expanded, setExpanded] = useState(!collapsed && (run.status === 'pending_response' || run.status === 'in_progress'))
+  const [trackedOpen, setTrackedOpen] = useState(false)
   const [thread, setThread] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
+  const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null)
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
 
   const api = window.electron
   const digest = parseDigest(run.digest)
@@ -67,6 +70,8 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
       const p = payload as { runId: string; chunk: string; done: boolean; error?: string }
       if (p.runId !== run.id) return
       if (p.done) {
+        setPendingToolApproval(null)
+        setPendingQuestion(null)
         setStreaming(false)
         setStreamContent('')
         if (p.error) {
@@ -85,6 +90,24 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
       }
     })
     return () => { unsubMsg(); unsubStream() }
+  }, [run.id])
+
+  useEffect(() => {
+    const unsub = api.on('chat:tool-approval-request', (payload) => {
+      const p = payload as PendingToolApproval
+      if (p.streamId !== run.id) return
+      setPendingToolApproval(p)
+    })
+    return unsub
+  }, [run.id])
+
+  useEffect(() => {
+    const unsub = api.on('chat:ask-question', (payload) => {
+      const p = payload as PendingQuestion
+      if (p.streamId !== run.id) return
+      setPendingQuestion(p)
+    })
+    return unsub
   }, [run.id])
 
   const handleSend = async (msg: string) => {
@@ -160,11 +183,21 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
 
       {!collapsed && expanded && (
         <div className="routine-card__body">
-          {/* Tracked items — work items detected in the run's MCP output */}
+          {/* Tracked items — collapsed by default; expand on demand so the chat is visible first */}
           {run.covered_entities && run.covered_entities.length > 0 && (
             <div className="routine-card__tracked">
-              <div className="routine-card__tracked-label">Tracked items</div>
-              {run.covered_entities.map((entity: CoveredEntity) => {
+              <div
+                className="routine-card__tracked-toggle"
+                onClick={(e) => { e.stopPropagation(); setTrackedOpen((o) => !o) }}
+              >
+                <span className="routine-card__tracked-label">
+                  Tracked items · {run.covered_entities.length}
+                </span>
+                <span className={`routine-card__expand-icon${trackedOpen ? ' open' : ''}`}>
+                  <ChevronDown size={11} />
+                </span>
+              </div>
+              {trackedOpen && run.covered_entities.map((entity: CoveredEntity) => {
                 const intent = entityKeyToIntent?.get(entity.key)
                 const { label: statusLabel, color: statusColor } = entityStatusLabel(intent)
                 return (
@@ -172,9 +205,20 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
                     <span className="routine-card__tracked-icon">
                       <EntityIcon surface={entity.surface} />
                     </span>
-                    <span className="routine-card__tracked-title" title={entity.url || undefined}>
-                      {entity.title || entity.external_id}
-                    </span>
+                    {entity.url ? (
+                      <span
+                        className="routine-card__tracked-title routine-card__tracked-title--link"
+                        title={entity.url}
+                        onClick={(e) => { e.stopPropagation(); window.electron.system.openExternal(entity.url) }}
+                      >
+                        {entity.title || entity.external_id}
+                        <ExternalLink size={10} style={{ marginLeft: 3, flexShrink: 0 }} />
+                      </span>
+                    ) : (
+                      <span className="routine-card__tracked-title" title={entity.url || undefined}>
+                        {entity.title || entity.external_id}
+                      </span>
+                    )}
                     <span className="routine-card__tracked-status" style={{ color: statusColor }}>
                       {statusLabel}
                     </span>
@@ -191,6 +235,23 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
             onStop={handleStop}
             sendDisabled={streaming || run.status === 'running'}
             error={chatError}
+            pendingToolApproval={pendingToolApproval}
+            onApproveToolUse={async (editedInput) => {
+              if (!pendingToolApproval) return
+              await api.chat.resolveToolApproval(pendingToolApproval.approvalId, true, editedInput)
+              setPendingToolApproval(null)
+            }}
+            onDenyToolUse={async () => {
+              if (!pendingToolApproval) return
+              await api.chat.resolveToolApproval(pendingToolApproval.approvalId, false)
+              setPendingToolApproval(null)
+            }}
+            pendingQuestion={pendingQuestion}
+            onAnswerQuestion={async (answer) => {
+              if (!pendingQuestion) return
+              await api.chat.answerQuestion(pendingQuestion.questionId, answer)
+              setPendingQuestion(null)
+            }}
           />
 
           <div style={{ marginTop: 8, display: 'flex', gap: 6, alignItems: 'center' }}>

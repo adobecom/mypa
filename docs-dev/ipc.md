@@ -85,8 +85,8 @@ Pre-flight checks and server auto-detection.
 
 | Method | Signature | Description |
 |---|---|---|
-| `checkPrerequisites` | `() → { claudeCli: boolean }` | Check whether the `claude` CLI binary is on `$PATH` |
-| `getHealth` | `() → SetupHealth` | Full health check: Claude CLI + each MCP server (missing env keys, invalid path args, OAuth staleness). `SetupHealthServer.invalidArgs?: string[]` carries path validation messages for servers with `isPath` argInputs. |
+| `checkPrerequisites` | `() → { ok: boolean; source: AuthSource }` | Probe for active Claude credentials (priority: stored API key → env var → `~/.claude/.credentials.json`). `source` is one of `'apikey' \| 'env' \| 'cli-login' \| 'none'`. |
+| `getHealth` | `() → SetupHealth` | Full health check: Claude auth + each MCP server (missing env keys, invalid path args, OAuth staleness). `SetupHealth.auth: { ok, source: AuthSource }` replaces the old `claudeCli: boolean`. `SetupHealthServer.invalidArgs?: string[]` carries path validation messages for servers with `isPath` argInputs. |
 | `detectClaudeMcp` | `() → DetectedMcpServer[]` | Auto-detect MCP servers from an existing Claude Code config file |
 | `resolveOwnerHandles` | `() → ResolvedOwnerHandles` | Best-effort: call each connected MCP server's identity tool and return per-surface handles with a `needsReview` flag for opaque IDs (e.g. Slack UIDs). Returns only surfaces where a handle was found. |
 
@@ -128,6 +128,19 @@ Ambient intelligence — intents, digests, policy, tray state.
 | `pollNow` | `() → void` | Trigger an immediate ambient poll cycle |
 | `getLog` | `(limit?) → ActionLogEntry[]` | Recent autonomy event log |
 
+### `chat`
+
+Real-time resolution of in-stream agent decisions — tool approvals and user questions.
+
+| Method | Signature | Description |
+|---|---|---|
+| `resolveToolApproval` | `(approvalId: string, allow: boolean, editedInput?: Record<string, unknown>) → void` | Unblock a pending write-tool gate. `allow: false` causes the SDK to skip the tool call. Pass `editedInput` to send a user-modified version of the tool arguments. |
+| `answerQuestion` | `(questionId: string, answer: string) → void` | Unblock a pending `ask_user` tool invocation with the user's chosen answer. The stream resumes immediately after this call. |
+
+IPC channels: `chat:resolve-tool-approval`, `chat:answer-question`.
+
+---
+
 ### `memory`
 
 Knowledge graph — nodes, edges, memories.
@@ -168,6 +181,8 @@ Subscribed with `window.electron.on(channel, listener)`. Returns an unsubscribe 
 | `ambient:action-executed` | `Intent` | A tier-0 intent was auto-executed (success only) | **widget + main** |
 | `ambient:chat-user-message` | `{ intentId: string; message: ChatMessage }` | User message persisted to an intent's "Chat about it" thread (fires immediately before streaming begins) | **widget + main** |
 | `ambient:chat-message` | `{ intentId: string; chunk: string; done: boolean; error?: string }` | Streaming chunk for an intent's "Chat about it" reply. `done: true` signals completion or error. | **widget + main** |
+| `chat:tool-approval-request` | `PendingToolApproval` | An agent stream reached a write tool and is paused waiting for user approval. The renderer should show an inline approval UI. Resolved by calling `window.electron.chat.resolveToolApproval(approvalId, allow, editedInput?)`. | **widget + main** |
+| `chat:ask-question` | `PendingQuestion` | The model called the `ask_user` tool and the stream is paused waiting for the user's selection. The renderer shows clickable option chips. Resolved by calling `window.electron.chat.answerQuestion(questionId, answer)`. | **widget + main** |
 
 **`routine:run-started` and `routine:run-completed` are broadcast to both windows** via `broadcast()` in `src/main/windows.ts`. The main window uses them to drive in-app toast notifications. The widget uses them to update its inline run card. All other events remain window-specific.
 
@@ -250,11 +265,15 @@ Manage PA check-in sessions and their chat threads.
 
 ## Changelog
 
+- 2026-06-22 — **Agent SDK migration — new `chat` namespace + push channels:** Added `IpcApi.chat` namespace with `resolveToolApproval(approvalId, allow, editedInput?)` and `answerQuestion(questionId, answer)` (IPC channels `chat:resolve-tool-approval`, `chat:answer-question`). Added push channels `chat:tool-approval-request` (payload: `PendingToolApproval`) and `chat:ask-question` (payload: `PendingQuestion`). Added `PendingToolApproval` and `PendingQuestion` interfaces to `src/shared/types.ts`.
+
 - 2026-06-19 — **Plan-chat write-action approval:** `plan.approveChatAction(itemId, messageId, editedPayload?)` and `plan.dismissChatAction(itemId, messageId)` added to `IpcApi.plan`. IPC channels: `plan:approve-chat-action`, `plan:dismiss-chat-action`. `PlanItemCard` and `PlanItemDetail` now pass `onApproveAction`/`onDismissAction` to `<ChatThread>`.
 
 - 2026-06-18 — **Live MCP in chat + in-chat write actions:** All streaming chat paths (`handleIntentChat`, `handleRunMessage`, `handlePlanMessage`, `handleCheckInMessage`, check-in briefing) now pass `enableMcp: true` to `streamChat`, which wires `--mcp-config` + `--allowedTools` into the spawned claude CLI. Read-only tools are pre-approved; the allowed-tools list is built from `getKnownServerTools()` (survives dead in-process clients via `lastKnownTools` cache). When the model proposes a write action in an intent chat via `<action>{...}</action>`, mypa parses it post-stream, merges parent-intent routing identifiers, computes the trust tier, and either auto-executes (tier 0) or persists it as a pending action on the chat message (`intent_chat_threads.metadata`). New IPC: `ambient.approveChatAction(intentId, messageId, editedPayload?)` and `ambient.dismissChatAction(intentId, messageId)`. New push channels `ambient:chat-message` and `ambient:chat-user-message` added to the typed `on()` union. `ChatMessage` gains optional `action?: ProposedChatAction`; renderer shows Approve/Dismiss chips with editable draft text.
 
 - 2026-06-17 — **Button trimming — merge Suggest into Chat:** removed `ambient.suggest` and `ambient.getIntentThread` IPC methods (and the `ambient:intent-message` push channel that backed Suggest replies). Added `ambient.reviseFromChat(id)` — a one-shot call that runs `reproposeIntent` over the full Chat thread and returns `{ intent, applied, message }`. The Suggest conversational path is now unified into the Chat panel via an opt-in "Update the proposal" button that calls `reviseFromChat`.
+
+- 2026-06-22 — **Auth-source IPC:** `setup:check-prerequisites` return shape changed from `{ claudeCli: boolean }` to `{ ok: boolean; source: AuthSource }` where `AuthSource = 'apikey' | 'env' | 'cli-login' | 'none'`. `SetupHealth.claudeCli: boolean` replaced by `SetupHealth.auth: { ok: boolean; source: AuthSource }`. New `AuthSource` type exported from `@shared/types`.
 
 - 2026-06-17 — **Ambient insight chat + routing fix:** Added three new `ambient` IPC methods (`sendChatMessage`, `getChatThread`, `cancelChatStream`) and two new push channels (`ambient:chat-user-message`, `ambient:chat-message`) for a streaming per-intent "Chat about it" conversation thread backed by `intent_chat_threads` DB table. Also fixed GitHub/Jira intent actions failing with `-32603` by introducing `enrichPayloadForRouting` (which injects `_owner`/`_repo`/`_issue_number` for GitHub, `_issue_key` for Jira at intent-creation time) and a pre-flight schema validation guard in `executeIntent` that surfaces a clear human error instead of a raw MCP error when required args are still missing.
 

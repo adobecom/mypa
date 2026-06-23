@@ -10,7 +10,6 @@ import {
 } from '../db/index'
 import { generatePlanDraft, streamChat } from './claude'
 import {
-  stageChatActionsFromSegment,
   approvePlanAction,
   dismissPlanAction,
   isAffirmative,
@@ -129,17 +128,10 @@ export async function handlePlanMessage(
       'plan_chat',
       true  // enableMcp — live read-only tools + write-action protocol
     )
-    // Parse and stage <action> blocks; save clean text; surface Approve/Dismiss chips
     const toSave = segments.filter((s) => s.trim())
     const segsToProcess = toSave.length > 0 ? toSave : [fullResponse]
     for (const seg of segsToProcess) {
-      if (!seg.trim()) continue
-      await stageChatActionsFromSegment(
-        seg,
-        {},  // no parent intent routing — model supplies owner/repo/etc. in payload
-        (content, metadata) => dbAddPlanMessage(itemId, 'assistant', content, metadata),
-        `plan:${itemId}`
-      )
+      if (seg.trim()) dbAddPlanMessage(itemId, 'assistant', seg)
     }
     broadcast('plan:item-message', { itemId, chunk: '', done: true })
     updateBadgeCount()

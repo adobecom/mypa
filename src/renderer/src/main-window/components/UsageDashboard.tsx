@@ -266,7 +266,7 @@ export default function UsageDashboard(): React.ReactElement {
       <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <div>
           <div className="page-title">Usage</div>
-          <div className="page-subtitle">Token usage &amp; estimated cost · powered by the Claude CLI</div>
+          <div className="page-subtitle">Token usage &amp; estimated cost · powered by Claude</div>
         </div>
         <div className="segmented" style={{ marginTop: 2 }}>
           {RANGES.map((r) => (
@@ -290,7 +290,7 @@ export default function UsageDashboard(): React.ReactElement {
             <StatCard
               label="Est. cost"
               value={fmtCost(summary?.total_cost ?? 0)}
-              sub="as reported by Claude CLI"
+              sub="as reported by the Claude Agent SDK"
             />
             <StatCard
               label="Total tokens"
@@ -347,7 +347,7 @@ export default function UsageDashboard(): React.ReactElement {
 
           {/* ── Footer note ── */}
           <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12, textAlign: 'center' }}>
-            Cost estimates are provided by the Claude CLI and may differ from your Anthropic billing. Usage is recorded from the moment mypa was installed.
+            Cost estimates are provided by the Claude Agent SDK and may differ from your Anthropic billing. Usage is recorded from the moment mypa was installed.
           </p>
         </>
       )}

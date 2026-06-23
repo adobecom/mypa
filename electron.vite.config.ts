@@ -12,7 +12,7 @@ const appVersion = require('./package.json').version as string
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin({ exclude: ['@anthropic-ai/claude-agent-sdk'] })],
     resolve: {
       alias: {
         '@shared': resolve('src/shared')

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { GitBranch, SquareKanban, MessageSquare, ChevronDown, Wand2, Zap, MessagesSquare } from 'lucide-react'
-import type { Intent, ChatMessage, RoutineRun } from '../../../../../../shared/types'
+import { GitBranch, SquareKanban, MessageSquare, ChevronDown, ExternalLink, Wand2, Zap, MessagesSquare } from 'lucide-react'
+import type { Intent, ChatMessage, RoutineRun, PendingToolApproval, PendingQuestion } from '../../../../../../shared/types'
 import MarkdownText from '@renderer/components/MarkdownText'
 import Tabs from '@renderer/components/Tabs'
 import ChatThread from './ChatThread'
@@ -115,6 +115,8 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
   const [chatStreamContent, setChatStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
   const [revising, setRevising] = useState(false)
+  const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null)
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
   // Safety backstop: if the main process dies or the stream never sends done:true,
   // clear the streaming state after 150s (server idle watchdog fires at 120s).
   const chatSafetyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -234,6 +236,8 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
       if (p.done) {
         // Stream finished — clear the safety backstop
         if (chatSafetyTimer.current) { clearTimeout(chatSafetyTimer.current); chatSafetyTimer.current = null }
+        setPendingToolApproval(null)
+        setPendingQuestion(null)
         setChatStreaming(false)
         if (p.error) {
           setChatError(p.error)
@@ -257,6 +261,24 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
       }
     })
     return off
+  }, [intent.id])
+
+  useEffect(() => {
+    const unsub = api.on('chat:tool-approval-request', (payload) => {
+      const p = payload as PendingToolApproval
+      if (p.streamId !== intent.id) return
+      setPendingToolApproval(p)
+    })
+    return unsub
+  }, [intent.id])
+
+  useEffect(() => {
+    const unsub = api.on('chat:ask-question', (payload) => {
+      const p = payload as PendingQuestion
+      if (p.streamId !== intent.id) return
+      setPendingQuestion(p)
+    })
+    return unsub
   }, [intent.id])
 
   async function handleChatSend(message: string): Promise<void> {
@@ -309,6 +331,21 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
   const recentSignals = safeArray(cp.recentSignals, isRecord)
   const focusNodes = safeArray(cp.focusNodes, isRecord)
 
+  // Derive a primary URL to link the card title — prefer a focus node URL (work item
+  // the intent is about), then fall back to the most recent signal with a URL.
+  const primaryUrl: string | null = (() => {
+    for (const n of focusNodes) {
+      const attrs = isRecord(n.attrs) ? n.attrs : null
+      const url = attrs && typeof attrs.url === 'string' ? attrs.url : null
+      if (url) return url
+    }
+    for (const s of recentSignals) {
+      const url = hasString(s, 'url') ? s.url : null
+      if (url) return url
+    }
+    return null
+  })()
+
   // Derive the set of routine runs that cover at least one of this intent's focus nodes.
   // Deduplicated by run id so each routine name appears at most once.
   const linkedRuns: RoutineRun[] = (() => {
@@ -347,10 +384,21 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
       >
         <span className={dotClass} />
         <div className="routine-card__meta">
-          {/* 2-line title */}
+          {/* 2-line title — clickable link when a source URL is available */}
           <div className="intent-card__title">
             <SurfaceIcon surface={intent.surface} />
-            <span>{intent.rationale}</span>
+            {primaryUrl ? (
+              <span
+                className="intent-card__title-link"
+                onClick={(e) => { e.stopPropagation(); window.electron.system.openExternal(primaryUrl) }}
+                title={primaryUrl}
+              >
+                <span>{intent.rationale}</span>
+                <ExternalLink size={11} className="intent-card__title-link-icon" />
+              </span>
+            ) : (
+              <span>{intent.rationale}</span>
+            )}
           </div>
 
           {/* Proposed action line */}
@@ -462,10 +510,17 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
                   const surface = hasString(s, 'surface') ? s.surface : ''
                   const kind = hasString(s, 'kind') ? s.kind : ''
                   const title = hasString(s, 'title') ? s.title : ''
+                  const url = hasString(s, 'url') ? s.url : null
                   const prefix = [surface, kind].filter(Boolean).join(':')
                   return (
-                    <div key={i} className="intent-detail__ctx-row">
+                    <div
+                      key={i}
+                      className={`intent-detail__ctx-row${url ? ' intent-detail__ctx-row--link' : ''}`}
+                      onClick={url ? () => window.electron.system.openExternal(url) : undefined}
+                      title={url ?? undefined}
+                    >
                       · {prefix ? <span style={{ color: 'var(--text-muted)' }}>[{prefix}]</span> : null} {title}
+                      {url && <ExternalLink size={10} style={{ marginLeft: 4, flexShrink: 0 }} />}
                     </div>
                   )
                 })}
@@ -482,11 +537,22 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
             )}
             {activeDetailTab === 'focus' && (
               <div className="intent-detail__ctx-group">
-                {focusNodes.slice(0, 3).map((n, i) => (
-                  <div key={i} className="intent-detail__ctx-row">
-                    · {hasString(n, 'label') ? n.label : JSON.stringify(n)}
-                  </div>
-                ))}
+                {focusNodes.slice(0, 3).map((n, i) => {
+                  const label = hasString(n, 'label') ? n.label : JSON.stringify(n)
+                  const attrs = isRecord(n.attrs) ? n.attrs : null
+                  const url = attrs && typeof attrs.url === 'string' ? attrs.url : null
+                  return (
+                    <div
+                      key={i}
+                      className={`intent-detail__ctx-row${url ? ' intent-detail__ctx-row--link' : ''}`}
+                      onClick={url ? () => window.electron.system.openExternal(url) : undefined}
+                      title={url ?? undefined}
+                    >
+                      · {label}
+                      {url && <ExternalLink size={10} style={{ marginLeft: 4, flexShrink: 0, color: 'var(--text-muted)' }} />}
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>
@@ -534,6 +600,23 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
             onStop={handleChatStop}
             error={chatError}
             sendDisabled={chatStreaming}
+            pendingToolApproval={pendingToolApproval}
+            onApproveToolUse={async (editedInput) => {
+              if (!pendingToolApproval) return
+              await api.chat.resolveToolApproval(pendingToolApproval.approvalId, true, editedInput)
+              setPendingToolApproval(null)
+            }}
+            onDenyToolUse={async () => {
+              if (!pendingToolApproval) return
+              await api.chat.resolveToolApproval(pendingToolApproval.approvalId, false)
+              setPendingToolApproval(null)
+            }}
+            pendingQuestion={pendingQuestion}
+            onAnswerQuestion={async (answer) => {
+              if (!pendingQuestion) return
+              await api.chat.answerQuestion(pendingQuestion.questionId, answer)
+              setPendingQuestion(null)
+            }}
             onApproveAction={async (msg, editedPayload) => {
               try {
                 const updated = await api.ambient.approveChatAction(intent.id, msg.id, editedPayload)

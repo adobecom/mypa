@@ -32,15 +32,26 @@ export default function QueueView({
   onItemsChange,
   entityKeyToRuns
 }: Props): React.ReactElement {
+  // Defensive filter: drop any persisted "nothing actionable" sentinels that slipped through
+  // the inference confidence floor (the model sometimes emits the fallback template with a
+  // non-zero confidence). Applied before any other filtering so they never render anywhere.
+  const filteredIntents = intents.filter(
+    (i) => !(
+      i.type === 'flag' &&
+      i.verb === 'none' &&
+      (i.rationale?.trim().toLowerCase() === 'nothing actionable' || i.target?.toLowerCase() === 'nothing')
+    )
+  )
+
   // "Needs you" — pending actionable intents awaiting approval
-  const pendingIntents = intents.filter(
+  const pendingIntents = filteredIntents.filter(
     (i) => i.type === 'action' && !TERMINAL.includes(i.status)
   )
 
   // "Recently resolved" — terminal intents present in this session's state, newest first, capped at 5.
   // These are intents that were pending when the widget opened and became terminal since then
   // (executed, dismissed, expired, etc.). Shows where items went rather than silently disappearing.
-  const recentlyResolved = intents
+  const recentlyResolved = filteredIntents
     .filter((i) => TERMINAL.includes(i.status))
     .sort((a, b) => {
       const ta = a.resolved_at ?? a.created_at

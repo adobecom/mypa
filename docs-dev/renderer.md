@@ -217,13 +217,12 @@ Data: `window.electron.usage.*` — all five calls made in parallel on mount and
 
 #### Onboarding wizard
 
-`OnboardingWizard` walks first-time users through (6 steps):
+`OnboardingWizard` walks first-time users through (5 steps):
 1. Welcome.
-2. Installing / verifying the Claude CLI.
-3. Choosing a model.
-4. Connecting MCP servers / OAuth providers.
-5. **About you** — name + per-surface handles with auto-fill button; saves to `AppConfig.owner`.
-6. All set — summary.
+2. **Connect Claude** — calls `setup:check-prerequisites` to probe for credentials (`AuthSource`). Shows the detected source (API key / env vars / Claude login) or an inline API-key input field when none are found. Soft gate: Next is enabled once a source is detected or a key has been entered. Does NOT require a standalone Claude Code CLI binary.
+3. Connecting MCP servers / OAuth providers.
+4. **About you** — name + per-surface handles with auto-fill button; saves to `AppConfig.owner`.
+5. All set — summary showing auth status, tool count, and identity.
 
 Completes by setting `onboarding_complete: true` in config.
 
@@ -235,13 +234,23 @@ Located in `src/renderer/src/` (shared between widget and main window):
 
 | Component | Description |
 |---|---|
-| `ChatThread` | Renders a `ChatMessage[]` history with a streaming-capable input box |
+| `ChatThread` | Renders a `ChatMessage[]` history with a streaming-capable input box. When `chat:tool-approval-request` fires during a stream, an `InlineToolApproval` block appears inline in the live message; when `chat:ask-question` fires, a `QuestionChip` cluster appears. Both block the stream until resolved. |
+| `InlineToolApproval` | Rendered inside `ChatThread` when a `PendingToolApproval` push event arrives. Shows the tool name and proposed arguments, with Approve / Deny buttons (and an optional editable input for the payload). Clicking Approve calls `window.electron.chat.resolveToolApproval(approvalId, true, editedInput?)`; Deny calls it with `allow: false`. Disappears once the stream resumes. |
+| `QuestionChip` | Rendered inside `ChatThread` when a `PendingQuestion` push event arrives. Shows the model's prompt and one clickable chip per option. Clicking a chip calls `window.electron.chat.answerQuestion(questionId, answer)` and the stream resumes. Both single-select and multi-select modes are supported. |
 | `cronUtils.ts` | Human-readable cron expression parser (used in `RoutineForm`) |
 | `components/MarkdownText.tsx` | Renders a markdown string via `ReactMarkdown` + `remark-gfm` wrapped in `<div className="md-text">`. Handles external link clicks via `window.electron.system.openExternal`. Used in `IntentCard`, `DigestView`, and `ChatThread`. |
 | `components/Tabs.tsx` | Reusable underline-tab strip. Props: `items: TabItem[]`, `active: string`, `onChange: (id: string) => void`. `TabItem` has `id`, `label`, optional `icon` and `count`. Active tab gets accent underline + bold; count shows a colored pill. CSS classes: `.tabs`, `.tab`, `.tab--active`, `.tab__count`, `.tab__count--active` (in `components.css`). |
 | `components.css` | Shared component stylesheet imported by both renderer entry points before their window-specific `index.css`. Contains `.routine-card*`, `.intent-card*`, `.intent-detail*`, `.intent-chip*`, `.plan-review-card*`, `.review-field*`, `.section-header`, `.section-subheader`, `.tabs`, `.tab*`. |
 
 ## Changelog
+
+- 2026-06-22 — **Onboarding Step 2 rework — "Connect Claude":** `OnboardingWizard.tsx` step 2 rewritten. Old: hard gate on detecting the `claude` CLI binary (`detectClaudeBin`). New: calls `setup:check-prerequisites` (returns `{ ok, source: AuthSource }`) and shows which auth source is active. When no credentials are found, renders an inline API-key password input that saves via `api.config.setClaudeKey` and re-checks. Next button is a soft gate (enabled once auth is detected or a key is entered). Step 5 summary row is now dynamic: "Claude authenticated" (ok) or "Claude not authenticated" (not ok). Removed `cliOk`, `checkingCli`, `copied` state; added `authState`, `checkingAuth`, `apiKeyInput`, `savingKey`. Removed `copyInstallCommand`; added `handleSaveApiKey`. Imports: removed `Copy`, `ExternalLink`; added `KeyRound`, `AuthSource`.
+
+- 2026-06-22 — **RoutineCard: collapsible tracked items + clickable tracked-item links.** The "Tracked items" section inside a routine card is now collapsed by default (shows only a toggle row: "Tracked items · N" + rotating chevron); the chat is visible first without scrolling. Clicking the toggle row expands/collapses the list. When a tracked entity has a URL (`CoveredEntity.url`), its title is rendered as a clickable link (cursor pointer, accent color on hover, inline `ExternalLink` icon) that calls `window.electron.system.openExternal(url)`. New CSS: `.routine-card__tracked-toggle`, `.routine-card__tracked-title--link`.
+
+- 2026-06-22 — **IntentCard: clickable title + clickable Activity/Focus rows.** When an intent has a source URL (derived from `context_packet.focusNodes[].attrs.url` or `context_packet.recentSignals[].url`), the card title becomes a clickable link (`intent-card__title-link` span + inline `ExternalLink` icon) that opens the PR/issue in the default browser via `window.electron.system.openExternal`. Activity tab rows and Focus tab rows also become clickable links when their respective signal/node URL is non-empty. Clicking a title link does not toggle the card's expand state (stopPropagation). New CSS: `.intent-card__title-link`, `.intent-card__title-link-icon`, `.intent-detail__ctx-row--link`.
+
+- 2026-06-22 — **Agent SDK migration — `InlineToolApproval` and `QuestionChip` in ChatThread:** `ChatThread.tsx` now handles two new push events from `agent.ts`. `chat:tool-approval-request` renders an `InlineToolApproval` block inline in the active message — shows tool name and arguments, Approve/Deny buttons, and an optional editable input for the payload; resolves via `window.electron.chat.resolveToolApproval`. `chat:ask-question` renders a `QuestionChip` cluster — shows the model's question and one chip per option; resolves via `window.electron.chat.answerQuestion`. Both components disappear once the stream resumes. Driven entirely by push events; no polling.
 
 - 2026-06-18 — **IntentCard: restore primary action button.** `IntentCard.tsx:117` — `needsApproval` computation changed from `!isObservation && intent.required_approval && intent.tier >= 2` to `!isObservation && intent.tier >= 2`. The `intent.required_approval` term was silently hiding the Approve/Send button for action intents where the model emitted `required_approval=false` (e.g. tier-3 Locked intents that are user-initiated by definition). Any non-observation action at tier ≥ 2 now shows the primary button unconditionally — the model hint is advisory and should not gate user-facing controls. Comment added explaining the rationale. `agentWillHandle` (line 118) is unchanged: only tier 0/1 intents get the "agent will handle" chip.
 

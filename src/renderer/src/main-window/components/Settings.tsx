@@ -407,7 +407,7 @@ export default function Settings(): React.ReactElement {
         </div>
         <div className="form-group">
           <div className="form-hint" style={{ marginBottom: 12 }}>
-            Powered by your local Claude Code CLI. mypa automatically selects the right model for each task — Haiku for quick classifications, Sonnet for summaries and chat, Opus for complex agentic work. Optionally provide your own Anthropic API key — when set it overrides the CLI's own authentication.
+            Powered by the Claude Agent SDK. mypa automatically selects the right model for each task — Haiku for quick classifications, Sonnet for summaries and chat, Opus for complex agentic work. Provide an Anthropic API key below, or leave blank to use ambient credentials (environment variables or an active Claude login session).
           </div>
         </div>
         <div className="form-group">
@@ -439,7 +439,7 @@ export default function Settings(): React.ReactElement {
           <div className="form-hint">
             {apiKeyStatus.configured
               ? 'Leave blank to keep the current key. The key is encrypted at rest.'
-              : 'Optional. Leave blank to use the Claude Code CLI\'s own authentication.'}
+              : 'Optional. Leave blank to use ambient credentials (env vars or an active Claude login session).'}
           </div>
         </div>
       </div>
@@ -914,7 +914,7 @@ function HealthCard({
 
   const issues = health
     ? [
-        !health.claudeCli,
+        !health.auth.ok,
         ...health.servers.map(
           (s) =>
             s.missingEnvKeys.length > 0 ||
@@ -924,7 +924,7 @@ function HealthCard({
       ].filter(Boolean)
     : []
 
-  const allOk = health && health.claudeCli && issues.length === 0
+  const allOk = health && health.auth.ok && issues.length === 0
 
   return (
     <div className="card">
@@ -946,20 +946,19 @@ function HealthCard({
 
       {health && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {/* Claude CLI row */}
+          {/* Claude auth row */}
           <HealthRow
-            ok={health.claudeCli}
-            label="Claude Code CLI"
-            detail={health.claudeCli ? 'Detected' : 'Not found'}
+            ok={health.auth.ok}
+            label="Claude authentication"
+            detail={
+              health.auth.source === 'apikey' ? 'API key configured' :
+              health.auth.source === 'env' ? 'Environment credentials' :
+              health.auth.source === 'cli-login' ? 'Claude login session' :
+              'Not configured'
+            }
             action={
-              !health.claudeCli ? (
-                <a
-                  href="#"
-                  onClick={(e) => { e.preventDefault(); window.open('https://claude.ai/download') }}
-                  style={{ fontSize: 11, color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: 3 }}
-                >
-                  Install →
-                </a>
+              !health.auth.ok ? (
+                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Add an API key above</span>
               ) : null
             }
           />

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Check, Minus, MessageSquare, ChevronUp, CornerUpLeft, ExternalLink } from 'lucide-react'
 import ChatThread from './ChatThread'
-import type { PlanItem, ChatMessage } from '../../../../../../shared/types'
+import type { PlanItem, ChatMessage, PendingToolApproval, PendingQuestion } from '../../../../../../shared/types'
 
 interface Props {
   item: PlanItem
@@ -23,6 +23,8 @@ export default function PlanItemCard({
   const [streaming, setStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
+  const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null)
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
   const safetyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (safetyTimer.current) clearTimeout(safetyTimer.current) }, [])
 
@@ -56,6 +58,8 @@ export default function PlanItemCard({
       if (p.itemId !== item.id) return
       if (p.done) {
         if (safetyTimer.current) { clearTimeout(safetyTimer.current); safetyTimer.current = null }
+        setPendingToolApproval(null)
+        setPendingQuestion(null)
         setStreaming(false)
         setStreamContent('')
         if (p.error) {
@@ -72,6 +76,24 @@ export default function PlanItemCard({
         setStreaming(true)
         setStreamContent((prev) => prev + p.chunk)
       }
+    })
+    return unsub
+  }, [item.id])
+
+  useEffect(() => {
+    const unsub = api.on('chat:tool-approval-request', (payload) => {
+      const p = payload as PendingToolApproval
+      if (p.streamId !== item.id) return
+      setPendingToolApproval(p)
+    })
+    return unsub
+  }, [item.id])
+
+  useEffect(() => {
+    const unsub = api.on('chat:ask-question', (payload) => {
+      const p = payload as PendingQuestion
+      if (p.streamId !== item.id) return
+      setPendingQuestion(p)
     })
     return unsub
   }, [item.id])
@@ -132,6 +154,23 @@ export default function PlanItemCard({
               onStop={handleStop}
               sendDisabled={streaming}
               error={chatError}
+              pendingToolApproval={pendingToolApproval}
+              onApproveToolUse={async (editedInput) => {
+                if (!pendingToolApproval) return
+                await api.chat.resolveToolApproval(pendingToolApproval.approvalId, true, editedInput)
+                setPendingToolApproval(null)
+              }}
+              onDenyToolUse={async () => {
+                if (!pendingToolApproval) return
+                await api.chat.resolveToolApproval(pendingToolApproval.approvalId, false)
+                setPendingToolApproval(null)
+              }}
+              pendingQuestion={pendingQuestion}
+              onAnswerQuestion={async (answer) => {
+                if (!pendingQuestion) return
+                await api.chat.answerQuestion(pendingQuestion.questionId, answer)
+                setPendingQuestion(null)
+              }}
               onApproveAction={async (msg, editedPayload) => {
                 try {
                   const updated = await api.plan.approveChatAction(item.id, msg.id, editedPayload)

@@ -1,29 +1,28 @@
 # Claude Integration
 
-All AI work in mypa goes through `src/main/services/claude.ts`, which spawns the `claude` CLI as a subprocess. There is no direct Anthropic API call — the CLI must be installed and authenticated separately.
+All AI work in mypa goes through `src/main/services/agent.ts`, which uses `@anthropic-ai/claude-agent-sdk` directly. There is no subprocess spawn — the SDK is called in-process. `src/main/services/claude.ts` provides thin shims that forward to `agent.ts` for backward-compatible call sites.
 
 ---
 
-## Binary discovery
+## Authentication
 
-`detectClaudeBin(): string | null` (exported from `claude.ts`) is the single resolver used by both the runtime spawn (`getClaude()`) and the setup/health IPC handlers. It never throws.
+mypa does **not** require a standalone Claude Code CLI installation. The `@anthropic-ai/claude-agent-sdk` carries its own bundled executable.
 
-Priority order:
+Credentials are resolved in priority order by `resolveAuthSource()` in `src/main/services/auth.ts`:
 
-1. `which claude` against the PATH that `fixPath()` patched (covers Homebrew, nvm, npm-global when PATH is correctly inherited or repaired).
-2. Static candidate list, checked with `existsSync`, in order:
-   - `~/.claude/local/claude` — official installer
-   - `~/.npm-global/bin/claude` — default npm global prefix
-   - `~/.local/bin/claude`
-   - `~/.bun/bin/claude`
-   - `~/.nvm/versions/node/<ver>/bin/claude` — all installed nvm node versions, newest first (enumerated from disk via `readdirSync`, no shell)
-   - `/opt/homebrew/bin/claude`
-   - `/usr/local/bin/claude`
-   - `$(npm prefix -g)/bin/claude` — best-effort custom prefix (3 s timeout, never blocks startup)
+| Source | Condition | `AuthSource` value |
+|---|---|---|
+| Stored API key | `config.claude.apiKey` is non-empty | `'apikey'` |
+| Env var | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` in `process.env` | `'env'` |
+| Claude login | `~/.claude/.credentials.json` exists | `'cli-login'` |
+| None | None of the above | `'none'` |
 
-`getClaude()` calls `detectClaudeBin()` and throws the familiar `claude CLI not found — is Claude Code installed?` message if null. The resolved path is cached in `_claudeBin` **only on success**, so installing claude after launch is detected on the next spawn (no restart required).
+**Important macOS caveat:** A Keychain-stored Claude Code login token is not readable by the file-based probe in step 3. `resolveAuthSource()` may return `{ ok: false, source: 'none' }` even when valid Keychain credentials exist. The onboarding wizard and Settings health panel treat this as a soft warning, not a hard error.
 
-`path-fix.ts` (`fixPath()`) also enumerates all nvm node-version bin dirs via `nvmBinDirs()` and adds `~/.claude/local`, `~/.npm-global/bin`, `~/.bun/bin`, and `~/.volta/bin` to `process.env.PATH`, so the `which claude` step usually succeeds even for installs whose PATH lines live in `.zshrc` (which the `-lc` login-shell probe deliberately skips for speed).
+`buildAgentEnv()` (also in `auth.ts`) returns the `env` override to pass to `query()`:
+- When an API key is configured: `{ ...process.env, ANTHROPIC_API_KEY: key }`.  
+  The SDK `options.env` **replaces** the subprocess env entirely — `process.env` must be spread first to preserve `PATH`, `HOME`, etc.
+- When no key is stored: `undefined` — the SDK inherits `process.env` unchanged, picking up ambient credentials.
 
 ---
 
@@ -50,20 +49,24 @@ Maps each `UsageSource` label to a base tier, then bumps the tier up for large p
 | `suggest` | capable |
 
 Size bumps (applied after the base tier):
-- prompt ≥ 12 000 chars → +1 tier
-- prompt ≥ 40 000 chars → +2 tiers
+- prompt >= 12 000 chars → +1 tier
+- prompt >= 40 000 chars → +2 tiers
 - always clamped to `capable`
 
 ### `escalate(modelId)`
 
-Returns the next-stronger model in the ladder, or `null` when already at `capable`. Used by `runClaude` and `streamChat` to retry failed/weak tasks with a stronger model.
+Returns the next-stronger model in the ladder, or `null` when already at `capable`. Used by `runAgent` and `streamAgentChat` to retry failed/weak tasks with a stronger model.
 
 ---
 
-## `runClaude` — one-shot completion
+## `agent.ts` — SDK entry point
+
+All AI calls are made through `src/main/services/agent.ts`, which wraps `@anthropic-ai/claude-agent-sdk`.
+
+### `runAgent` — one-shot completion
 
 ```ts
-export async function runClaude(
+export async function runAgent(
   systemPrompt: string,
   userPrompt: string,
   source?: UsageSource,   // default 'other'
@@ -72,23 +75,28 @@ export async function runClaude(
 ): Promise<string>
 ```
 
-- Concatenates system + user prompts into a single `-p` argument.
+- Calls the SDK `query()` with `maxTurns: 1`.
 - Selects the initial model via `selectModel(source, fullPrompt.length)`.
-- Flags: `--output-format json` (captures token usage in the JSON envelope).
-- The CLI returns `{ result, usage, total_cost_usd, is_error }`. `result` is returned to the caller.
-- After each attempt, `recordUsage(source, model, cliResult)` persists a row in `usage_events` (records the model that was actually used).
+- After each attempt, `recordUsage(source, model, result)` persists a row in `usage_events`.
 - Hard timeout: **120 seconds** (overridable via `timeoutMs`).
-- **Automatic escalation:** if the call errors (`is_error`, non-zero exit, timeout, or a JSON-missing response when `expectJson=true`), the call is retried once at the next-stronger tier via `escalate()`. Gives up and rethrows at the top tier. Usage is recorded for each attempt.
-- Pass `expectJson=true` for structured tasks that require a JSON response body — a plain-text response triggers escalation rather than silently resolving.
+- **Automatic escalation:** if the call errors or a JSON-missing response is returned when `expectJson=true`, the call is retried once at the next-stronger tier via `escalate()`. Gives up and rethrows at the top tier.
 
-Used for: `generatePlanDraft` (`source='plan_draft'`, `expectJson=true`), `generateRoutineDigest` (`'routine_digest'`), `generateRoutineSetup` (`'routine_setup'`, `expectJson=true`), `inferIntent` / `inferRoutineIntents` in `inference.ts` (`'inference'`, `expectJson=true`), `runMemorySummarization` in `memories.ts` (`'memory'`, `expectJson=true`), `extractCheckInKnowledge` in `checkin.ts` (`'checkin_extract'`, `expectJson=true`).
-
----
-
-## `streamChat` — streaming multi-turn chat
+### `runAgentWithMcp` — one-shot with MCP access
 
 ```ts
-export async function streamChat(
+export async function runAgentWithMcp(
+  systemPrompt: string,
+  userPrompt: string,
+  source?: UsageSource
+): Promise<string>
+```
+
+One-shot call with live MCP servers wired in via `options.mcpServers`. Uses the connected server list from `mcp.ts`. Falls back to `runAgent` when no servers are connected.
+
+### `streamAgentChat` — streaming multi-turn chat
+
+```ts
+export async function streamAgentChat(
   history: ChatMessage[],
   userMessage: string,
   onChunk: (chunk: string) => void,
@@ -100,48 +108,82 @@ export async function streamChat(
 ): Promise<void>
 ```
 
-The model is selected via `selectModel(source, approxLen)` where `approxLen` is the combined char count of the system prompt and all message contents. If the stream fails before any output reaches the client (`code !== 0 && !full`), it is retried once at the escalated tier. User-cancelled streams (`'Cancelled'` error) and idle-timed-out streams (`'Stream timed out'` error) are never retried.
+- Drives a streaming async generator from the SDK.
+- When `enableMcp` is `true`, MCP servers are passed via `options.mcpServers`; the system prompt is extended with `MCP_CHAT_SYSTEM_ADDENDUM`.
+- Tool call gating is handled in-process via `canUseTool` (see below) rather than an allowlist flag.
+- If the stream fails before any output reaches the client, it is retried once at the escalated tier. User-cancelled streams (`'Cancelled'`) and idle-timed-out streams (`'Stream timed out'`) are never retried.
 
-The `source` param is threaded to `runClaudeStream`, which captures the `result` event from the CLI's NDJSON stream (the event carrying `usage` and `total_cost_usd`) and calls `recordUsage` on process exit.
-
-When `enableMcp` is `true`, `streamChat` appends `MCP_CHAT_SYSTEM_ADDENDUM` to the system prompt and `runClaudeStream` calls `ensureServersConnected()` then `buildMcpInvocation()` to wire `--mcp-config` + `--allowedTools` into the CLI spawn.
-
-**`MCP_CHAT_SYSTEM_ADDENDUM`** — tells the model it has read-only tools freely available, and governs the write-action protocol:
-- Emitting an `<action>` block **does not execute anything** — it queues the write for the user's approval (Approve/Dismiss chip, or typing "go ahead"). The model must never claim the write happened; it should say "I've queued this for your approval".
-- Valid `surface:verb` pairs: `github:comment`, `github:label`, `github:approve`, `jira:comment`, `slack:reply`, `slack:send`.
-- `github:approve` maps to `create_pull_request_review` with `event: 'APPROVE'` — this flips a PR's formal review state, unlike `github:comment` which only posts an issue comment.
-- The model receives rendered action-state in its history (`[proposed github:comment — status: pending, awaiting the user's Approve/Dismiss (NOT yet executed)]`) so it knows whether a prior proposal was approved, dismissed, or failed.
-
-Internally calls `runClaudeStream`:
-- Flags: `--output-format stream-json --verbose` plus optionally `--mcp-config <path> --allowedTools <csv>`.
-- Parses `assistant` events from the NDJSON stream, extracting `content[].text` blocks.
-- Calls `onChunk(text)` for each incremental chunk.
-- Calls `onDone(fullText)` when the process exits cleanly.
-
-### The `\x00SPLIT\x00` sentinel
-
-The `claude` CLI occasionally emits multiple `assistant` events in a single response (e.g. a thinking block followed by a text block). When `parseStreamEvent` sees a new `assistant` event while `full` is already non-empty, it emits `'\x00SPLIT\x00'` to `onChunk` before the new block. The renderer uses this sentinel to visually separate multi-block responses.
-
-### Context injection
-
-Pass `rawContext` to inject the raw MCP output as context in the system prompt:
-
-```
-You are mypa, {persona}. Be concise and action-oriented.
-
-Original data collected by this routine:
-{rawContext}
-```
-
-### Stream IDs and cancellation
-
-Every active stream is tracked in a `Map<streamId, { proc, killed }>`. Passing a `streamId` enables cancellation:
+### `cancelAgentChat` — interrupt an active stream
 
 ```ts
-export function cancelStream(streamId: string): boolean
+export function cancelAgentChat(streamId: string): boolean
 ```
 
-Sends `SIGTERM` to the subprocess and removes it from the active-streams map. Returns `true` if a stream was found and killed. The renderer calls `window.electron.routines.cancelStream(runId)` or `window.electron.plan.cancelStream(itemId)`.
+Calls `Query.interrupt()` on the active stream and removes it from the in-memory map. Returns `true` if a stream was found and interrupted. The renderer calls `window.electron.routines.cancelStream(runId)` or `window.electron.plan.cancelStream(itemId)`.
+
+---
+
+## Tool gating — `canUseTool`
+
+`canUseTool` is the SDK callback invoked before each tool call. It decides whether to auto-allow, auto-deny, or gate on user approval.
+
+**Tool name format:** `mcp__<serverKey>__<toolName>`
+
+Rules (applied in order):
+1. Server key `mypa_builtin` — always allowed (covers the in-process `ask_user` tool).
+2. Read-only prefix auto-allow: tool names starting with `get`, `list`, `search`, `read`, `fetch`, `find`, `describe`, `view`, `show`, `check`, `query`, `inspect` are allowed immediately.
+3. All other (write) tools — `canUseTool` broadcasts `chat:tool-approval-request` to the renderer with a `PendingToolApproval` object and then **awaits** resolution. The stream genuinely blocks until `resolveToolApproval()` is called.
+
+### `resolveToolApproval(approvalId, allow, editedInput?)`
+
+```ts
+export function resolveToolApproval(
+  approvalId: string,
+  allow: boolean,
+  editedInput?: Record<string, unknown>
+): void
+```
+
+Resolves a pending approval: unblocks `canUseTool` with either allowed (passing `editedInput` if provided) or denied. Called by the `chat:resolve-tool-approval` IPC handler.
+
+---
+
+## `ask_user` tool — blocking user questions
+
+When the model needs a clarifying answer, it calls the in-process `ask_user` MCP tool (registered via `buildAskUserServer(streamId)`).
+
+**Tool input:** `{ prompt: string, options: string[], multiSelect?: boolean }`
+
+**Flow:**
+1. `ask_user` handler broadcasts `chat:ask-question` to the renderer with a `PendingQuestion` object.
+2. The renderer shows clickable option chips.
+3. The stream genuinely blocks until `resolveQuestion(questionId, answer)` is called.
+4. Calling `window.electron.chat.answerQuestion(questionId, answer)` from the renderer unblocks the stream.
+
+This prevents the "No answer selected" bug — the turn truly blocks rather than continuing with a missing answer.
+
+### `resolveQuestion(questionId, answer)`
+
+```ts
+export function resolveQuestion(questionId: string, answer: string): void
+```
+
+Unblocks a pending `ask_user` invocation with the user's chosen answer. Called by the `chat:answer-question` IPC handler.
+
+---
+
+## `claude.ts` — shim layer
+
+`src/main/services/claude.ts` is now a thin forwarding layer. The subprocess-spawn code has been removed.
+
+| Old export | Now delegates to |
+|---|---|
+| `runClaude(...)` | `runAgent(...)` in `agent.ts` |
+| `streamChat(...)` | `streamAgentChat(...)` in `agent.ts` |
+| `cancelStream(streamId)` | `cancelAgentChat(streamId)` in `agent.ts` |
+| `detectClaudeBin()` | Removed — replaced by `resolveAuthSource()` in `auth.ts` |
+
+`runClaudeWithMcp` delegates to `runAgentWithMcp` in `agent.ts`.
 
 ---
 
@@ -149,7 +191,7 @@ Sends `SIGTERM` to the subprocess and removes it from the active-streams map. Re
 
 ### `generatePlanDraft(intent)`
 
-Parses a free-text intent into a `PlanDraft`. Uses `runClaude` with a JSON-only system prompt. Includes the current time and hour so Claude can infer appropriate `timing` values.
+Parses a free-text intent into a `PlanDraft`. Uses `runAgent` with a JSON-only system prompt. Includes the current time and hour so Claude can infer appropriate `timing` values.
 
 Returns:
 ```ts
@@ -160,7 +202,7 @@ Falls back gracefully: if Claude's output doesn't contain a JSON object, throws.
 
 ### `generateRoutineDigest(name, promptTemplate, rawOutput)`
 
-Summarizes MCP tool outputs for a routine run. Uses `runClaude` with a 240 s timeout (larger than the default 120 s to handle big tool outputs).
+Summarizes MCP tool outputs for a routine run. Uses `runAgent` with a 240 s timeout.
 
 Returns:
 ```ts
@@ -168,7 +210,7 @@ Returns:
 ```
 
 - `summary` — one-sentence headline (max ~120 chars), used as the OS notification body and run-row preview.
-- `body` — full markdown digest that follows the routine's prompt instructions, including any requested grouping or sections.
+- `body` — full markdown digest following the routine's prompt instructions.
 
 The model is instructed to respond in the format:
 ```
@@ -177,15 +219,13 @@ SUMMARY: <one-sentence headline>
 <full markdown body>
 ```
 
-Parsing is line-delimited (no JSON), so rich grouped output is never discarded. If no `SUMMARY:` line is present, the first non-empty line is used as the headline.
-
-**On failure:** logs the error with `console.error('[claude] routine digest failed:', err)` and returns `{ summary: 'Could not generate digest', body: 'The digest could not be generated. Reason: <message>. ...' }`. Never returns the silent `<name> completed` placeholder.
+**On failure:** logs the error and returns `{ summary: 'Could not generate digest', body: 'The digest could not be generated. Reason: <message>. ...' }`. Never returns the silent `<name> completed` placeholder.
 
 ### `generateRoutineSetup(intent, servers)`
 
 Converts a natural-language routine description + the live MCP tool catalog into a validated `RoutineSetupDraft`.
 
-- Builds a `toolCatalog` string from connected `McpServerStatus[]` (only connected servers with ≥1 tool).
+- Builds a `toolCatalog` string from connected `McpServerStatus[]` (only connected servers with >= 1 tool).
 - After parsing Claude's JSON response, **validates** the result:
   - Strips any `actions` entries whose `server::tool` pair isn't in the live catalog.
   - Validates the `cron` expression with `node-cron.validate()`.
@@ -203,8 +243,6 @@ You are {persona}.
 
 Default (if unset or empty): `"a personal assistant"`.
 
-Users set their persona in the Settings panel.
-
 ## Owner identity clause
 
 When the user has configured `AppConfig.owner` (name + per-surface handles), every system prompt also receives an owner-identity instruction via `buildOwnerClause()` (`config.ts`):
@@ -216,7 +254,7 @@ When activity references any of those handles, that is {name} themselves — add
 second person ("you"), never in the third person or by their handle.
 ```
 
-This clause is appended in: `generateRoutineDigest`, `streamChat`, `generatePlanDraft` (all in `claude.ts`), `inferIntent` (`inference.ts`), and `runMemorySummarization` (`memories.ts`). Returns `''` when owner is not configured, so prompts degrade gracefully.
+This clause is appended in: `generateRoutineDigest`, `streamAgentChat`, `generatePlanDraft` (all in `claude.ts`), `inferIntent` (`inference.ts`), and `runMemorySummarization` (`memories.ts`). Returns `''` when owner is not configured.
 
 ### Standing directives clause (`buildDirectivesClause`)
 
@@ -229,31 +267,42 @@ Standing rules you must always obey (set by the user in past check-ins):
 If a candidate observation or proposed action would violate any of the above, do not surface it — return the "nothing actionable" response instead.
 ```
 
-This clause is appended in `inferIntent` (`inference.ts`) **after** `buildOwnerClause()`, so it appears in the trusted system-prompt section — never inside the `<context>` data block (which the model is explicitly told to treat as data, not instructions). Re-read at every call (not cached), so newly-added hard rules take effect on the next inference cycle. Returns `''` when there are no hard memories.
+This clause is appended in `inferIntent` (`inference.ts`) after `buildOwnerClause()`. Re-read at every call (not cached), so newly-added hard rules take effect on the next inference cycle. Returns `''` when there are no hard memories.
 
 ## Usage recording
 
-`src/main/services/usage.ts` provides the `recordUsage(source, model, cliResult)` function imported by `claude.ts`. It calls `dbInsertUsage()` and swallows all errors so telemetry never disrupts an AI call.
+`src/main/services/usage.ts` provides the `recordUsage(source, model, result)` function imported by `agent.ts`. It calls `dbInsertUsage()` and swallows all errors so telemetry never disrupts an AI call.
 
 `UsageSource` labels: `'plan_draft'`, `'routine_digest'`, `'routine_setup'`, `'routine_chat'`, `'plan_chat'`, `'checkin_chat'`, `'checkin_extract'`, `'inference'`, `'memory'`, `'suggest'`, `'chat'`, `'other'`.
 
+## Packaging
+
+`@anthropic-ai/claude-agent-sdk` platform binaries (e.g. `@anthropic-ai/claude-agent-sdk-darwin-arm64`) must be spawnable from a packaged app. The `package.json` build config includes `**/node_modules/@anthropic-ai/claude-agent-sdk-*/**` in `asarUnpack` so the native binary is extracted from the ASAR archive at install time.
+
 ## Changelog
 
-- 2026-06-18 — **Stream idle watchdog in `runClaudeStream`:** Added `STREAM_IDLE_TIMEOUT_MS = 120_000` constant and an idle timer inside `runClaudeStream`. The timer is armed immediately after spawn and resets on every `stdout` data event; if no output arrives for 120 s, the subprocess is killed with SIGTERM and the promise rejects with `'Stream timed out'`. A `settled` flag prevents the close handler from double-settling after the kill. Both the close and error handlers call `clearTimeout(idleTimer)`. The escalation loop in `streamChat` now treats `'Stream timed out'` as terminal (same as `'Cancelled'`) — no retry. Previously `runClaudeStream` was the only spawn path without a watchdog; this closes the gap that caused the "Chat about it" UI to hang forever when the agentic CLI subprocess wedged without producing output.
+- 2026-06-22 — **Dual-source auth, CLI dependency removed:** new `src/main/services/auth.ts` with `buildAgentEnv()` (injects stored API key into `query()` options.env, spreading process.env to preserve PATH/HOME) and `resolveAuthSource()` (priority probe: stored key → env var → ~/.claude/.credentials.json → none). All three `query()` call sites in `agent.ts` now pass `env: buildAgentEnv()`. `detectClaudeBin()` and all CLI-detection helpers removed from `claude.ts`. `SetupHealth.claudeCli` replaced by `SetupHealth.auth: { ok, source: AuthSource }`. Onboarding Step 2 reworked from "install Claude Code CLI" to "Connect Claude" with inline API-key entry; no longer a hard block. Settings health row updated to show auth source instead of CLI presence.
 
-- 2026-06-19 — **Chat write-action correctness (four fixes):** (1) `MCP_CHAT_SYSTEM_ADDENDUM` rewritten to make the contract explicit — emitting an `<action>` block queues the write, never executes it; the model is told to say "queued for approval" and never imply the write happened. (2) Typed approval: `handleIntentChat` and `handlePlanMessage` detect a short affirmative/dismissal phrase ("go ahead", "approve", "yes", "no", "cancel", etc.) and, if a pending action exists in the thread, immediately call `approveChatAction`/`dismissChatAction` without streaming a model turn — the chip flips to `executed`/`dismissed` and a confirmation note is appended. (3) Action-state rendered into model history: action-only messages (empty content, action metadata) are replaced in the history fed to `streamChat` with a synthetic status line so the model knows whether a prior proposal is still pending, executed, or dismissed. (4) `github:approve` verb added — maps to `create_pull_request_review (event: APPROVE)` for formal PR approval; `buildToolArgs` github branch extended with a `pull_number` case.
+- 2026-06-22 — **Agent SDK migration complete:** replaced `claude` CLI subprocess with `@anthropic-ai/claude-agent-sdk`. All AI calls now go through `src/main/services/agent.ts`. `runClaude`/`streamChat`/`cancelStream` in `claude.ts` are now thin shims delegating to `runAgent`/`streamAgentChat`/`cancelAgentChat`. Removed dead subprocess spawn code. MCP servers are passed via `options.mcpServers` (not `--mcp-config` temp file). `canUseTool` callback gates write tools on user approval by broadcasting `chat:tool-approval-request`; read-only prefixes are auto-allowed. New `ask_user` in-process MCP tool broadcasts `chat:ask-question` to block the stream on user input. New `PendingToolApproval` and `PendingQuestion` interfaces in `src/shared/types.ts`. New `IpcApi.chat` namespace with `resolveToolApproval()` and `answerQuestion()`. SDK platform binary added to `asarUnpack` in `package.json`. Removed `stageChatActionsFromSegment` and `ACTION_BLOCK_RE` from `ambient.ts` (text-sentinel write-action layer, superseded by SDK `canUseTool` gating).
 
-- 2026-06-19 — **Plan-chat action parity:** `handlePlanMessage` now strips `<action>` blocks and surfaces Approve/Dismiss chips, matching intent chat. Shared helper `stageChatActionsFromSegment` extracted from the intent chat path. DB: `plan_item_threads` gains a `metadata TEXT` column (additive migration). New IPC channels `plan:approve-chat-action` / `plan:dismiss-chat-action`. Preload, `IpcApi.plan`, `PlanItemCard`, and `PlanItemDetail` all wired. `approvePlanAction` / `dismissPlanAction` in `ambient.ts` mirror the intent equivalents (no `action_log` FK since plan items are not intents).
+- 2026-06-18 — **Stream idle watchdog:** Added `STREAM_IDLE_TIMEOUT_MS = 120_000` and an idle timer inside the stream path. The timer is armed immediately after spawn and resets on every output chunk; if no output arrives for 120 s, the stream is killed and the promise rejects with `'Stream timed out'`. The escalation loop in `streamChat` treats `'Stream timed out'` as terminal (same as `'Cancelled'`) — no retry.
 
-- 2026-06-18 — **Live MCP in streaming chat (`enableMcp`):** `buildMcpInvocation()` helper extracted from `runClaudeWithMcp` — builds the `--mcp-config` temp file + `--allowedTools` list using `getKnownServerTools()` (survives dead in-process clients via `lastKnownTools` cache in `mcp.ts`). `runClaudeStream` and `streamChat` gain an optional `enableMcp?: boolean` param. When set: `runClaudeStream` calls `await ensureServersConnected()`, calls `buildMcpInvocation()`, appends the CLI flags, and `cleanup()`s the temp file on both close and error. `streamChat` appends `MCP_CHAT_SYSTEM_ADDENDUM` to the system prompt (read-only tool instructions + `<action>` block protocol for write proposals). All chat callers — `handleIntentChat`, `handleRunMessage`, `handlePlanMessage`, `handleCheckInMessage`, check-in briefing — pass `enableMcp: true`. `runClaudeWithMcp` now also uses `buildMcpInvocation()` internally (no behavior change, just deduplication).
+- 2026-06-19 — **Chat write-action correctness (four fixes):** (1) `MCP_CHAT_SYSTEM_ADDENDUM` rewritten to make the contract explicit — emitting an `<action>` block queues the write, never executes it; the model is told to say "queued for approval" and never imply the write happened. (2) Typed approval: `handleIntentChat` and `handlePlanMessage` detect a short affirmative/dismissal phrase and immediately call `approveChatAction`/`dismissChatAction` without streaming a model turn. (3) Action-state rendered into model history. (4) `github:approve` verb added.
 
-- 2026-06-17 — **Automatic model selection + escalation:** replaced the single user-configured model with `model-router.ts`. `selectModel(source, promptChars)` picks a tier (fast/balanced/capable) from the task's `UsageSource` and bumps it up for large prompts (≥ 12 k chars → +1, ≥ 40 k → +2). `escalate(modelId)` returns the next-stronger tier and is called by `runClaude` and `streamChat` on failure — one retry per escalation step, stopping at `capable`. `runClaude` gains an `expectJson` parameter; `true` triggers escalation when the response lacks JSON structure. Removed the model dropdown from `Settings.tsx` and the "Choose a model" step 3 from `OnboardingWizard.tsx` (renumbered to 5 steps). `DEFAULT_CONFIG.claude` no longer seeds a model. Added `'suggest'` to `UsageSource` (was missing, causing a latent type error).
+- 2026-06-19 — **Plan-chat action parity:** `handlePlanMessage` now strips `<action>` blocks and surfaces Approve/Dismiss chips. Shared helper `stageChatActionsFromSegment` extracted. DB: `plan_item_threads` gains a `metadata TEXT` column. New IPC channels `plan:approve-chat-action` / `plan:dismiss-chat-action`.
 
-- 2026-06-16 — **Unified claude detection:** replaced the separate `execFileSync('/usr/bin/which', ['claude'])` calls in `setup:check-prerequisites` and `setup:get-health` with `detectClaudeBin()` (new export from `claude.ts`) so the wizard gate is identical to what the runtime uses. Broadened fallback candidate list to cover the official installer (`~/.claude/local/claude`), nvm node-version bin dirs (all versions, enumerated via `readdirSync`), `~/.npm-global/bin`, `~/.bun/bin`, and `~/.volta/bin`. `path-fix.ts` static dirs widened to match; `nvmBinDirs()` helper added there too. Failure is no longer cached — a null result leaves `_claudeBin` null so a post-launch install is picked up immediately.
-- 2026-06-15 — **Digest format overhaul:** `RoutineDigest` changed from `{ summary, items, proposed_actions }` to `{ summary, body }`; `generateRoutineDigest` now uses a line-delimited `SUMMARY: <headline>\n\n<markdown body>` format instead of a JSON schema, with a 240 s timeout (up from 120 s); on parse, extracts the `SUMMARY:` line as the notification headline and everything below as the full markdown body; on hard failure, logs to console and returns an honest error message rather than the silent `<name> completed` placeholder. `runClaude` gains an optional `timeoutMs` param (default 120 s unchanged for all other callers).
-- 2026-06-10 — **Standing directives clause:** added `buildDirectivesClause()` to `config.ts`; appended to the `inferIntent` system prompt alongside `buildOwnerClause()`; reads active hard memories via `dbGetActiveHardMemories()`. Hard memories are extracted from check-ins when the user states absolute rules; classification is done by the `checkin_extract` Claude call using a new `enforcement` field in the extraction JSON schema. Autonomous summarization (`memories.ts`) always defaults to `'soft'`. New `MemoryEnforcement` type in `src/shared/types.ts`.
-- 2026-06-09 — added `claudeEnv()` helper in `claude.ts`; both `runClaude` and `runClaudeStream` now pass `env: claudeEnv()` to `spawn`, injecting `ANTHROPIC_API_KEY` when `AppConfig.claude.apiKey` is set; if unset the process inherits the parent env (CLI's own auth)
-- 2026-06-07 — `runClaude` switched from `--output-format text` to `--output-format json`; added `source: UsageSource` param; both `runClaude` and `runClaudeStream` now call `recordUsage()` after each call; new `src/main/services/usage.ts` thin recorder
-- 2026-06-07 — added owner-identity clause (`buildOwnerClause`) injected into all system prompts so the model addresses the owner as "you" when `AppConfig.owner` is configured
-- 2026-06-07 — `generateRoutineDigest` hardened to never throw (strips markdown fences, wraps JSON.parse in try/catch, returns graceful default on any failure); `parseStreamEvent` in `runClaudeStream` hardened to only pass the `result` fallback when it is plain prose (not a JSON blob), preventing raw MCP tool output from appearing in chat
+- 2026-06-18 — **Live MCP in streaming chat (`enableMcp`):** `buildMcpInvocation()` helper extracted; `streamChat` gains an optional `enableMcp?: boolean` param; `MCP_CHAT_SYSTEM_ADDENDUM` appended to system prompt when set.
+
+- 2026-06-17 — **Automatic model selection + escalation:** replaced the single user-configured model with `model-router.ts`. `selectModel(source, promptChars)` picks a tier and bumps it for large prompts. `escalate(modelId)` returns the next-stronger tier.
+
+- 2026-06-16 — **Unified claude detection:** replaced the separate detection calls with `detectClaudeBin()` (exported from `claude.ts`).
+
+- 2026-06-15 — **Digest format overhaul:** `RoutineDigest` changed from `{ summary, items, proposed_actions }` to `{ summary, body }`; `generateRoutineDigest` now uses a line-delimited `SUMMARY: <headline>\n\n<markdown body>` format with a 240 s timeout.
+
+- 2026-06-10 — **Standing directives clause:** added `buildDirectivesClause()` to `config.ts`; appended to the `inferIntent` system prompt.
+
+- 2026-06-09 — added `claudeEnv()` helper; both run paths now inject `ANTHROPIC_API_KEY` when `AppConfig.claude.apiKey` is set.
+
+- 2026-06-07 — added owner-identity clause (`buildOwnerClause`) injected into all system prompts.
+
 - 2026-06-06 — initial documentation

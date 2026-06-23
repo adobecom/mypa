@@ -109,6 +109,34 @@ export interface ProposedChatAction {
   resultText?: string
 }
 
+/**
+ * In-flight tool-approval request emitted by canUseTool during an active chat stream.
+ * Broadcast on 'chat:tool-approval-request'; resolved via chat.resolveToolApproval().
+ */
+export interface PendingToolApproval {
+  streamId: string
+  approvalId: string
+  toolName: string
+  toolInput: Record<string, unknown>
+  /** Human-readable label, e.g. "GitHub · add issue comment". */
+  displayLabel: string
+  /** Input field the user can edit before approving (body/message/text). */
+  editableField?: string
+  editableValue?: string
+}
+
+/**
+ * In-flight ask_user question emitted by the tool handler during an active chat stream.
+ * Broadcast on 'chat:ask-question'; resolved via chat.answerQuestion().
+ */
+export interface PendingQuestion {
+  streamId: string
+  questionId: string
+  prompt: string
+  options: string[]
+  multiSelect?: boolean
+}
+
 export interface ChatMessage {
   id: string
   role: MessageRole
@@ -574,6 +602,9 @@ export interface UsageBreakdownRow {
 
 // ─── Setup / Health ───────────────────────────────────────────────────────────
 
+/** Where the active Claude authentication credential is coming from. */
+export type AuthSource = 'apikey' | 'env' | 'cli-login' | 'none'
+
 export interface SetupHealthServer {
   name: string
   connected: boolean
@@ -586,7 +617,8 @@ export interface SetupHealthServer {
 }
 
 export interface SetupHealth {
-  claudeCli: boolean
+  /** Active Claude auth source. ok=false means no credentials were detected. */
+  auth: { ok: boolean; source: AuthSource }
   servers: SetupHealthServer[]
 }
 
@@ -639,7 +671,7 @@ export interface IpcApi {
     startPkce(provider: 'notion' | 'linear'): Promise<string>
   }
   setup: {
-    checkPrerequisites(): Promise<{ claudeCli: boolean }>
+    checkPrerequisites(): Promise<{ ok: boolean; source: AuthSource }>
     getHealth(): Promise<SetupHealth>
     detectClaudeMcp(): Promise<DetectedMcpServer[]>
     resolveOwnerHandles(): Promise<ResolvedOwnerHandles>
@@ -711,6 +743,12 @@ export interface IpcApi {
     checkNow(): Promise<void>
     install(): Promise<void>
   }
+  chat: {
+    /** Resolve a pending canUseTool gate. allow=true executes; allow=false denies. */
+    resolveToolApproval(approvalId: string, allow: boolean, editedInput?: Record<string, unknown>): Promise<void>
+    /** Deliver the user's answer to a pending ask_user question. */
+    answerQuestion(questionId: string, answer: string | string[]): Promise<void>
+  }
   on(
     channel:
       | 'routine:run-started'
@@ -738,7 +776,9 @@ export interface IpcApi {
       | 'update:available'
       | 'update:progress'
       | 'update:downloaded'
-      | 'update:error',
+      | 'update:error'
+      | 'chat:tool-approval-request'
+      | 'chat:ask-question',
     listener: (...args: unknown[]) => void
   ): () => void
 }
