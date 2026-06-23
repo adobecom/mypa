@@ -269,7 +269,16 @@ function makeJiraAdapter(): SurfaceAdapter {
           title: String(i.summary ?? ''),
           body: latestCommentBody,
           actor: String(assigneeDisplay || reporter.display_name || ''),
-          url: String(i.url ?? ''),
+          url: (() => {
+          const raw = String(i.url ?? '')
+          if (raw) return raw
+          // mcp-atlassian often omits the url field on simplified dicts; reconstruct from config.
+          const key = String(i.key ?? i.id ?? '')
+          if (!key) return ''
+          const jiraBaseUrl = readConfig().mcpServers?.find((s) => s.name === 'jira')?.env?.JIRA_URL
+          if (!jiraBaseUrl) return ''
+          return `${jiraBaseUrl.replace(/\/$/, '')}/browse/${key}`
+        })(),
           occurred_at: String(i.updated ?? i.created ?? ''),
           relation,
           directed,

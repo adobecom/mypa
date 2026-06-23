@@ -40,6 +40,7 @@ function formatTime(ts: string): string {
 
 export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIntent }: Props): React.ReactElement {
   const [expanded, setExpanded] = useState(!collapsed && (run.status === 'pending_response' || run.status === 'in_progress'))
+  const [trackedOpen, setTrackedOpen] = useState(false)
   const [thread, setThread] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
@@ -182,11 +183,21 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
 
       {!collapsed && expanded && (
         <div className="routine-card__body">
-          {/* Tracked items — work items detected in the run's MCP output */}
+          {/* Tracked items — collapsed by default; expand on demand so the chat is visible first */}
           {run.covered_entities && run.covered_entities.length > 0 && (
             <div className="routine-card__tracked">
-              <div className="routine-card__tracked-label">Tracked items</div>
-              {run.covered_entities.map((entity: CoveredEntity) => {
+              <div
+                className="routine-card__tracked-toggle"
+                onClick={(e) => { e.stopPropagation(); setTrackedOpen((o) => !o) }}
+              >
+                <span className="routine-card__tracked-label">
+                  Tracked items · {run.covered_entities.length}
+                </span>
+                <span className={`routine-card__expand-icon${trackedOpen ? ' open' : ''}`}>
+                  <ChevronDown size={11} />
+                </span>
+              </div>
+              {trackedOpen && run.covered_entities.map((entity: CoveredEntity) => {
                 const intent = entityKeyToIntent?.get(entity.key)
                 const { label: statusLabel, color: statusColor } = entityStatusLabel(intent)
                 return (
@@ -194,9 +205,20 @@ export default function RoutineCard({ run, onRunChange, collapsed, entityKeyToIn
                     <span className="routine-card__tracked-icon">
                       <EntityIcon surface={entity.surface} />
                     </span>
-                    <span className="routine-card__tracked-title" title={entity.url || undefined}>
-                      {entity.title || entity.external_id}
-                    </span>
+                    {entity.url ? (
+                      <span
+                        className="routine-card__tracked-title routine-card__tracked-title--link"
+                        title={entity.url}
+                        onClick={(e) => { e.stopPropagation(); window.electron.system.openExternal(entity.url) }}
+                      >
+                        {entity.title || entity.external_id}
+                        <ExternalLink size={10} style={{ marginLeft: 3, flexShrink: 0 }} />
+                      </span>
+                    ) : (
+                      <span className="routine-card__tracked-title" title={entity.url || undefined}>
+                        {entity.title || entity.external_id}
+                      </span>
+                    )}
                     <span className="routine-card__tracked-status" style={{ color: statusColor }}>
                       {statusLabel}
                     </span>
