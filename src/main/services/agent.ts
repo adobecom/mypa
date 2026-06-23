@@ -433,6 +433,13 @@ async function streamAgentChatOnce(
   } catch (err) {
     clearTimeout(idleTimer)
     if (streamId) activeAgentChats.delete(streamId)
+    // Drain any pending approval/question promises so they don't leak on unexpected errors.
+    if (streamId) {
+      const cancelApproval = pendingApprovalCancels.get(streamId)
+      if (cancelApproval) { cancelApproval(); pendingApprovalCancels.delete(streamId) }
+      const cancelQuestion = pendingQuestionCancels.get(streamId)
+      if (cancelQuestion) { cancelQuestion(); pendingQuestionCancels.delete(streamId) }
+    }
     if (timedOut) throw new Error('Stream timed out')
     if (entry.interrupted) throw new Error('Cancelled')
     throw err
@@ -498,7 +505,7 @@ export async function runAgentWithMcp(
   let model = selectModel(source, systemPrompt.length + userPrompt.length)
   while (true) {
     try {
-      return await runAgentWithMcpOnce(model, systemPrompt, userPrompt, source, timeoutMs, false, sdkMcpServers)
+      return await runAgentWithMcpOnce(model, systemPrompt, userPrompt, source, timeoutMs, sdkMcpServers)
     } catch (err) {
       const msg = (err as Error).message
       if (msg === 'Agent timed out') throw err
@@ -517,7 +524,6 @@ async function runAgentWithMcpOnce(
   userPrompt: string,
   source: UsageSource,
   timeoutMs: number,
-  expectJson: boolean,
   mcpServers: Record<string, { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }>,
 ): Promise<string> {
   const ac = new AbortController()
@@ -572,9 +578,6 @@ async function runAgentWithMcpOnce(
   if (!text) {
     const r = typeof (resultMsg as any).result === 'string' ? (resultMsg as any).result as string : ''
     if (r && !r.startsWith('{') && !r.startsWith('[')) text = r
-  }
-  if (expectJson && !text.includes('{') && !text.includes('[')) {
-    throw new Error('Agent returned non-JSON response when JSON was expected')
   }
   return text
 }

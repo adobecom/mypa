@@ -384,7 +384,7 @@ function InlineToolApproval({
       )}
       <div className="chat-action-chip__buttons">
         <button className="btn btn--ghost btn--sm" onClick={handleDeny} disabled={busy}>
-          <X size={11} /> Dismiss
+          <X size={11} /> Deny
         </button>
         <button
           className="btn btn--primary btn--sm"

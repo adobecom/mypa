@@ -1096,18 +1096,10 @@ export function findLatestPendingAction(thread: ChatMessage[]): ChatMessage | nu
  *
  * Persists the user turn, streams the assistant reply via streamChat with live
  * read-only MCP tools wired in, persists each response segment, and broadcasts
- * chunk events to the renderer.
- *
- * When the model proposes a write action via <action>...</action>, mypa:
- *   - strips the tag from the visible text
- *   - merges routing identifiers from the parent intent's payload
- *   - computes the trust tier
- *   - at tier 0 (auto-execute): runs the action immediately, appends a result note
- *   - at tier ≥ 1 (approval required): persists the message with action metadata
- *     so the renderer can render Approve / Dismiss buttons
- *
- * Available on every intent, including failed/terminal ones, so the user can
- * always discuss and understand what went wrong.
+ * chunk events to the renderer. Write-tool requests are gated by canUseTool in
+ * agent.ts, which broadcasts chat:tool-approval-request and awaits user approval
+ * via the InlineToolApproval chip. Available on every intent, including
+ * failed/terminal ones, so the user can always discuss what went wrong.
  */
 export async function handleIntentChat(intentId: string, userMessage: string): Promise<void> {
   const intent = dbGetIntent(intentId)
