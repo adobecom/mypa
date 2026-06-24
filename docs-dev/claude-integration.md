@@ -279,7 +279,11 @@ This clause is appended in `inferIntent` (`inference.ts`) after `buildOwnerClaus
 
 `@anthropic-ai/claude-agent-sdk` platform binaries (e.g. `@anthropic-ai/claude-agent-sdk-darwin-arm64`) must be spawnable from a packaged app. The `package.json` build config includes `**/node_modules/@anthropic-ai/claude-agent-sdk-*/**` in `asarUnpack` so the native binary is extracted from the ASAR archive at install time.
 
+**ASAR path fix — `pathToClaudeCodeExecutable` must be set explicitly.** The SDK's `sdk.mjs` lives inside `app.asar`; when it resolves the platform binary relative to its own `import.meta.url` it produces a path that includes `app.asar` — which is a file, not a directory — causing `spawn ENOTDIR` on every AI call. The fix is in `agent.ts`: `resolveClaudeExecutable()` computes the real, unpacked path via `app.getAppPath().replace('app.asar', 'app.asar.unpacked')`, then all three `query()` call sites pass `pathToClaudeCodeExecutable: resolveClaudeExecutable()`. This short-circuits the SDK's broken default without affecting dev mode (where `app.getAppPath()` points to the project root and the binary exists at the direct `node_modules` path).
+
 ## Changelog
+
+- 2026-06-24 — **Fix `spawn ENOTDIR` in packaged app:** added `resolveClaudeExecutable()` helper in `agent.ts` that rewrites `app.getAppPath()` to the `app.asar.unpacked` path. All three `query()` call sites now pass `pathToClaudeCodeExecutable: resolveClaudeExecutable()`, preventing the SDK from resolving the binary to an `app.asar/…` path (a file, not a directory). See updated **Packaging** section above.
 
 - 2026-06-22 — **Dual-source auth, CLI dependency removed:** new `src/main/services/auth.ts` with `buildAgentEnv()` (injects stored API key into `query()` options.env, spreading process.env to preserve PATH/HOME) and `resolveAuthSource()` (priority probe: stored key → env var → ~/.claude/.credentials.json → none). All three `query()` call sites in `agent.ts` now pass `env: buildAgentEnv()`. `detectClaudeBin()` and all CLI-detection helpers removed from `claude.ts`. `SetupHealth.claudeCli` replaced by `SetupHealth.auth: { ok, source: AuthSource }`. Onboarding Step 2 reworked from "install Claude Code CLI" to "Connect Claude" with inline API-key entry; no longer a hard block. Settings health row updated to show auth source instead of CLI presence.
 

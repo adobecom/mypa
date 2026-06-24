@@ -1,6 +1,9 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
 import type { Query, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
+import { app } from 'electron'
+import { existsSync } from 'fs'
+import path from 'path'
 import { recordUsage } from './usage'
 import { selectModel, escalate } from './model-router'
 import { readConfig, buildOwnerClause } from './config'
@@ -9,6 +12,25 @@ import { broadcast } from '../windows'
 import type { UsageSource, ChatMessage, PendingToolApproval, PendingQuestion } from '@shared/types'
 
 const STREAM_IDLE_TIMEOUT_MS = 120_000
+
+// In a packaged Electron app the SDK's sdk.mjs lives inside app.asar, so it
+// resolves the platform binary to a path that includes app.asar — a file, not
+// a directory — causing `spawn ENOTDIR`.  The binary itself is asarUnpack'd
+// (see `asarUnpack` in package.json), so we compute its real path and pass it
+// via pathToClaudeCodeExecutable to short-circuit the SDK's broken default.
+let cachedClaudeExe: string | null | undefined
+function resolveClaudeExecutable(): string | undefined {
+  if (cachedClaudeExe !== undefined) return cachedClaudeExe ?? undefined
+  const pkg = `claude-agent-sdk-${process.platform}-${process.arch}`
+  const binName = process.platform === 'win32' ? 'claude.exe' : 'claude'
+  // app.getAppPath() → .../app.asar when packaged, project root in dev.
+  const base = app.isPackaged
+    ? app.getAppPath().replace('app.asar', 'app.asar.unpacked')
+    : app.getAppPath()
+  const candidate = path.join(base, 'node_modules', '@anthropic-ai', pkg, binName)
+  cachedClaudeExe = existsSync(candidate) ? candidate : null
+  return cachedClaudeExe ?? undefined
+}
 
 interface ActiveAgentChat {
   q: Query
@@ -188,6 +210,7 @@ async function runAgentOnce(
         canUseTool: async () => ({ behavior: 'deny', message: 'one-shot mode — no tools' }),
         abortController: ac,
         env: buildAgentEnv(),
+        pathToClaudeCodeExecutable: resolveClaudeExecutable(),
       }
     })) {
       if (msg.type === 'assistant') {
@@ -369,6 +392,7 @@ async function streamAgentChatOnce(
       permissionMode: 'default',
       ...(hasMcp ? { mcpServers: allMcpServers } : {}),
       env: buildAgentEnv(),
+      pathToClaudeCodeExecutable: resolveClaudeExecutable(),
       canUseTool: async (toolName: string, toolInput: unknown) => {
         // Extract the base tool name after the mcp__server__ prefix
         const parts = toolName.split('__')
@@ -546,6 +570,7 @@ async function runAgentWithMcpOnce(
         permissionMode: 'default',
         mcpServers,
         env: buildAgentEnv(),
+        pathToClaudeCodeExecutable: resolveClaudeExecutable(),
         canUseTool: async (toolName: string) => {
           const parts = toolName.split('__')
           const baseName = parts.length >= 3 ? parts.slice(2).join('__') : toolName
