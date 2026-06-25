@@ -405,9 +405,9 @@ async function streamAgentChatOnce(
   const firstTimeout = hasMcp ? STREAM_STARTUP_TIMEOUT_MS : STREAM_IDLE_TIMEOUT_MS
   let idleTimer = setTimeout(() => { timedOut = true; ac.abort() }, firstTimeout)
 
-  const resetIdle = (): void => {
+  const resetIdle = (ms = STREAM_IDLE_TIMEOUT_MS): void => {
     clearTimeout(idleTimer)
-    idleTimer = setTimeout(() => { timedOut = true; ac.abort() }, STREAM_IDLE_TIMEOUT_MS)
+    idleTimer = setTimeout(() => { timedOut = true; ac.abort() }, ms)
   }
 
   const q = query({
@@ -470,6 +470,12 @@ async function streamAgentChatOnce(
     for await (const msg of q) {
       resetIdle()
       if (msg.type === 'assistant') {
+        // When the model emits a tool_use block the SDK silently awaits the MCP
+        // server response before yielding the next message. Give that wait the
+        // same generous budget as the initial cold-spawn.
+        if ((msg.message?.content ?? []).some((b: any) => b.type === 'tool_use')) {
+          resetIdle(STREAM_STARTUP_TIMEOUT_MS)
+        }
         const textBlocks = (msg.message?.content ?? []).filter(
           (b: any) => b.type === 'text' && typeof b.text === 'string' && b.text,
         )
