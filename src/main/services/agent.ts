@@ -11,7 +11,13 @@ import { buildAgentEnv } from './auth'
 import { broadcast } from '../windows'
 import type { UsageSource, ChatMessage, PendingToolApproval, PendingQuestion } from '@shared/types'
 
+// Inter-chunk idle timeout once the stream is producing output.
 const STREAM_IDLE_TIMEOUT_MS = 120_000
+// First-message budget. With MCP enabled the Agent SDK cold-spawns its own stdio MCP
+// subprocesses (npx download + auth + listTools) before the first message arrives,
+// which can exceed the steady-state idle window. Must stay below the renderer's 150s
+// first-chunk backstop in IntentCard.tsx.
+const STREAM_STARTUP_TIMEOUT_MS = 140_000
 
 // In a packaged Electron app the SDK's sdk.mjs lives inside app.asar, so it
 // resolves the platform binary to a path that includes app.asar — a file, not
@@ -330,8 +336,11 @@ export async function streamAgentChat(
   const persona = cfg.persona?.trim() || 'a personal assistant'
   const ownerClause = buildOwnerClause()
   const askUserGuidance = 'When you need the user to choose between options, always call the ask_user tool — never list options as bullet points and never select an answer yourself.'
+  const contextGuidance = rawContext
+    ? ' If the requested information (URLs, IDs, links, titles) is already present in the data below, answer directly from it and do not call any tools.'
+    : ''
   const systemPrompt = rawContext
-    ? `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented. ${askUserGuidance}\n\nOriginal data collected:\n${rawContext}`
+    ? `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented. ${askUserGuidance}${contextGuidance}\n\nOriginal data collected:\n${rawContext}`
     : `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented. ${askUserGuidance}`
 
   // Build SDK mcpServers map from config when MCP is requested
@@ -383,19 +392,23 @@ async function streamAgentChatOnce(
   // Format conversation as a flat prompt — mirrors the CLI's -p approach.
   const prompt = messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')
 
+  // Always attach the ask_user in-process server so the model can ask questions
+  const allMcpServers: Record<string, any> = { ...(mcpServers ?? {}) }  // eslint-disable-line @typescript-eslint/no-explicit-any
+  if (streamId) allMcpServers['mypa_builtin'] = buildAskUserServer(streamId)
+  const hasMcp = Object.keys(allMcpServers).length > 0
+
   const ac = new AbortController()
   let timedOut = false
-  let idleTimer = setTimeout(() => { timedOut = true; ac.abort() }, STREAM_IDLE_TIMEOUT_MS)
+  // Use the startup budget for the first message when MCP is on (the SDK cold-spawns
+  // all configured stdio servers before the first message arrives). Once a message
+  // lands, resetIdle() re-arms at the tighter inter-chunk value.
+  const firstTimeout = hasMcp ? STREAM_STARTUP_TIMEOUT_MS : STREAM_IDLE_TIMEOUT_MS
+  let idleTimer = setTimeout(() => { timedOut = true; ac.abort() }, firstTimeout)
 
   const resetIdle = (): void => {
     clearTimeout(idleTimer)
     idleTimer = setTimeout(() => { timedOut = true; ac.abort() }, STREAM_IDLE_TIMEOUT_MS)
   }
-
-  // Always attach the ask_user in-process server so the model can ask questions
-  const allMcpServers: Record<string, any> = { ...(mcpServers ?? {}) }  // eslint-disable-line @typescript-eslint/no-explicit-any
-  if (streamId) allMcpServers['mypa_builtin'] = buildAskUserServer(streamId)
-  const hasMcp = Object.keys(allMcpServers).length > 0
 
   const q = query({
     prompt,

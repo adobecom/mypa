@@ -118,7 +118,8 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
   const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null)
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
   // Safety backstop: if the main process dies or the stream never sends done:true,
-  // clear the streaming state after 150s (server idle watchdog fires at 120s).
+  // clear the streaming state after 150s (server-side watchdog fires at up to 140s for
+  // MCP-enabled chats, 120s for plain streaming).
   const chatSafetyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => { if (chatSafetyTimer.current) clearTimeout(chatSafetyTimer.current) }, [])
 
@@ -217,8 +218,8 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
       setChatThread((prev) => [...prev, p.message])
       setChatStreaming(true)
       setChatStreamContent('')
-      // Arm the safety backstop — 150s is longer than the server-side 120s idle watchdog,
-      // so the server error path normally fires first; this is a last-resort fallback.
+      // Arm the safety backstop — 150s is longer than the server-side watchdog (up to 140s
+      // for MCP chats), so the server error path normally fires first; this is last-resort.
       if (chatSafetyTimer.current) clearTimeout(chatSafetyTimer.current)
       chatSafetyTimer.current = setTimeout(() => {
         setChatStreaming(false)
