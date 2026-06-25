@@ -90,6 +90,7 @@ const api: IpcApi = {
   memory: {
     getGraph: () => ipcRenderer.invoke('memory:get-graph'),
     getNode: (id: string) => ipcRenderer.invoke('memory:get-node', id),
+    getActive: (limit?: number) => ipcRenderer.invoke('memory:get-active', limit),
     deleteNode: (id: string) => ipcRenderer.invoke('memory:delete-node', id),
     deleteEdge: (id: string) => ipcRenderer.invoke('memory:delete-edge', id),
     deleteMemory: (id: string) => ipcRenderer.invoke('memory:delete-memory', id),

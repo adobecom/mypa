@@ -300,7 +300,7 @@ export type IntentStatus =
   | 'expired'
   | 'failed'
 export type IntentReversibility = 'reversible' | 'irreversible'
-export type TriggerKind = 'spike' | 'staleness' | 'dependency' | 'threshold' | 'time' | 'directed' | 'routine' | 'waiting'
+export type TriggerKind = 'spike' | 'staleness' | 'dependency' | 'threshold' | 'time' | 'directed' | 'routine' | 'waiting' | 'plan_chat'
 export type Tier = 0 | 1 | 2 | 3
 export type TrayState = 'idle' | 'has-something' | 'needs-you'
 export type DigestSlot = 'morning' | 'midday' | 'eod'
@@ -716,6 +716,8 @@ export interface IpcApi {
   memory: {
     getGraph(): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }>
     getNode(id: string): Promise<{ node: GraphNode; edges: GraphEdge[]; memories: Memory[]; timeline: NodeSignalLink[] } | null>
+    /** Returns all active (non-superseded) memories, sorted by importance descending. */
+    getActive(limit?: number): Promise<Memory[]>
     deleteNode(id: string): Promise<void>
     deleteEdge(id: string): Promise<void>
     deleteMemory(id: string): Promise<void>

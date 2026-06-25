@@ -150,7 +150,7 @@ Orchestrates the full MCP → Claude → notification pipeline for a routine run
 | `confirmPlanDraft(draft)` | Persists the draft as a `PlanItem`, mirrors it into the graph as a `plan_item` node with `targets` edges to referenced entities |
 | `updatePlanItemStatus(id, status)` | Update status; appends to `plan_item_history` |
 | `deletePlanItem(id)` | Delete item and cascade |
-| `handlePlanMessage(itemId, userMsg)` | Streaming chat on a plan-item thread; broadcasts `plan:user-message` before streaming |
+| `handlePlanMessage(itemId, userMsg)` | Streaming chat on a plan-item thread; assembles a context packet (task self-context + memory/graph packet via `assembleContextPacket('plan_chat', ...)`) and passes it as `rawContext` to `streamChat` so the model starts aware of the task and related work; broadcasts `plan:user-message` before streaming |
 
 ---
 
@@ -348,6 +348,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-06-25 — **Ground plan-item chat in memory/graph context packet (`plan.ts`, `shared/types.ts`).** `handlePlanMessage` now assembles a `rawContext` string before the `streamChat` call: the plan item's own title/detail/actions are prepended as a self-context block, then `assembleContextPacket('plan_chat', ['plan_item:<id>'])` + `renderPacketForPrompt` append the full memory/graph packet (relevant memories, focus graph node, related edges, recent signals, semantic matches). `rawContext` is passed as the 5th arg to `streamChat` (previously always `undefined`). Assembly is best-effort — if it throws, chat falls back to ungrounded behavior. Added `'plan_chat'` to the `TriggerKind` union in `src/shared/types.ts` so the packet's trigger label is accurate. `dbGetPlanItem`, `assembleContextPacket`, and `renderPacketForPrompt` added to `plan.ts` imports. This closes the "blank slate" gap that made manual plan-item chat behave like a Claude session with no memory.
 
 - 2026-06-24 — **Fix `spawn ENOTDIR` in packaged app (`agent.ts`):** added `resolveClaudeExecutable()` helper (memoized, module-private) that rewrites `app.getAppPath()` to the `app.asar.unpacked` sibling path so the SDK's bundled binary can be spawned from inside the asar. All three `query()` call sites now pass `pathToClaudeCodeExecutable: resolveClaudeExecutable()`. Imports `app` from `electron`, `existsSync` from `fs`, `path`.
 

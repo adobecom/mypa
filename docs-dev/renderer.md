@@ -213,7 +213,7 @@ Data: `window.electron.usage.*` — all five calls made in parallel on mount and
 | — OAuth tab | Connect GitHub (device flow), Notion (PKCE), Linear (PKCE); show connection status |
 | — Claude tab | Model selector; displays current model |
 | — Preferences tab | Widget always-on-top, notification sound, launch on login; persona text field |
-| — About You card | Owner identity: name + per-surface handles; handle fields are filtered to enabled MCP surfaces only (no fields shown for surfaces the user hasn't configured); when a new surface MCP is added, `setup.resolveOwnerHandles()` fires automatically and pre-fills the handle if found, with ✓ / ⚠ markers |
+| — About You card | Full identity hub with three sections: (1) Identity — monogram badge + name input; (2) Connected Accounts — one row per OWNER_SURFACES entry showing a surface badge, handle input (only editable when connected), and a Verified/Confirm status pill from `handleStatus`; (3) Working Context — read-only scope allowlists (formerly standalone ScopeCard); (4) What mypa has learned — derived from `memory.getGraph()` + `memory.getActive()`: top active containers (`Active in`), collaborators (`Works with`), and preference memories (`Prefers`). Standalone `ScopeCard` component removed. |
 
 #### Onboarding wizard
 
@@ -243,6 +243,8 @@ Located in `src/renderer/src/` (shared between widget and main window):
 | `components.css` | Shared component stylesheet imported by both renderer entry points before their window-specific `index.css`. Contains `.routine-card*`, `.intent-card*`, `.intent-detail*`, `.intent-chip*`, `.plan-review-card*`, `.review-field*`, `.section-header`, `.section-subheader`, `.tabs`, `.tab*`. |
 
 ## Changelog
+
+- 2026-06-25 — **About You redesigned into a full identity hub:** `Settings.tsx` — About You card rewritten into three stacked sections: (1) Identity: monogram badge (initials from `owner.name`, `User` icon fallback) + name input; (2) Connected Accounts: a structured row per `OWNER_SURFACES` entry with a surface abbreviation badge, handle input (editable only when connected), and a Verified/Confirm status pill; (3) Working Context: scope allowlists (formerly the standalone `ScopeCard` rendered via `WorkingContextSection`); (4) What mypa has learned: read-only graph-derived summary rendered by `LearnedProfileSection` — identifies owner person nodes by key pattern `${surface}:person:${handle}`, derives top containers (`Active in`) and collaborators (`Works with`) from graph edges, and shows top preference/pattern/hard memories (`Prefers`) via new `memory.getActive()` IPC. Standalone `ScopeCard` component and `<ScopeCard />` render site removed.
 
 - 2026-06-22 — **Onboarding Step 2 rework — "Connect Claude":** `OnboardingWizard.tsx` step 2 rewritten. Old: hard gate on detecting the `claude` CLI binary (`detectClaudeBin`). New: calls `setup:check-prerequisites` (returns `{ ok, source: AuthSource }`) and shows which auth source is active. When no credentials are found, renders an inline API-key password input that saves via `api.config.setClaudeKey` and re-checks. Next button is a soft gate (enabled once auth is detected or a key is entered). Step 5 summary row is now dynamic: "Claude authenticated" (ok) or "Claude not authenticated" (not ok). Removed `cliOk`, `checkingCli`, `copied` state; added `authState`, `checkingAuth`, `apiKeyInput`, `savingKey`. Removed `copyInstallCommand`; added `handleSaveApiKey`. Imports: removed `Copy`, `ExternalLink`; added `KeyRound`, `AuthSource`.
 
