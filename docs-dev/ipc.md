@@ -265,6 +265,8 @@ Manage PA check-in sessions and their chat threads.
 
 ## Changelog
 
+- 2026-06-25 — **`memory.getActive` — flat active-memory list:** Added `memory:get-active(limit?)` IPC channel (handler in `ipc-handlers.ts`, exposed in preload). Returns all non-superseded memories sorted by `importance DESC`, capped at `limit` (default 10). Used by the `LearnedProfileSection` in Settings to surface learned preferences. `IpcApi.memory.getActive(limit?)` added to `src/shared/types.ts`.
+
 - 2026-06-22 — **Agent SDK migration — new `chat` namespace + push channels:** Added `IpcApi.chat` namespace with `resolveToolApproval(approvalId, allow, editedInput?)` and `answerQuestion(questionId, answer)` (IPC channels `chat:resolve-tool-approval`, `chat:answer-question`). Added push channels `chat:tool-approval-request` (payload: `PendingToolApproval`) and `chat:ask-question` (payload: `PendingQuestion`). Added `PendingToolApproval` and `PendingQuestion` interfaces to `src/shared/types.ts`.
 
 - 2026-06-19 — **Plan-chat write-action approval:** `plan.approveChatAction(itemId, messageId, editedPayload?)` and `plan.dismissChatAction(itemId, messageId)` added to `IpcApi.plan`. IPC channels: `plan:approve-chat-action`, `plan:dismiss-chat-action`. `PlanItemCard` and `PlanItemDetail` now pass `onApproveAction`/`onDismissAction` to `<ChatThread>`.

@@ -17,6 +17,7 @@ import {
   dbGetAllNodes,
   dbGetAllEdges,
   dbGetAllMemories,
+  dbGetActiveMemories,
   dbGetNodeById,
   dbGetEdgesFrom,
   dbGetEdgesTo,
@@ -563,6 +564,10 @@ export function registerIpcHandlers(
 
   ipcMain.handle('memory:update-memory', async (_e, id: string, update: { content?: string; importance?: number; status?: 'active' | 'superseded' }) => {
     dbUpdateMemory(id, update)
+  })
+
+  ipcMain.handle('memory:get-active', (_e, limit?: number) => {
+    return dbGetActiveMemories(limit)
   })
 
   ipcMain.handle('memory:export-markdown', async () => {

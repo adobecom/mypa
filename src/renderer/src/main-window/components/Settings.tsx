@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2 } from 'lucide-react'
-import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles } from '@shared/types'
+import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2, User } from 'lucide-react'
+import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles, GraphNode, GraphEdge, Memory } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import { SCOPE_SURFACES } from '@shared/scope-surfaces'
 import ServerCatalogPicker from './ServerCatalogPicker'
@@ -304,12 +304,12 @@ export default function Settings(): React.ReactElement {
       {/* Setup Health */}
       <HealthCard health={health} loading={healthLoading} onRefresh={refreshHealth} />
 
-      {/* About You */}
+      {/* About You — identity hub */}
       <div className="card">
         <div className="card__header">
           <div>
             <div className="card__title">About You</div>
-            <div className="card__subtitle">Tell mypa who you are so it addresses you directly.</div>
+            <div className="card__subtitle">Identity, working context, and what mypa has learned.</div>
           </div>
           {visibleSurfaces.length > 0 && (
             <button
@@ -325,37 +325,73 @@ export default function Settings(): React.ReactElement {
           )}
         </div>
 
-        <div className="form-group">
-          <label className="form-label">Your name</label>
-          <input
-            className="form-input"
-            type="text"
-            placeholder="Your name"
-            value={config.owner?.name ?? ''}
-            onChange={(e) => setConfig({ ...config, owner: { ...(config.owner ?? {}), name: e.target.value } })}
-          />
-          <div className="form-hint">How the assistant refers to you in summaries.</div>
+        {/* ── Identity ── */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 10 }}>
+            Identity
+          </div>
+
+          {/* Name row with monogram */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: '50%',
+              background: 'var(--bg-elevated)', border: '1px solid var(--border-muted)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)',
+              userSelect: 'none'
+            }}>
+              {config.owner?.name
+                ? config.owner.name.trim().split(/\s+/).slice(0, 2).map((w) => w[0].toUpperCase()).join('')
+                : <User size={16} strokeWidth={1.5} />}
+            </div>
+            <div style={{ flex: 1 }}>
+              <input
+                className="form-input"
+                type="text"
+                placeholder="Your name"
+                value={config.owner?.name ?? ''}
+                onChange={(e) => setConfig({ ...config, owner: { ...(config.owner ?? {}), name: e.target.value } })}
+              />
+            </div>
+          </div>
+          <div className="form-hint" style={{ marginBottom: 0 }}>How the assistant refers to you in summaries.</div>
         </div>
 
-        {visibleSurfaces.length > 0 ? (
-          <>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px' }}>
-              {visibleSurfaces.map((surface) => {
-                const surfaceStatus = handleStatus[surface]
-                return (
-                  <div key={surface} className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <span style={{ textTransform: 'capitalize' }}>{surface}</span>
-                      {surfaceStatus && (
-                        surfaceStatus.needsReview
-                          ? <AlertTriangle size={11} color="var(--color-warning, #f59e0b)" title="Confirm — may not match your graph" />
-                          : <Check size={11} color="var(--color-success, #22c55e)" title="Auto-filled" />
-                      )}
-                    </label>
+        {/* ── Connected Accounts ── */}
+        <div style={{ marginBottom: 0 }}>
+          <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 10 }}>
+            Connected Accounts
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {OWNER_SURFACES.map((surface) => {
+              const connected = visibleSurfaces.includes(surface)
+              const surfaceStatus = handleStatus[surface]
+              const abbrev = surface.slice(0, 2).replace(/^(.)/, (c) => c.toUpperCase())
+              return (
+                <div key={surface} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {/* Surface badge */}
+                  <div style={{
+                    width: 28, height: 28, borderRadius: 6,
+                    background: 'var(--bg-elevated)', border: '1px solid var(--border-muted)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0, fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)',
+                    userSelect: 'none', opacity: connected ? 1 : 0.45
+                  }}>
+                    {abbrev}
+                  </div>
+
+                  {/* Surface label */}
+                  <div style={{ width: 46, fontSize: 12, color: connected ? 'var(--text-primary)' : 'var(--text-muted)', textTransform: 'capitalize', flexShrink: 0 }}>
+                    {surface}
+                  </div>
+
+                  {/* Handle input — editable only when surface is connected */}
+                  {connected ? (
                     <input
                       className="form-input"
                       type="text"
-                      placeholder={surface === 'jira' ? 'Display Name' : `handle, handle2`}
+                      placeholder={surface === 'jira' ? 'Display Name' : 'handle, handle2'}
                       value={config.owner?.handles?.[surface] ?? ''}
                       onChange={(e) => setConfig({
                         ...config,
@@ -364,21 +400,49 @@ export default function Settings(): React.ReactElement {
                           handles: { ...(config.owner?.handles ?? {}), [surface]: e.target.value }
                         }
                       })}
-                      style={surfaceStatus?.needsReview ? { borderColor: 'var(--color-warning, #f59e0b)' } : undefined}
+                      style={{
+                        flex: 1,
+                        ...(surfaceStatus?.needsReview ? { borderColor: 'var(--color-warning, #f59e0b)' } : {})
+                      }}
                     />
-                  </div>
-                )
-              })}
-            </div>
-            <div className="form-hint" style={{ marginTop: 10 }}>
+                  ) : (
+                    <div style={{ flex: 1, fontSize: 12, color: 'var(--text-muted)' }}>not connected</div>
+                  )}
+
+                  {/* Status pill */}
+                  {connected && surfaceStatus && (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0,
+                      fontSize: 11, fontWeight: 500,
+                      color: surfaceStatus.needsReview ? 'var(--color-warning, #f59e0b)' : 'var(--color-success, #22c55e)'
+                    }}>
+                      {surfaceStatus.needsReview
+                        ? <AlertTriangle size={11} />
+                        : <Check size={11} />}
+                      {surfaceStatus.needsReview ? 'Confirm' : 'Verified'}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          {visibleSurfaces.length > 0 && (
+            <div className="form-hint" style={{ marginTop: 8 }}>
               Used to recognise you in your connected surface data. Separate multiple handles with a comma.
             </div>
-          </>
-        ) : (
-          <div className="form-hint">
-            Add a GitHub, Slack, Jira, Linear, or Notion MCP server to configure your identity handles.
-          </div>
-        )}
+          )}
+          {visibleSurfaces.length === 0 && (
+            <div className="form-hint" style={{ marginTop: 8 }}>
+              Add a GitHub, Slack, Jira, Linear, or Notion MCP server to configure your identity handles.
+            </div>
+          )}
+        </div>
+
+        {/* ── Working Context ── */}
+        <WorkingContextSection />
+
+        {/* ── What mypa has learned ── */}
+        <LearnedProfileSection ownerHandles={config.owner?.handles} />
       </div>
 
       {/* Assistant Identity */}
@@ -680,9 +744,6 @@ export default function Settings(): React.ReactElement {
 
       {/* Check-in schedule */}
       <CheckInScheduleCard />
-
-      {/* Scope */}
-      <ScopeCard />
 
       {/* Danger Zone */}
       <DangerZoneCard />
@@ -1104,15 +1165,14 @@ function CheckInScheduleCard(): React.ReactElement {
   )
 }
 
-// ─── Scope Card ──────────────────────────────────────────────────────────────
+// ─── About You: Working Context sub-section ──────────────────────────────────
 
 /**
- * Read-only view of the auto-derived scope allowlists.
- * Scope values are populated from check-in conversations — the user says which
- * orgs, projects, or channels to focus on during a 1:1 and they appear here.
- * Only surfaces whose MCP integration is currently configured are shown.
+ * Read-only scope allowlists embedded inside the About You identity hub.
+ * Derived automatically from check-in conversations.
+ * Only scope-capable surfaces that the user has connected are shown.
  */
-function ScopeCard(): React.ReactElement {
+function WorkingContextSection(): React.ReactElement {
   const api = window.electron
   const [allowed, setAllowed] = useState<Record<string, string[]>>({})
   const [enabledIntegrationIds, setEnabledIntegrationIds] = useState<string[]>([])
@@ -1124,57 +1184,244 @@ function ScopeCard(): React.ReactElement {
     })
   }, [])
 
-  // Only show sections for scope-capable surfaces that the user has connected.
   const enabledSurfaces = SCOPE_SURFACES.filter((s) => enabledIntegrationIds.includes(s.integrationId))
 
   return (
-    <div className="card">
-      <div className="card__header">
-        <div>
-          <div className="card__title">Scope</div>
-          <div className="card__subtitle">
-            Derived automatically from your check-ins. Tell mypa which orgs, projects, or channels
-            to focus on during a 1:1 and they will appear here.
-          </div>
+    <>
+      <div style={{ borderTop: '1px solid var(--border-muted)', margin: '18px 0' }} />
+      <div>
+        <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 10 }}>
+          Working Context
         </div>
-      </div>
+        <div className="form-hint" style={{ marginBottom: 12 }}>
+          Derived from your check-ins. Tell mypa which orgs, projects, or channels to focus on in a 1:1.
+        </div>
 
-      {enabledSurfaces.length === 0 ? (
-        <div className="form-hint">
-          No scope-capable integrations connected. Connect GitHub, Jira, or Slack to enable scope filtering.
+        {enabledSurfaces.length === 0 ? (
+          <div className="form-hint">
+            Connect GitHub, Jira, or Slack to enable scope filtering.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {enabledSurfaces.map((spec) => {
+              const identifiers = allowed[spec.surface] ?? []
+              return (
+                <div key={spec.surface} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                  <div style={{ width: 86, fontSize: 12, color: 'var(--text-muted)', flexShrink: 0, paddingTop: 2 }}>
+                    {spec.label}
+                  </div>
+                  {identifiers.length > 0 ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {identifiers.map((id) => (
+                        <span
+                          key={id}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center',
+                            padding: '2px 7px', borderRadius: 4, fontSize: 12,
+                            background: 'var(--bg-elevated)', border: '1px solid var(--border-muted)'
+                          }}
+                        >
+                          {id}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                      all {spec.itemNoun}s
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
+// ─── About You: Learned Profile sub-section ───────────────────────────────────
+
+type LearnedProfileProps = {
+  ownerHandles: Record<string, string> | undefined
+}
+
+/**
+ * Read-only summary of what mypa has learned about the user from the knowledge
+ * graph and stored memories. Derived entirely client-side from existing IPC.
+ *
+ * Owner identification: matches person nodes by key `${surface}:person:${handle}`
+ * (the format used by memory-graph.ts when creating person nodes from signals).
+ */
+function LearnedProfileSection({ ownerHandles }: LearnedProfileProps): React.ReactElement {
+  const api = window.electron
+  const [loading, setLoading] = useState(true)
+  const [activeIn, setActiveIn] = useState<string[]>([])
+  const [worksWith, setWorksWith] = useState<string[]>([])
+  const [prefers, setPrefers] = useState<string[]>([])
+  const [hasOwnerFootprint, setHasOwnerFootprint] = useState(false)
+
+  // Serialize handles to a stable string so the effect only re-fires when
+  // values actually change, not on every parent re-render that produces a new
+  // object reference.
+  const handlesKey = ownerHandles ? JSON.stringify(ownerHandles) : ''
+
+  useEffect(() => {
+    if (!ownerHandles) {
+      setLoading(false)
+      return
+    }
+
+    Promise.all([
+      api.memory.getGraph(),
+      api.memory.getActive(100)
+    ]).then(([graph, memories]: [{ nodes: GraphNode[]; edges: GraphEdge[] }, Memory[]]) => {
+      const { nodes, edges } = graph
+
+      // Build lookup maps for fast traversal
+      const nodeById = new Map<string, GraphNode>(nodes.map((n) => [n.id, n]))
+
+      // Identify owner node ids: person nodes whose key matches a configured handle
+      const ownerIds = new Set<string>()
+      for (const [surface, rawHandle] of Object.entries(ownerHandles)) {
+        for (const handle of rawHandle.split(',').map((h) => h.trim()).filter(Boolean)) {
+          const key = `${surface}:person:${handle}`
+          const match = nodes.find((n) => n.type === 'person' && n.key === key)
+          if (match) ownerIds.add(match.id)
+        }
+      }
+
+      if (ownerIds.size === 0) {
+        setHasOwnerFootprint(false)
+        setLoading(false)
+        return
+      }
+      setHasOwnerFootprint(true)
+
+      // Collect all work-item ids the owner participates in (via participation edges)
+      const PARTICIPATION_RELS = new Set(['authored', 'reviews', 'assigned_to', 'participates_in', 'mentioned_in'])
+      const ownerWorkItemIds = new Set<string>()
+      for (const e of edges) {
+        if (ownerIds.has(e.src_id) && PARTICIPATION_RELS.has(e.rel)) ownerWorkItemIds.add(e.dst_id)
+        if (ownerIds.has(e.dst_id) && PARTICIPATION_RELS.has(e.rel)) ownerWorkItemIds.add(e.src_id)
+      }
+
+      // Most-active containers: follow part_of edges from work items to repo/project/channel nodes
+      const CONTAINER_TYPES = new Set(['repo', 'project', 'channel'])
+      const containerWeight = new Map<string, number>()
+      for (const e of edges) {
+        if (e.rel !== 'part_of') continue
+        if (!ownerWorkItemIds.has(e.src_id)) continue
+        const container = nodeById.get(e.dst_id)
+        if (!container || !CONTAINER_TYPES.has(container.type)) continue
+        containerWeight.set(container.id, (containerWeight.get(container.id) ?? 0) + (container.weight ?? 1))
+      }
+      const topContainers = [...containerWeight.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4)
+        .map(([id]) => nodeById.get(id)?.label ?? id)
+      setActiveIn(topContainers)
+
+      // Top collaborators: person nodes sharing a work item with the owner
+      const collabWeight = new Map<string, number>()
+      for (const e of edges) {
+        if (!PARTICIPATION_RELS.has(e.rel)) continue
+        // Other person acting on an owner work item
+        if (ownerWorkItemIds.has(e.dst_id) && !ownerIds.has(e.src_id)) {
+          const person = nodeById.get(e.src_id)
+          if (person?.type === 'person') {
+            collabWeight.set(person.id, (collabWeight.get(person.id) ?? 0) + (person.weight ?? 1))
+          }
+        }
+        if (ownerWorkItemIds.has(e.src_id) && !ownerIds.has(e.dst_id)) {
+          const person = nodeById.get(e.dst_id)
+          if (person?.type === 'person') {
+            collabWeight.set(person.id, (collabWeight.get(person.id) ?? 0) + (person.weight ?? 1))
+          }
+        }
+      }
+      const topCollabs = [...collabWeight.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([id]) => nodeById.get(id)?.label ?? id)
+      setWorksWith(topCollabs)
+
+      // Learned preferences: preference/pattern memories or hard-enforcement rules
+      const prefMemories = memories
+        .filter((m) => m.type === 'preference' || m.type === 'pattern' || m.enforcement === 'hard')
+        .sort((a, b) => (b.importance - a.importance) || (b.confidence - a.confidence))
+        .slice(0, 3)
+        .map((m) => m.content)
+      setPrefers(prefMemories)
+    }).catch((err) => {
+      console.error('[LearnedProfileSection] graph/memory fetch failed:', err)
+    }).finally(() => {
+      setLoading(false)
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handlesKey])
+
+  const isEmpty = !hasOwnerFootprint && activeIn.length === 0 && worksWith.length === 0 && prefers.length === 0
+
+  return (
+    <>
+      <div style={{ borderTop: '1px solid var(--border-muted)', margin: '18px 0' }} />
+      <div>
+        <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 10 }}>
+          What mypa has learned
         </div>
-      ) : (
-        enabledSurfaces.map((spec) => {
-          const identifiers = allowed[spec.surface] ?? []
-          return (
-            <div key={spec.surface} className="form-group">
-              <label className="form-label">{spec.label}</label>
-              {identifiers.length > 0 ? (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {identifiers.map((id) => (
-                    <span
-                      key={id}
-                      style={{
-                        display: 'inline-flex', alignItems: 'center',
-                        padding: '3px 8px', borderRadius: 4, fontSize: 12,
-                        background: 'var(--bg-elevated)', border: '1px solid var(--border-muted)'
-                      }}
-                    >
-                      {id}
+
+        {loading ? (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="spinner" style={{ width: 12, height: 12 }} />
+            Loading…
+          </div>
+        ) : isEmpty ? (
+          <div className="form-hint">
+            mypa hasn't learned enough yet — this fills in as it observes your activity over time.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {activeIn.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <div style={{ width: 70, fontSize: 12, color: 'var(--text-muted)', flexShrink: 0, paddingTop: 2 }}>Active in</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {activeIn.map((label) => (
+                    <span key={label} style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 7px', borderRadius: 4, fontSize: 12, background: 'var(--bg-elevated)', border: '1px solid var(--border-muted)' }}>
+                      {label}
                     </span>
                   ))}
                 </div>
-              ) : (
-                <div className="form-hint">
-                  No restriction — all {spec.label.toLowerCase()} are surfaced. Mention the{' '}
-                  {spec.itemNoun}s to focus on in a check-in.
+              </div>
+            )}
+            {worksWith.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <div style={{ width: 70, fontSize: 12, color: 'var(--text-muted)', flexShrink: 0, paddingTop: 2 }}>Works with</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {worksWith.map((label) => (
+                    <span key={label} style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 7px', borderRadius: 4, fontSize: 12, background: 'var(--bg-elevated)', border: '1px solid var(--border-muted)' }}>
+                      {label}
+                    </span>
+                  ))}
                 </div>
-              )}
-            </div>
-          )
-        })
-      )}
-    </div>
+              </div>
+            )}
+            {prefers.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <div style={{ width: 70, fontSize: 12, color: 'var(--text-muted)', flexShrink: 0, paddingTop: 2 }}>Prefers</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {prefers.map((content, i) => (
+                    <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                      {content}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </>
   )
 }
 

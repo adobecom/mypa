@@ -5,6 +5,7 @@ import {
   dbDeletePlanItem,
   dbAddPlanMessage,
   dbGetPlanThread,
+  dbGetPlanItem,
   dbUpsertNode,
   dbBumpNodeWeight
 } from '../db/index'
@@ -16,6 +17,7 @@ import {
   isDismissal,
   findLatestPendingAction
 } from './ambient'
+import { assembleContextPacket, renderPacketForPrompt } from './memory-graph'
 import type { PlanDraft, PlanItem, PlanItemStatus } from '@shared/types'
 
 export { approvePlanAction, dismissPlanAction }
@@ -106,6 +108,32 @@ export async function handlePlanMessage(
     }
   })
 
+  // Assemble context so the model starts knowing what this task is about and
+  // what related work is in flight — mirrors the grounding that ambient intent
+  // chat already gets from handleIntentChat.
+  let rawContext: string | undefined
+  try {
+    const item = dbGetPlanItem(itemId)
+    if (item) {
+      const selfLines: string[] = [
+        `Task: ${item.title}`,
+      ]
+      if (item.detail) selfLines.push(`Detail: ${item.detail}`)
+      if (item.actions.length > 0) {
+        selfLines.push(`Planned actions: ${item.actions.map((a) => `${a.server}:${a.tool}`).join(', ')}`)
+      }
+      const selfContext = selfLines.join('\n')
+
+      const packet = await assembleContextPacket('plan_chat', [`plan_item:${item.id}`])
+      const renderedPacket = renderPacketForPrompt(packet)
+
+      rawContext = [selfContext, renderedPacket].filter(Boolean).join('\n\n') || undefined
+    }
+  } catch (e) {
+    // Context assembly is best-effort — fall back to ungrounded chat
+    console.error('[plan] context packet error:', e)
+  }
+
   const segments: string[] = ['']
   let fullResponse = ''
   try {
@@ -123,7 +151,7 @@ export async function handlePlanMessage(
       (full) => {
         fullResponse = full
       },
-      undefined,
+      rawContext,
       itemId,
       'plan_chat',
       true  // enableMcp — live read-only tools + write-action protocol
