@@ -470,10 +470,13 @@ async function streamAgentChatOnce(
     for await (const msg of q) {
       resetIdle()
       if (msg.type === 'assistant') {
-        // When the model emits a tool_use block the SDK silently awaits the MCP
-        // server response before yielding the next message. Give that wait the
-        // same generous budget as the initial cold-spawn.
-        if ((msg.message?.content ?? []).some((b: any) => b.type === 'tool_use')) {
+        // When the model emits a tool call the SDK silently awaits the MCP server
+        // response before yielding the next message. Give that wait the same
+        // generous budget as the initial cold-spawn.
+        // Note: MCP tools use type 'mcp_tool_use', not 'tool_use'.
+        if ((msg.message?.content ?? []).some(
+          (b: any) => b.type === 'tool_use' || b.type === 'mcp_tool_use',
+        )) {
           resetIdle(STREAM_STARTUP_TIMEOUT_MS)
         }
         const textBlocks = (msg.message?.content ?? []).filter(
@@ -489,6 +492,9 @@ async function streamAgentChatOnce(
         }
       }
       if (msg.type === 'result') resultMsg = msg
+      // tool_progress is a periodic heartbeat emitted by the SDK while a tool runs.
+      // Re-arm with the startup budget so gaps between heartbeats don't trigger a timeout.
+      if (msg.type === 'tool_progress') resetIdle(STREAM_STARTUP_TIMEOUT_MS)
     }
   } catch (err) {
     clearTimeout(idleTimer)
