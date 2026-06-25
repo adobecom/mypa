@@ -75,7 +75,7 @@ export async function runAgent(
 ): Promise<string>
 ```
 
-- Calls the SDK `query()` with `maxTurns: 1`.
+- Calls the SDK `query()` with `tools: []` (no built-in tools) and `maxTurns: 1`.
 - Selects the initial model via `selectModel(source, fullPrompt.length)`.
 - After each attempt, `recordUsage(source, model, result)` persists a row in `usage_events`.
 - Hard timeout: **120 seconds** (overridable via `timeoutMs`).
@@ -282,6 +282,8 @@ This clause is appended in `inferIntent` (`inference.ts`) after `buildOwnerClaus
 **ASAR path fix — `pathToClaudeCodeExecutable` must be set explicitly.** The SDK's `sdk.mjs` lives inside `app.asar`; when it resolves the platform binary relative to its own `import.meta.url` it produces a path that includes `app.asar` — which is a file, not a directory — causing `spawn ENOTDIR` on every AI call. The fix is in `agent.ts`: `resolveClaudeExecutable()` computes the real, unpacked path via `app.getAppPath().replace('app.asar', 'app.asar.unpacked')`, then all three `query()` call sites pass `pathToClaudeCodeExecutable: resolveClaudeExecutable()`. This short-circuits the SDK's broken default without affecting dev mode (where `app.getAppPath()` points to the project root and the binary exists at the direct `node_modules` path).
 
 ## Changelog
+
+- 2026-06-25 — **Fix one-shot digest "Reached maximum number of turns (3)" (`agent.ts`):** added `tools: []` to the `runAgentOnce` `query()` options so no built-in tools appear in the model's context. Previously the full Claude Code tool preset was available and the model would attempt tool calls that were denied one-by-one by `canUseTool`; each denial burned a turn and 3 stray attempts exhausted `maxTurns: 3` before any text was produced. With `tools: []` no tool calls can be attempted, `maxTurns` dropped back to `1`, and `canUseTool: deny` is retained as defense-in-depth. Affects all `runClaude`/`runAgent` callers (digests, classifications, inference).
 
 - 2026-06-25 — **Ground plan-item chat in memory/graph context packet:** `handlePlanMessage` in `plan.ts` now assembles a `rawContext` string and passes it to `streamChat` (previously always `undefined`). The context contains the plan item's own title/detail/actions, followed by the full output of `assembleContextPacket('plan_chat', ['plan_item:<id>'])` + `renderPacketForPrompt` (relevant memories, focus graph node, related edges, recent signals, semantic matches). This matches the grounding that ambient intent chat (`handleIntentChat`) already received. Assembly is best-effort; errors fall back to ungrounded behavior. `'plan_chat'` added to the `TriggerKind` union.
 

@@ -29,7 +29,7 @@ Implements all AI calls using `@anthropic-ai/claude-agent-sdk` directly (no subp
 
 | Export | Description |
 |---|---|
-| `runAgent(systemPrompt, userPrompt, source?, timeoutMs?, expectJson?)` | One-shot completion via SDK `query()` with `maxTurns:1`; model auto-selected via `model-router.ts`; escalates to next tier on failure; records usage per attempt |
+| `runAgent(systemPrompt, userPrompt, source?, timeoutMs?, expectJson?)` | One-shot completion via SDK `query()` with `tools: []` (no built-in tools) and `maxTurns: 1`; model auto-selected via `model-router.ts`; escalates to next tier on failure; records usage per attempt |
 | `runAgentWithMcp(systemPrompt, userPrompt, source?)` | One-shot with live MCP servers passed via `options.mcpServers`; falls back to `runAgent` if no servers are connected |
 | `streamAgentChat(history, userMessage, onChunk, onDone, rawContext?, streamId?, source?, enableMcp?)` | Streaming multi-turn chat via async generator; when `enableMcp` is true, MCP servers are wired in via `options.mcpServers` and `canUseTool` gates write tools on user approval |
 | `cancelAgentChat(streamId)` | Interrupt an active stream via `Query.interrupt()`; returns `true` if found |
@@ -348,6 +348,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-06-25 — **Fix one-shot "Reached maximum number of turns (3)" (`agent.ts`):** added `tools: []` to `runAgentOnce` options so no built-in tools appear in the model's context; dropped `maxTurns` from `3` to `1`. Previously the full Claude Code tool preset was offered and `canUseTool: deny` handled each attempt reactively — each denied attempt burned a turn, exhausting `maxTurns: 3` before text was produced. Fixes routine digest failures and all other `runClaude`/`runAgent` callers.
 
 - 2026-06-25 — **Ground plan-item chat in memory/graph context packet (`plan.ts`, `shared/types.ts`).** `handlePlanMessage` now assembles a `rawContext` string before the `streamChat` call: the plan item's own title/detail/actions are prepended as a self-context block, then `assembleContextPacket('plan_chat', ['plan_item:<id>'])` + `renderPacketForPrompt` append the full memory/graph packet (relevant memories, focus graph node, related edges, recent signals, semantic matches). `rawContext` is passed as the 5th arg to `streamChat` (previously always `undefined`). Assembly is best-effort — if it throws, chat falls back to ungrounded behavior. Added `'plan_chat'` to the `TriggerKind` union in `src/shared/types.ts` so the packet's trigger label is accurate. `dbGetPlanItem`, `assembleContextPacket`, and `renderPacketForPrompt` added to `plan.ts` imports. This closes the "blank slate" gap that made manual plan-item chat behave like a Claude session with no memory.
 
