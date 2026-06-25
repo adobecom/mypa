@@ -75,7 +75,7 @@ export async function runAgent(
 ): Promise<string>
 ```
 
-- Calls the SDK `query()` with `maxTurns: 1`.
+- Calls the SDK `query()` with `tools: []` (no built-in tools) and `maxTurns: 1`.
 - Selects the initial model via `selectModel(source, fullPrompt.length)`.
 - After each attempt, `recordUsage(source, model, result)` persists a row in `usage_events`.
 - Hard timeout: **120 seconds** (overridable via `timeoutMs`).
@@ -284,6 +284,8 @@ This clause is appended in `inferIntent` (`inference.ts`) after `buildOwnerClaus
 ## Changelog
 
 - 2026-06-25 — **Harden SDK harness: timeout race, null-result logging, write-word guard (`agent.ts`):** (1) Removed `if (timedOut)` checks from the *success* paths of `runAgentOnce`, `runAgentWithMcpOnce`, and `streamAgentChatOnce`. If the `for await` loop exits cleanly, the response is valid even if the timer fired in the final moments — throwing a false "timed out" there was incorrect. The `timedOut` flag is still checked in the `catch` path, which is the correct place. (2) Added `console.warn` when the SDK completes without emitting a `result` message (null-resultMsg case), making that rare path observable before the throw. (3) Added a `WRITE_WORDS` blocklist to `isReadOnlyTool`: if any word after the first in a tool name (split on `_`) is a write verb (`create`, `update`, `delete`, etc.), the tool is denied even when the name starts with a read prefix — prevents tools like `fetch_and_update` from being auto-allowed.
+
+- 2026-06-25 — **Fix one-shot digest "Reached maximum number of turns (3)" (`agent.ts`):** added `tools: []` to the `runAgentOnce` `query()` options so no built-in tools appear in the model's context. Previously the full Claude Code tool preset was available and the model would attempt tool calls that were denied one-by-one by `canUseTool`; each denial burned a turn and 3 stray attempts exhausted `maxTurns: 3` before any text was produced. With `tools: []` no tool calls can be attempted, `maxTurns` dropped back to `1`, and `canUseTool: deny` is retained as defense-in-depth. Affects all `runClaude`/`runAgent` callers (digests, classifications, inference).
 
 - 2026-06-25 — **Ground plan-item chat in memory/graph context packet:** `handlePlanMessage` in `plan.ts` now assembles a `rawContext` string and passes it to `streamChat` (previously always `undefined`). The context contains the plan item's own title/detail/actions, followed by the full output of `assembleContextPacket('plan_chat', ['plan_item:<id>'])` + `renderPacketForPrompt` (relevant memories, focus graph node, related edges, recent signals, semantic matches). This matches the grounding that ambient intent chat (`handleIntentChat`) already received. Assembly is best-effort; errors fall back to ungrounded behavior. `'plan_chat'` added to the `TriggerKind` union.
 

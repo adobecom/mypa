@@ -211,13 +211,13 @@ async function runAgentOnce(
       options: {
         systemPrompt,
         model,
-        // Allow up to 3 turns so the model can recover if it attempts a built-in tool call
-        // (canUseTool denies it, injecting a tool_result that costs a turn before the model
-        // can produce its actual text response). Keeping this small (not 10) preserves the
-        // one-shot intent — text must arrive quickly and no real tool work should happen.
-        maxTurns: 3,
+        // Remove all built-in tools from context — this is a pure text-generation call.
+        // With an empty tool set the model cannot attempt (and waste turns on denied)
+        // built-in tool calls, so a single turn is sufficient and reliable.
+        tools: [],
+        maxTurns: 1,
         permissionMode: 'default',
-        // Deny all tools — this is a pure text-generation call, not an agentic session.
+        // Defense-in-depth: deny any tool that somehow slips through.
         canUseTool: async () => ({ behavior: 'deny', message: 'one-shot mode — no tools' }),
         abortController: ac,
         env: buildAgentEnv(),
