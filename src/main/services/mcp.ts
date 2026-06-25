@@ -1,24 +1,20 @@
 import { homedir } from 'os'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { readConfig, updateConfig } from './config'
 import type { McpServerConfig, McpTool, McpServerStatus, ResolvedOwnerHandles } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 
 interface ActiveServer {
   client: Client
-  transport: StdioClientTransport
+  transport: StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport
   tools: McpTool[]
   config: McpServerConfig
 }
 
 const servers = new Map<string, ActiveServer>()
-
-// Persists the tool list for each server across in-process reconnects.
-// When a server subprocess dies and is evicted from `servers`, its tool names
-// remain here so the CLI --allowedTools list stays accurate (the CLI spawns its
-// own fresh MCP subprocess from --mcp-config, so tool names are still valid).
-const lastKnownTools: Map<string, McpTool[]> = new Map()
 
 // Serialize all connection mutations (connectAllServers, reconnectServer) so that
 // two near-simultaneous config:update calls cannot race on the Map and disconnect
@@ -73,43 +69,63 @@ function expandTildeArgs(cfg: McpServerConfig): string[] {
 export async function connectServer(cfg: McpServerConfig): Promise<McpTool[]> {
   await disconnectServer(cfg.name)
 
-  const mergedEnv = { ...process.env, ...(cfg.env ?? {}) } as Record<string, string>
-  // Backward compat: server-github reads GITHUB_PERSONAL_ACCESS_TOKEN, not GITHUB_TOKEN
-  if (mergedEnv.GITHUB_TOKEN && !mergedEnv.GITHUB_PERSONAL_ACCESS_TOKEN) {
-    mergedEnv.GITHUB_PERSONAL_ACCESS_TOKEN = mergedEnv.GITHUB_TOKEN
-  }
-  const transport = new StdioClientTransport({
-    command: cfg.command,
-    args: expandTildeArgs(cfg),
-    env: mergedEnv,
-    stderr: 'pipe'  // pipe instead of inherit so we can re-emit with a prefix and
-                    // keep a diagnostic tail for timeout error messages
-  })
-
   const client = new Client(
     { name: 'mypa', version: '0.1.0' },
     { capabilities: {} }
   )
 
-  // Re-emit subprocess stderr line-by-line with a server-name prefix (preserves the
-  // visibility that 'inherit' provided) and keep a 30-line ring buffer so that a
-  // genuine timeout can report what the server last printed before stalling.
+  // Determine transport from explicit field or infer: stdio when command present, http otherwise
+  const transportKind = cfg.transport ?? (cfg.command ? 'stdio' : 'http')
+
+  // Stdio-only diagnostic ring buffer for timeout error messages
   const stderrLines: string[] = []
-  transport.stderr?.on('data', (chunk: Buffer) => {
-    const text = chunk.toString('utf8')
-    for (const line of text.split('\n')) {
-      if (line) {
-        try { process.stderr.write(`[mcp:${cfg.name}] ${line}\n`) } catch {}
-        stderrLines.push(line)
-        if (stderrLines.length > 30) stderrLines.shift()
-      }
+
+  let transport: StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport
+
+  if (transportKind === 'stdio') {
+    const mergedEnv = { ...process.env, ...(cfg.env ?? {}) } as Record<string, string>
+    // Backward compat: server-github reads GITHUB_PERSONAL_ACCESS_TOKEN, not GITHUB_TOKEN
+    if (mergedEnv.GITHUB_TOKEN && !mergedEnv.GITHUB_PERSONAL_ACCESS_TOKEN) {
+      mergedEnv.GITHUB_PERSONAL_ACCESS_TOKEN = mergedEnv.GITHUB_TOKEN
     }
-  })
+    const stdioTransport = new StdioClientTransport({
+      command: cfg.command!,
+      args: expandTildeArgs(cfg),
+      env: mergedEnv,
+      stderr: 'pipe'  // pipe instead of inherit so we can re-emit with a prefix and
+                      // keep a diagnostic tail for timeout error messages
+    })
+    // Re-emit subprocess stderr line-by-line with a server-name prefix (preserves the
+    // visibility that 'inherit' provided) and keep a 30-line ring buffer so that a
+    // genuine timeout can report what the server last printed before stalling.
+    stdioTransport.stderr?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString('utf8')
+      for (const line of text.split('\n')) {
+        if (line) {
+          try { process.stderr.write(`[mcp:${cfg.name}] ${line}\n`) } catch {}
+          stderrLines.push(line)
+          if (stderrLines.length > 30) stderrLines.shift()
+        }
+      }
+    })
+    transport = stdioTransport
+  } else if (transportKind === 'sse') {
+    if (!cfg.url) throw new Error(`MCP server "${cfg.name}" has transport "sse" but no url`)
+    transport = new SSEClientTransport(new URL(cfg.url), {
+      ...(cfg.headers ? { requestInit: { headers: cfg.headers } } : {})
+    })
+  } else {
+    // http / streamable-http
+    if (!cfg.url) throw new Error(`MCP server "${cfg.name}" has transport "http" but no url`)
+    transport = new StreamableHTTPClientTransport(new URL(cfg.url), {
+      ...(cfg.headers ? { requestInit: { headers: cfg.headers } } : {})
+    })
+  }
 
   // Wrap connect + listTools in a try/catch so that if either times out we
-  // close the client (which terminates the spawned subprocess) before throwing.
-  // Without this the subprocess is orphaned — it never lands in servers.Map so
-  // disconnectServer() cannot find and kill it on subsequent reconnect attempts.
+  // close the client (which terminates the spawned subprocess / HTTP session) before
+  // throwing. Without this the connection is orphaned — it never lands in servers.Map
+  // so disconnectServer() cannot find and kill it on subsequent reconnect attempts.
   try {
     await withTimeout(client.connect(transport), 30_000, `connect ${cfg.name}`)
 
@@ -121,12 +137,9 @@ export async function connectServer(cfg: McpServerConfig): Promise<McpTool[]> {
     }))
 
     servers.set(cfg.name, { client, transport, tools, config: cfg })
-    // Persist the tool list so --allowedTools stays accurate even after the
-    // in-process client dies (the CLI spawns its own fresh MCP subprocess).
-    lastKnownTools.set(cfg.name, tools)
-    // Auto-evict from the Map when the subprocess exits so that subsequent callTool
-    // calls don't silently hit a dead client. The guard prevents double-eviction if a
-    // concurrent reconnect has already replaced this entry with a fresh one.
+    // Auto-evict from the Map when the subprocess/connection dies so that subsequent
+    // callTool calls don't silently hit a dead client. The guard prevents double-eviction
+    // if a concurrent reconnect has already replaced this entry with a fresh one.
     client.onclose = () => {
       if (servers.get(cfg.name)?.client === client) {
         servers.delete(cfg.name)
@@ -135,6 +148,7 @@ export async function connectServer(cfg: McpServerConfig): Promise<McpTool[]> {
     }
     return tools
   } catch (err) {
+    // For stdio servers, enrich the error with the last stderr lines from the subprocess.
     const tail = stderrLines.slice(-5).join('\n').trim()
     const enriched = tail
       ? new Error(`${(err as any)?.message ?? String(err)} — last server output:\n${tail}`)
@@ -180,9 +194,13 @@ export async function callTool(
     `callTool ${serverName}::${toolName}`
   )
   const content = result.content ?? []
-  return content
+  const text = content
     .map((c: any) => (c.type === 'text' ? c.text : JSON.stringify(c)))
     .join('\n')
+  // Propagate server-reported tool errors so callers (routines, ambient) surface
+  // them as exceptions rather than silently treating error payloads as success.
+  if (result.isError) throw new Error(text || `Tool ${toolName} reported an error`)
+  return text
 }
 
 export function connectAllServers(): Promise<void> {
@@ -230,6 +248,12 @@ export function connectAllServers(): Promise<void> {
     }
 
     for (const srv of cfg.mcp_servers) {
+      // Skip servers that are intentionally disabled
+      if (srv.enabled === false) {
+        await disconnectServer(srv.name)
+        console.log(`[mcp] skipped (disabled): ${srv.name}`)
+        continue
+      }
       try {
         await connectServer(srv)
         console.log(`[mcp] connected: ${srv.name}`)
@@ -272,7 +296,6 @@ export async function reconnectServer(name: string): Promise<McpServerStatus> {
           inputSchema: (t.inputSchema as Record<string, unknown>) ?? {}
         }))
         active.tools = tools  // refresh cached tool list in place
-        lastKnownTools.set(name, tools)  // keep stale-cache in sync
         console.log(`[mcp] tested: ${name} (${tools.length} tools)`)
         return { name, connected: true, tools }
       } catch {
@@ -304,37 +327,14 @@ export async function disconnectAllServers(): Promise<void> {
 export function getServerStatus(): McpServerStatus[] {
   const cfg = readConfig()
   return cfg.mcp_servers.map((srv) => {
+    if (srv.enabled === false) {
+      return { name: srv.name, connected: false, tools: [], disabled: true }
+    }
     const active = servers.get(srv.name)
     return {
       name: srv.name,
       connected: !!active,
       tools: active?.tools ?? []
-    }
-  })
-}
-
-/**
- * Like getServerStatus but falls back to the last-known tool list when the
- * in-process client has died. Used to build --allowedTools for the claude CLI,
- * which spawns its own fresh MCP subprocess from --mcp-config — so tool names
- * remain valid even if the in-process client has gone away.
- *
- * The `stale` flag is true when the in-process client is dead but we have a
- * cached tool list. Callers may log/skip stale servers at their discretion.
- */
-export function getKnownServerTools(): (McpServerStatus & { stale: boolean })[] {
-  const cfg = readConfig()
-  return cfg.mcp_servers.map((srv) => {
-    const active = servers.get(srv.name)
-    if (active) {
-      return { name: srv.name, connected: true, tools: active.tools, stale: false }
-    }
-    const cached = lastKnownTools.get(srv.name)
-    return {
-      name: srv.name,
-      connected: false,
-      tools: cached ?? [],
-      stale: !!cached
     }
   })
 }
@@ -347,7 +347,7 @@ export function getKnownServerTools(): (McpServerStatus & { stale: boolean })[] 
  */
 export async function ensureServersConnected(): Promise<void> {
   const cfg = readConfig()
-  const dead = cfg.mcp_servers.filter((srv) => !servers.has(srv.name))
+  const dead = cfg.mcp_servers.filter((srv) => srv.enabled !== false && !servers.has(srv.name))
   if (dead.length === 0) return
   await Promise.all(dead.map(async (srv) => {
     try {

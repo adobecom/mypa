@@ -84,19 +84,21 @@ Thin wrapper around `dbInsertUsage` so `claude.ts` doesn't import the DB layer d
 
 ## `mcp.ts` — MCP client manager
 
-Manages stdio MCP server connections using `@modelcontextprotocol/sdk`. See [mcp-and-oauth.md](mcp-and-oauth.md) for details.
+Manages MCP server connections (stdio, HTTP, SSE) using `@modelcontextprotocol/sdk`. See [mcp-and-oauth.md](mcp-and-oauth.md) for details.
+
+Transport is selected from `McpServerConfig.transport` (`'stdio' | 'http' | 'sse'`); defaults to `'stdio'` when `command` is present, `'http'` otherwise. HTTP/SSE servers require `cfg.url`; optional `cfg.headers` carries auth tokens. The stderr ring buffer is stdio-only.
 
 **Key exports:**
 
 | Export | Description |
 |---|---|
-| `connectServer(cfg)` | Connect a single MCP server and cache it |
+| `connectServer(cfg)` | Connect a single MCP server (stdio, HTTP, or SSE) and cache it |
 | `disconnectServer(name)` | Gracefully disconnect and remove from cache |
-| `connectAllServers()` | Connect all enabled servers from config; serialized via mutex |
+| `connectAllServers()` | Connect all **enabled** servers from config (`enabled !== false`); serialized via mutex; disabled servers are explicitly disconnected |
 | `reconnectServer(name)` | Test or restore a named server under the mutex; returns `McpServerStatus`. Non-destructive when already connected: probes the live client with `listTools`; only falls back to a full reconnect if the probe fails or the server was not in the Map. Used by Settings "Test connection". |
 | `disconnectAllServers()` | Disconnect all active connections |
-| `callTool(server, tool, params)` | Call a tool on a connected server |
-| `getServerStatus()` | Return `McpServerStatus[]` from the in-memory Map (no reconnect) |
+| `callTool(server, tool, params)` | Call a tool on a connected server; throws when `result.isError` is set |
+| `getServerStatus()` | Return `McpServerStatus[]` from the in-memory Map; returns `{ disabled: true }` for servers with `enabled === false` |
 
 ---
 
@@ -231,6 +233,10 @@ Coordinates the flow from raw API payloads to structured `Signal` rows and graph
 
 `SurfaceAdapter.poll()` now returns `{ observations: RawObservation[]; complete: boolean }`. `complete` must be `true` only when no query hit its page/count limit (GitHub `per_page` raised to 50). `runAdapterPoll` records `lastCompletePollAt` per surface when `complete=true` and no error occurred. `getLastCompletePollAt(surface)` is exported for use by `revalidatePendingIntents()` in `ambient.ts`.
 
+**Supported surfaces:** GitHub, Jira, Slack, Linear. The `adapters` array contains one adapter per surface. `STAGGER_OFFSETS` staggers each surface's initial poll: `{ github: 0, jira: 15_000, slack: 30_000, linear: 60_000 }`.
+
+**Linear adapter:** `makeLinearAdapter()` polls `linear_get_user_issues` (returns plain text, not JSON). `parseLinearIssueText(text)` splits on `\n- IDENTIFIER:` boundaries and extracts `priority`, `status`, and `url` from the following lines. Issues are stored as `linear:issue:<identifier>` nodes with `relation: 'assigned'` and `directed: true`. `scrubRaw` strips all fields except `['identifier', 'status', 'priority', 'url']`.
+
 ---
 
 ## `inference.ts` — Intent generation
@@ -348,6 +354,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-06-25 — **MCP transport generalization + enable/disable + isError + Linear ingestion.** `mcp.ts`: `connectServer` branches on `McpServerConfig.transport` (`'stdio' | 'http' | 'sse'`); uses `StreamableHTTPClientTransport` and `SSEClientTransport` from `@modelcontextprotocol/sdk` for URL-based servers; stderr ring buffer is stdio-only. `callTool` now throws when `result.isError` is set. `connectAllServers` skips servers with `enabled === false` (and calls `disconnectServer` for them). `getServerStatus` returns `{ disabled: true }` for disabled servers. Dead code removed: `lastKnownTools` Map and `getKnownServerTools()` export (CLI-era `--allowedTools` path). `agent.ts`: `sdkMcpServers` build loop handles `http`/`sse` transports with url+headers; skips disabled servers. `claude-import.ts`: `supported` now true for http/sse entries; `url` field forwarded. `ingestion.ts`: added `makeLinearAdapter()` + `parseLinearIssueText()` helper for plain-text Linear output; `STAGGER_OFFSETS.linear = 60_000`. `ambient.ts`: `VERB_TO_TOOL` and `AUTO_EXECUTABLE` extended with `linear:comment`; `enrichPayloadForRouting` and `buildToolArgs` gain linear branches.
 
 - 2026-06-25 — **Fix "Stream timed out" on observation chat — tool-call idle (`agent.ts`):** Follow-up to the startup-budget fix. After the model emits a `tool_use` block, the SDK awaits the MCP server response with no messages flowing — the 120 s inter-chunk timer was firing before the result arrived. `resetIdle()` now accepts an optional `ms` parameter; when a `tool_use` block is detected in an assistant message, a second `resetIdle(STREAM_STARTUP_TIMEOUT_MS)` call re-arms the timer with 140 s so the tool round-trip has the same budget as the cold-spawn startup.
 

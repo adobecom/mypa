@@ -310,8 +310,21 @@ export function registerIpcHandlers(
     const now = Date.now()
 
     const servers = config.mcp_servers.map((srv) => {
+      const disabled = srv.enabled === false
       const status = statuses.find((s) => s.name === srv.name)
       const entry = MCP_CATALOG.find((e) => e.id === srv.name)
+
+      // Skip credential / path validation for disabled servers — they are
+      // intentionally not connected, so auth warnings would be misleading.
+      if (disabled) {
+        return {
+          name: srv.name,
+          connected: false,
+          disabled: true,
+          missingEnvKeys: [],
+          oauthProvider: entry?.oauthProvider
+        }
+      }
 
       const missingEnvKeys: string[] = []
       if (entry?.authType === 'oauth' && entry.oauthTokenEnvKey) {

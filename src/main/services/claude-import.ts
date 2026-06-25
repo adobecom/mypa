@@ -36,7 +36,9 @@ export function detectClaudeMcpServers(): DetectedMcpServer[] {
         args: entry.args,
         env: entry.env,
         type,
-        supported: hasCommand
+        url: entry.url,
+        // stdio, http, and sse are all supported transports now
+        supported: hasCommand || httpType
       }
     })
   } catch {

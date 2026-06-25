@@ -519,12 +519,120 @@ function makeSlackAdapter(): SurfaceAdapter {
   return { surface, serverName, isAvailable, poll, normalize }
 }
 
+// ─── Linear adapter ──────────────────────────────────────────────────────────
+
+/** Parse the plain-text output of linear_get_user_issues into structured objects. */
+function parseLinearIssueText(text: string): Array<{
+  identifier: string
+  title: string
+  status: string
+  priority: string
+  url: string
+}> {
+  const issues: Array<{ identifier: string; title: string; status: string; priority: string; url: string }> = []
+  // Each issue block starts with "- IDENTIFIER: title" after a newline boundary.
+  const blocks = text.split(/(?=\n- [A-Z0-9]+-\d+:)/)
+  for (const block of blocks) {
+    const lines = block.replace(/^\n/, '').split('\n')
+    const firstLine = lines[0].replace(/^-\s+/, '').trim()
+    const idMatch = firstLine.match(/^([A-Z0-9]+-\d+):\s*(.+)$/)
+    if (!idMatch) continue
+    const identifier = idMatch[1]
+    const title = idMatch[2].trim()
+    let status = ''
+    let priority = ''
+    let url = ''
+    for (const line of lines.slice(1)) {
+      const statusMatch = line.match(/Status:\s*(.+)/)
+      if (statusMatch) status = statusMatch[1].trim()
+      const priorityMatch = line.match(/Priority:\s*(.+)/)
+      if (priorityMatch) priority = priorityMatch[1].trim()
+      const urlMatch = line.match(/(https?:\/\/\S+)/)
+      if (urlMatch) url = urlMatch[1].trim()
+    }
+    issues.push({ identifier, title, status, priority, url })
+  }
+  return issues
+}
+
+function makeLinearAdapter(): SurfaceAdapter {
+  const surface: IntentSurface = 'linear'
+  const serverName = 'linear'
+
+  function isAvailable(): boolean {
+    return getServerStatus().some((s) => s.name === serverName && s.connected)
+  }
+
+  async function poll(): Promise<{ observations: RawObservation[]; complete: boolean }> {
+    const obs: RawObservation[] = []
+    const LIMIT = 30
+    let truncated = false
+    try {
+      const result = await callTool(serverName, 'linear_get_user_issues', { limit: LIMIT })
+      const issues = parseLinearIssueText(result)
+      if (issues.length >= LIMIT) truncated = true
+
+      for (const issue of issues) {
+        obs.push({
+          external_id: issue.identifier,
+          kind: 'issue',
+          title: issue.title,
+          body: '',  // text output does not include body content
+          actor: '',
+          url: issue.url,
+          occurred_at: null,
+          relation: 'assigned',   // linear_get_user_issues returns the user's own issues
+          directed: true,
+          last_actor: null,
+          due_at: null,
+          change_fields: {
+            status: issue.status,
+            priority: issue.priority,
+          },
+          raw: {
+            identifier: issue.identifier,
+            status: issue.status,
+            priority: issue.priority,
+            url: issue.url
+          }
+        })
+      }
+    } catch (e) {
+      console.warn('[ingestion:linear] poll failed:', e)
+      truncated = true  // treat poll failure as potentially truncated
+    }
+    return { observations: obs, complete: !truncated }
+  }
+
+  function normalize(raw: RawObservation): SignalInput {
+    return {
+      surface,
+      kind: raw.kind,
+      external_id: raw.external_id,
+      fingerprint: computeFingerprint(surface, raw.external_id, raw.change_fields),
+      title: raw.title,
+      body: '',
+      actor: raw.actor,
+      url: raw.url,
+      occurred_at: raw.occurred_at,
+      relation: raw.relation ?? null,
+      directed: raw.directed ?? false,
+      last_actor: null,
+      due_at: null,
+      raw: scrubRaw(raw.raw, ['identifier', 'status', 'priority', 'url'])
+    }
+  }
+
+  return { surface, serverName, isAvailable, poll, normalize }
+}
+
 // ─── Polling scheduler ────────────────────────────────────────────────────────
 
 export const adapters: SurfaceAdapter[] = [
   makeGithubAdapter(),
   makeJiraAdapter(),
-  makeSlackAdapter()
+  makeSlackAdapter(),
+  makeLinearAdapter()
 ]
 
 // ─── Freshness tracking ───────────────────────────────────────────────────────
@@ -542,7 +650,8 @@ export function getLastCompletePollAt(surface: IntentSurface): string | null {
 const STAGGER_OFFSETS: Record<IntentSurface, number> = {
   github: 0,
   jira: 20_000,
-  slack: 40_000
+  slack: 40_000,
+  linear: 60_000
 }
 
 const intervalIds = new Map<IntentSurface, ReturnType<typeof setInterval>>()

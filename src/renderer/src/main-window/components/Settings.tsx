@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2, User } from 'lucide-react'
+import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2, User, Power, ChevronDown, ChevronRight } from 'lucide-react'
 import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles, GraphNode, GraphEdge, Memory } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import { SCOPE_SURFACES } from '@shared/scope-surfaces'
@@ -30,6 +30,7 @@ export default function Settings(): React.ReactElement {
   const [handleStatus, setHandleStatus] = useState<ResolvedOwnerHandles>({})
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [apiKeyStatus, setApiKeyStatus] = useState<{ configured: boolean; preview: string | null }>({ configured: false, preview: null })
+  const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set())
 
   const api = window.electron
   const toast = useToast()
@@ -174,6 +175,26 @@ export default function Settings(): React.ReactElement {
       toast.success(`Server "${name}" removed`)
     } catch (err: any) {
       toast.error('Failed to remove server', { message: err?.message })
+    }
+  }
+
+  const handleToggleServer = async (name: string) => {
+    const srv = config.mcp_servers.find((s) => s.name === name)
+    if (!srv) return
+    const nowEnabled = srv.enabled !== false  // currently enabled → will disable
+    try {
+      const updated = {
+        ...config,
+        mcp_servers: config.mcp_servers.map((s) =>
+          s.name !== name ? s : { ...s, enabled: !nowEnabled }
+        )
+      }
+      setConfig(updated)
+      await api.config.update(updated)
+      await syncDisplay()
+      toast.success(`Server "${name}" ${nowEnabled ? 'disabled' : 'enabled'}`)
+    } catch (err: any) {
+      toast.error('Failed to update server', { message: err?.message })
     }
   }
 
@@ -618,26 +639,44 @@ export default function Settings(): React.ReactElement {
         )}
 
         {config.mcp_servers.map((srv) => {
+          const isDisabled = srv.enabled === false
           const s = status.find((x) => x.name === srv.name)
           const entry = MCP_CATALOG.find((e) => e.id === srv.name)
           const srvHealth = health?.servers.find((h) => h.name === srv.name)
-          const needsOAuth = entry?.authType === 'oauth' && (srvHealth?.missingEnvKeys?.length ?? 0) > 0
+          const needsOAuth = !isDisabled && entry?.authType === 'oauth' && (srvHealth?.missingEnvKeys?.length ?? 0) > 0
           const oauthActive = oauthState?.serverName === srv.name
+          const dotState = isDisabled ? 'disabled' : s?.connected ? 'connected' : 'disconnected'
+          const hasTools = !isDisabled && (s?.tools.length ?? 0) > 0
+          const isExpanded = expandedServers.has(srv.name)
+          const toggleExpand = () => setExpandedServers((prev) => {
+            const next = new Set(prev)
+            if (next.has(srv.name)) next.delete(srv.name)
+            else next.add(srv.name)
+            return next
+          })
           return (
             <React.Fragment key={srv.name}>
-              <div className="mcp-server-row">
+              <div className="mcp-server-row" style={isDisabled ? { opacity: 0.55 } : undefined}>
                 <div
-                  className={`mcp-server-row__dot mcp-server-row__dot--${s?.connected ? 'connected' : 'disconnected'}`}
+                  className={`mcp-server-row__dot mcp-server-row__dot--${dotState}`}
                 />
                 <div className="mcp-server-row__name">{srv.name}</div>
-                <div className="mcp-server-row__count">
-                  {testing[srv.name]
-                    ? 'connecting…'
-                    : s?.connected
-                      ? `${s.tools.length} tools`
-                      : s
-                        ? 'disconnected'
-                        : 'unknown'}
+                <div
+                  className="mcp-server-row__count"
+                  style={hasTools ? { cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3 } : undefined}
+                  onClick={hasTools ? toggleExpand : undefined}
+                  title={hasTools ? (isExpanded ? 'Hide tools' : 'Show tools') : undefined}
+                >
+                  {isDisabled
+                    ? 'disabled'
+                    : testing[srv.name]
+                      ? 'connecting…'
+                      : s?.connected
+                        ? `${s.tools.length} tools`
+                        : s
+                          ? 'disconnected'
+                          : 'unknown'}
+                  {hasTools && (isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />)}
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
                   {needsOAuth && (
@@ -649,12 +688,23 @@ export default function Settings(): React.ReactElement {
                       {oauthActive && !oauthState?.deviceFlow ? <span className="spinner" /> : 'Connect'}
                     </button>
                   )}
+                  {!isDisabled && (
+                    <button
+                      className="btn btn--ghost btn--sm"
+                      onClick={() => handleTestServer(srv)}
+                      disabled={!!testing[srv.name]}
+                    >
+                      {testing[srv.name] ? <span className="spinner" /> : 'Test connection'}
+                    </button>
+                  )}
                   <button
                     className="btn btn--ghost btn--sm"
-                    onClick={() => handleTestServer(srv)}
-                    disabled={!!testing[srv.name]}
+                    title={isDisabled ? 'Enable server' : 'Disable server'}
+                    onClick={() => handleToggleServer(srv.name)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 4 }}
                   >
-                    {testing[srv.name] ? <span className="spinner" /> : 'Test connection'}
+                    <Power size={13} />
+                    {isDisabled ? 'Enable' : 'Disable'}
                   </button>
                   <button className="btn btn--danger btn--sm" onClick={() => handleRemoveServer(srv.name)}>
                     Remove
@@ -690,6 +740,37 @@ export default function Settings(): React.ReactElement {
                       Waiting for authorization…
                     </div>
                   )}
+                </div>
+              )}
+              {hasTools && isExpanded && (
+                <div className="mcp-tool-list">
+                  {s!.tools.map((tool) => {
+                    const schema = tool.inputSchema as { properties?: Record<string, { type?: string; description?: string }>; required?: string[] } | undefined
+                    const props = schema?.properties ?? {}
+                    const required = new Set(schema?.required ?? [])
+                    const params = Object.entries(props)
+                    return (
+                      <div key={tool.name} className="mcp-tool-list__item">
+                        <div className="mcp-tool-list__name">{tool.name}</div>
+                        {tool.description && (
+                          <div className="mcp-tool-list__desc">{tool.description}</div>
+                        )}
+                        {params.length > 0 && (
+                          <div className="mcp-tool-list__params">
+                            {params.map(([pName, pDef]) => (
+                              <div key={pName} className="mcp-tool-list__param-row">
+                                <span className="mcp-tool-list__param-name">{pName}</span>
+                                <span className="mcp-tool-list__param-type">{pDef.type ?? 'any'}</span>
+                                {required.has(pName) && (
+                                  <span className="mcp-tool-list__param-required">required</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </React.Fragment>
