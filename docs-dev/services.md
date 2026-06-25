@@ -23,6 +23,8 @@ Determines and injects Claude credentials for every SDK call.
 
 Implements all AI calls using `@anthropic-ai/claude-agent-sdk` directly (no subprocess spawn). See [claude-integration.md](claude-integration.md) for the detailed write-up.
 
+`resolveClaudeExecutable()` (module-private, memoized) computes the real path to the SDK's bundled native binary. In a packaged app it rewrites `app.getAppPath()` from `app.asar` to `app.asar.unpacked`; in dev it returns the `node_modules` path unchanged. All three `query()` call sites pass this via `pathToClaudeCodeExecutable` to prevent `spawn ENOTDIR` in packaged builds (see [claude-integration.md — Packaging](claude-integration.md#packaging)).
+
 **Key exports:**
 
 | Export | Description |
@@ -346,6 +348,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-06-24 — **Fix `spawn ENOTDIR` in packaged app (`agent.ts`):** added `resolveClaudeExecutable()` helper (memoized, module-private) that rewrites `app.getAppPath()` to the `app.asar.unpacked` sibling path so the SDK's bundled binary can be spawned from inside the asar. All three `query()` call sites now pass `pathToClaudeCodeExecutable: resolveClaudeExecutable()`. Imports `app` from `electron`, `existsSync` from `fs`, `path`.
 
 - 2026-06-22 — **New `auth.ts` service; `detectClaudeBin` removed:** added `src/main/services/auth.ts` with `buildAgentEnv()` (returns `{ ...process.env, ANTHROPIC_API_KEY }` when a key is stored, or `undefined` to inherit ambient creds) and `resolveAuthSource()` (priority probe: stored key → env var → `~/.claude/.credentials.json` → none). All three `query()` call sites in `agent.ts` now pass `env: buildAgentEnv()`. `detectClaudeBin()`, `nvmClaudePaths()`, `npmGlobalBin()` and their `execSync`/`readdirSync` imports removed from `claude.ts` — no subprocess is needed for auth probing or inference.
 
