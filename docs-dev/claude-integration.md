@@ -131,7 +131,7 @@ Calls `Query.interrupt()` on the active stream and removes it from the in-memory
 
 Rules (applied in order):
 1. Server key `mypa_builtin` — always allowed (covers the in-process `ask_user` tool).
-2. Read-only prefix auto-allow: tool names starting with `get`, `list`, `search`, `read`, `fetch`, `find`, `describe`, `view`, `show`, `check`, `query`, `inspect` are allowed immediately.
+2. Read-only prefix auto-allow: tool names starting with `get`, `list`, `search`, `read`, `fetch`, `find`, `describe`, `view`, `show`, `check`, `query`, `lookup` are allowed immediately — **unless** a subsequent name component is a write verb (`create`, `update`, `delete`, etc.), which would indicate a tool like `fetch_and_update`. That secondary check prevents prefix-spoofing by ambiguously named tools.
 3. All other (write) tools — `canUseTool` broadcasts `chat:tool-approval-request` to the renderer with a `PendingToolApproval` object and then **awaits** resolution. The stream genuinely blocks until `resolveToolApproval()` is called.
 
 ### `resolveToolApproval(approvalId, allow, editedInput?)`
@@ -282,6 +282,8 @@ This clause is appended in `inferIntent` (`inference.ts`) after `buildOwnerClaus
 **ASAR path fix — `pathToClaudeCodeExecutable` must be set explicitly.** The SDK's `sdk.mjs` lives inside `app.asar`; when it resolves the platform binary relative to its own `import.meta.url` it produces a path that includes `app.asar` — which is a file, not a directory — causing `spawn ENOTDIR` on every AI call. The fix is in `agent.ts`: `resolveClaudeExecutable()` computes the real, unpacked path via `app.getAppPath().replace('app.asar', 'app.asar.unpacked')`, then all three `query()` call sites pass `pathToClaudeCodeExecutable: resolveClaudeExecutable()`. This short-circuits the SDK's broken default without affecting dev mode (where `app.getAppPath()` points to the project root and the binary exists at the direct `node_modules` path).
 
 ## Changelog
+
+- 2026-06-25 — **Harden SDK harness: timeout race, null-result logging, write-word guard (`agent.ts`):** (1) Removed `if (timedOut)` checks from the *success* paths of `runAgentOnce`, `runAgentWithMcpOnce`, and `streamAgentChatOnce`. If the `for await` loop exits cleanly, the response is valid even if the timer fired in the final moments — throwing a false "timed out" there was incorrect. The `timedOut` flag is still checked in the `catch` path, which is the correct place. (2) Added `console.warn` when the SDK completes without emitting a `result` message (null-resultMsg case), making that rare path observable before the throw. (3) Added a `WRITE_WORDS` blocklist to `isReadOnlyTool`: if any word after the first in a tool name (split on `_`) is a write verb (`create`, `update`, `delete`, etc.), the tool is denied even when the name starts with a read prefix — prevents tools like `fetch_and_update` from being auto-allowed.
 
 - 2026-06-25 — **Fix one-shot digest "Reached maximum number of turns (3)" (`agent.ts`):** added `tools: []` to the `runAgentOnce` `query()` options so no built-in tools appear in the model's context. Previously the full Claude Code tool preset was available and the model would attempt tool calls that were denied one-by-one by `canUseTool`; each denial burned a turn and 3 stray attempts exhausted `maxTurns: 3` before any text was produced. With `tools: []` no tool calls can be attempted, `maxTurns` dropped back to `1`, and `canUseTool: deny` is retained as defense-in-depth. Affects all `runClaude`/`runAgent` callers (digests, classifications, inference).
 

@@ -112,9 +112,20 @@ const READ_ONLY_PREFIXES = [
   'show', 'describe', 'query', 'lookup', 'check',
 ]
 
+// Secondary guard: if any of these words appear as a standalone component in the
+// tool name (after the first), treat the tool as a write operation regardless of
+// the read prefix. Prevents tools like fetch_and_update or get_or_create from
+// slipping through because they start with a read prefix.
+const WRITE_WORDS = new Set([
+  'create', 'update', 'delete', 'remove', 'write', 'post', 'put', 'patch',
+  'send', 'push', 'add', 'insert', 'modify', 'set', 'edit', 'submit',
+])
+
 function isReadOnlyTool(toolName: string): boolean {
   const lower = toolName.toLowerCase()
-  return READ_ONLY_PREFIXES.some((p) => lower === p || lower.startsWith(p + '_'))
+  if (!READ_ONLY_PREFIXES.some((p) => lower === p || lower.startsWith(p + '_'))) return false
+  const words = lower.split('_')
+  return !words.slice(1).some((w) => WRITE_WORDS.has(w))
 }
 
 function buildPendingToolApproval(
@@ -229,9 +240,12 @@ async function runAgentOnce(
   }
 
   clearTimeout(timer)
-  if (timedOut) throw new Error('Agent timed out')
+  // Do not check timedOut here: if the loop exited cleanly we have a valid response
+  // even if the timer fired in the final moments. Only the catch path (SDK threw due
+  // to the abort signal) should surface as a timeout error.
 
   if (!resultMsg) {
+    console.warn('[agent] SDK completed without emitting a result message — usage not recorded')
     throw new Error('Agent returned no result message')
   }
 
@@ -474,7 +488,7 @@ async function streamAgentChatOnce(
 
   clearTimeout(idleTimer)
   if (streamId) activeAgentChats.delete(streamId)
-  if (timedOut) throw new Error('Stream timed out')
+  // Do not check timedOut here: a clean loop exit means we have a complete response.
   if (entry.interrupted) throw new Error('Cancelled')
 
   if (resultMsg) {
@@ -594,8 +608,10 @@ async function runAgentWithMcpOnce(
   }
 
   clearTimeout(timer)
-  if (timedOut) throw new Error('Agent timed out')
-  if (!resultMsg) throw new Error('Agent returned no result message')
+  if (!resultMsg) {
+    console.warn('[agent] MCP SDK completed without emitting a result message — usage not recorded')
+    throw new Error('Agent returned no result message')
+  }
   recordSdkUsage(source, model, resultMsg)
   if (resultMsg.is_error) {
     throw new Error(
