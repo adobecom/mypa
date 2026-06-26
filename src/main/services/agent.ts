@@ -9,14 +9,14 @@ import { selectModel, escalate } from './model-router'
 import { readConfig, buildOwnerClause } from './config'
 import { buildAgentEnv } from './auth'
 import { broadcast } from '../windows'
+import { ensureServersConnected } from './mcp'
+import { buildBridgedMcpServers } from './mcp-bridge'
 import type { UsageSource, ChatMessage, PendingToolApproval, PendingQuestion } from '@shared/types'
 
 // Inter-chunk idle timeout once the stream is producing output.
 const STREAM_IDLE_TIMEOUT_MS = 120_000
-// First-message budget. With MCP enabled the Agent SDK cold-spawns its own stdio MCP
-// subprocesses (npx download + auth + listTools) before the first message arrives,
-// which can exceed the steady-state idle window. Must stay below the renderer's 150s
-// first-chunk backstop in IntentCard.tsx.
+// Extended timeout for the initial phase (before first SDK message) and for individual
+// MCP tool-call round-trips. Must stay below the renderer's 150s safety backstop.
 const STREAM_STARTUP_TIMEOUT_MS = 140_000
 
 // In a packaged Electron app the SDK's sdk.mjs lives inside app.asar, so it
@@ -326,6 +326,7 @@ export async function streamAgentChat(
   streamId?: string,
   source: UsageSource = 'chat',
   enableMcp = false,
+  onStatus?: (status: string) => void,
 ): Promise<void> {
   const messages = [
     ...history.map((m) => ({ role: m.role, content: m.content })),
@@ -343,39 +344,16 @@ export async function streamAgentChat(
     ? `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented. ${askUserGuidance}${contextGuidance}\n\nOriginal data collected:\n${rawContext}`
     : `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented. ${askUserGuidance}`
 
-  // Build SDK mcpServers map from config when MCP is requested
-  type SdkMcpEntry =
-    | { type?: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }
-    | { type: 'http'; url: string; headers?: Record<string, string> }
-    | { type: 'sse'; url: string; headers?: Record<string, string> }
-  const sdkMcpServers: Record<string, SdkMcpEntry> = {}
+  // Source MCP servers from the warm connection pool as in-process proxies.
+  // ensureServersConnected() does a best-effort reconnect of any pool entry that has
+  // gone dead since boot (without blocking the stream if reconnect fails), then
+  // buildBridgedMcpServers() wraps each connected server in a lightweight Server that
+  // serves tools/list and tools/call in-process — zero subprocess spawns, zero cold-boot.
+  // Disconnected or disabled servers are simply absent from the map (fast, honest).
   if (enableMcp) {
-    for (const srv of cfg.mcp_servers) {
-      if (srv.enabled === false) continue
-      const safeName = srv.name.replace(/[^a-zA-Z0-9_-]/g, '_')
-      const transportKind = srv.transport ?? (srv.command ? 'stdio' : srv.url ? 'http' : null)
-      if (transportKind === 'http' && srv.url) {
-        sdkMcpServers[safeName] = {
-          type: 'http',
-          url: srv.url,
-          ...(srv.headers ? { headers: srv.headers } : {})
-        }
-      } else if (transportKind === 'sse' && srv.url) {
-        sdkMcpServers[safeName] = {
-          type: 'sse',
-          url: srv.url,
-          ...(srv.headers ? { headers: srv.headers } : {})
-        }
-      } else if (srv.command) {
-        sdkMcpServers[safeName] = {
-          type: 'stdio',
-          command: srv.command,
-          ...(srv.args?.length ? { args: srv.args } : {}),
-          ...(Object.keys(srv.env ?? {}).length ? { env: srv.env } : {}),
-        }
-      }
-    }
+    await ensureServersConnected()
   }
+  const sdkMcpServers = enableMcp ? buildBridgedMcpServers() : {}
 
   const approxLen = systemPrompt.length + messages.reduce((n, m) => n + m.content.length, 0)
   let model = selectModel(source, approxLen)
@@ -385,12 +363,13 @@ export async function streamAgentChat(
       const full = await streamAgentChatOnce(
         model, systemPrompt, messages, onChunk, streamId, source,
         Object.keys(sdkMcpServers).length > 0 ? sdkMcpServers : undefined,
+        onStatus,
       )
       onDone(full)
       return
     } catch (err) {
-      const msg = (err as Error).message
-      if (msg === 'Cancelled' || msg === 'Stream timed out') throw err
+      // Never escalate timeouts or user-initiated cancellations — only true model errors.
+      if ((err as Error).message === 'Cancelled' || (err as Error & { noEscalate?: boolean }).noEscalate) throw err
       const next = escalate(model)
       if (!next) throw err
       console.log(`[agent] stream: escalating ${model} → ${next} (${source})`)
@@ -407,6 +386,7 @@ async function streamAgentChatOnce(
   streamId: string | undefined,
   source: UsageSource,
   mcpServers?: Record<string, unknown>,
+  onStatus?: (status: string) => void,
 ): Promise<string> {
   // Format conversation as a flat prompt — mirrors the CLI's -p approach.
   const prompt = messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')
@@ -418,15 +398,27 @@ async function streamAgentChatOnce(
 
   const ac = new AbortController()
   let timedOut = false
-  // Use the startup budget for the first message when MCP is on (the SDK cold-spawns
-  // all configured stdio servers before the first message arrives). Once a message
-  // lands, resetIdle() re-arms at the tighter inter-chunk value.
+  // Use the extended startup budget for the first message when MCP is on, to cover
+  // in-process bridge setup and any initial tool calls. Once a message lands,
+  // resetIdle() re-arms at the tighter inter-chunk value.
   const firstTimeout = hasMcp ? STREAM_STARTUP_TIMEOUT_MS : STREAM_IDLE_TIMEOUT_MS
   let idleTimer = setTimeout(() => { timedOut = true; ac.abort() }, firstTimeout)
 
   const resetIdle = (ms = STREAM_IDLE_TIMEOUT_MS): void => {
     clearTimeout(idleTimer)
     idleTimer = setTimeout(() => { timedOut = true; ac.abort() }, ms)
+  }
+
+  // Phase tracking and heartbeat: emit onStatus immediately on the initial phase, then
+  // every 8s so the renderer's 150s safety backstop keeps resetting during long silent
+  // waits (bridge connect, tool execution). Cleared as soon as the first text chunk
+  // arrives (real chunks reset the backstop directly) or on any exit path.
+  let receivedFirstMessage = false
+  let phase = hasMcp ? 'Connecting to tools…' : 'Working…'
+  let heartbeat: ReturnType<typeof setInterval> | null = null
+  if (onStatus) {
+    onStatus(phase)
+    heartbeat = setInterval(() => { if (onStatus) onStatus(phase) }, 8_000)
   }
 
   const q = query({
@@ -488,21 +480,41 @@ async function streamAgentChatOnce(
   try {
     for await (const msg of q) {
       resetIdle()
+      // Mark first SDK message received and transition the phase label out of startup.
+      if (!receivedFirstMessage) {
+        receivedFirstMessage = true
+        phase = 'Working…'
+        if (onStatus) onStatus(phase)
+      }
       if (msg.type === 'assistant') {
         // When the model emits a tool call the SDK silently awaits the MCP server
-        // response before yielding the next message. Give that wait the same
-        // generous budget as the initial cold-spawn.
+        // response before yielding the next message. Give that wait the extended
+        // startup budget so a slow tool round-trip does not trigger the idle timer.
         // Note: MCP tools use type 'mcp_tool_use', not 'tool_use'.
         if ((msg.message?.content ?? []).some(
           (b: any) => b.type === 'tool_use' || b.type === 'mcp_tool_use',
         )) {
           resetIdle(STREAM_STARTUP_TIMEOUT_MS)
+          // Emit a "Using {server}…" status so the user sees which MCP server is active.
+          // Tool names follow the mcp__{server}__{tool} convention.
+          if (onStatus) {
+            const toolBlocks: any[] = (msg.message?.content ?? []).filter(  // eslint-disable-line @typescript-eslint/no-explicit-any
+              (b: any) => b.type === 'tool_use' || b.type === 'mcp_tool_use',
+            )
+            const toolName: string = toolBlocks[0]?.name ?? ''
+            const nameParts = toolName.split('__')
+            const serverLabel = nameParts.length >= 2 ? nameParts[1] : toolName
+            phase = `Using ${serverLabel}…`
+            onStatus(phase)
+          }
         }
         const textBlocks = (msg.message?.content ?? []).filter(
           (b: any) => b.type === 'text' && typeof b.text === 'string' && b.text,
         )
-        if (textBlocks.length > 0 && hasText) {
-          onChunk('\x00SPLIT\x00')
+        if (textBlocks.length > 0) {
+          // Stop the heartbeat — real text chunks will reset the renderer backstop directly.
+          if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null }
+          if (hasText) onChunk('\x00SPLIT\x00')
         }
         for (const block of textBlocks as any[]) {
           full += block.text
@@ -517,6 +529,7 @@ async function streamAgentChatOnce(
     }
   } catch (err) {
     clearTimeout(idleTimer)
+    if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null }
     if (streamId) activeAgentChats.delete(streamId)
     // Drain any pending approval/question promises so they don't leak on unexpected errors.
     if (streamId) {
@@ -525,12 +538,21 @@ async function streamAgentChatOnce(
       const cancelQuestion = pendingQuestionCancels.get(streamId)
       if (cancelQuestion) { cancelQuestion(); pendingQuestionCancels.delete(streamId) }
     }
-    if (timedOut) throw new Error('Stream timed out')
+    if (timedOut) {
+      // Emit a specific, actionable message depending on how far the stream had progressed.
+      const timeoutMsg = receivedFirstMessage
+        ? 'The assistant stopped mid-response. Please try again.'
+        : 'Timed out starting up tools. Check that your MCP servers are reachable, then try again.'
+      const timeoutErr = new Error(timeoutMsg) as Error & { noEscalate: boolean }
+      timeoutErr.noEscalate = true  // Do not escalate to a larger model — this is an infra issue.
+      throw timeoutErr
+    }
     if (entry.interrupted) throw new Error('Cancelled')
     throw err
   }
 
   clearTimeout(idleTimer)
+  if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null }
   if (streamId) activeAgentChats.delete(streamId)
   // Do not check timedOut here: a clean loop exit means we have a complete response.
   if (entry.interrupted) throw new Error('Cancelled')

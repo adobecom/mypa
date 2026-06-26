@@ -203,6 +203,24 @@ export async function callTool(
   return text
 }
 
+/** Forwards a tool call to the warm pooled client and returns the raw MCP result
+ *  (content blocks + isError preserved), for the in-process SDK bridge proxy.
+ *  Unlike callTool, this does NOT flatten to a string or throw on isError — the
+ *  SDK bridge needs the raw shape so the model can see the error content. */
+export async function callToolRaw(
+  serverName: string,
+  toolName: string,
+  params: Record<string, unknown>,
+) {
+  const server = servers.get(serverName)
+  if (!server) throw new Error(`MCP server "${serverName}" not connected`)
+  return withTimeout(
+    server.client.callTool({ name: toolName, arguments: params }),
+    30_000,
+    `callTool ${serverName}::${toolName}`,
+  )
+}
+
 export function connectAllServers(): Promise<void> {
   return runExclusive(async () => {
     let cfg = readConfig()

@@ -245,7 +245,8 @@ export async function streamChat(
   rawContext?: string,
   streamId?: string,
   source: UsageSource = 'chat',
-  enableMcp?: boolean
+  enableMcp?: boolean,
+  onStatus?: (status: string) => void,
 ): Promise<void> {
-  return streamAgentChat(history, userMessage, onChunk, onDone, rawContext, streamId, source, enableMcp ?? false)
+  return streamAgentChat(history, userMessage, onChunk, onDone, rawContext, streamId, source, enableMcp ?? false, onStatus)
 }

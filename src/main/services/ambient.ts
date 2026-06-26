@@ -1222,7 +1222,13 @@ export async function handleIntentChat(intentId: string, userMessage: string): P
       rawContext,
       `intentchat:${intentId}`,
       'chat',
-      true  // enableMcp — wire read-only tools and the write-action protocol
+      true,  // enableMcp — wire read-only tools and the write-action protocol
+      (status) => {
+        // Broadcast a status-only frame (empty chunk, not done) so the renderer can
+        // display the current phase ("Connecting to tools…", "Using slack…") and reset
+        // its 150s safety backstop — preventing the backstop from racing the server watchdog.
+        broadcast('ambient:chat-message', { intentId, chunk: '', done: false, status })
+      },
     )
 
     const toSave = segments.filter((s) => s.trim())
