@@ -8,6 +8,9 @@ interface Props {
   messages: ChatMessage[]
   streaming?: boolean
   streamingContent?: string
+  /** Live phase label from the main process ("Connecting to tools…", "Using slack…").
+   *  Shown in the thinking bubble while no text chunks have arrived yet. */
+  statusLabel?: string | null
   onSend: (msg: string) => void
   sendDisabled?: boolean
   error?: string | null
@@ -29,6 +32,7 @@ export default function ChatThread({
   messages,
   streaming,
   streamingContent,
+  statusLabel,
   onSend,
   sendDisabled,
   error,
@@ -103,7 +107,9 @@ export default function ChatThread({
                     <span className="typing-dot" />
                     <span className="typing-dot" />
                     {segments.length === 0 && (
-                      <span className="chat-message__thinking-label">Thinking…</span>
+                      <span className="chat-message__thinking-label">
+                        {statusLabel ?? 'Thinking…'}
+                      </span>
                     )}
                   </div>
                 </div>

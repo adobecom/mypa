@@ -100,18 +100,23 @@ export async function streamAgentChat(
   history: ChatMessage[],
   userMessage: string,
   onChunk: (chunk: string) => void,
-  onDone:  (fullText: string) => void,
+  onDone:    (fullText: string) => void,
   rawContext?: string,
   streamId?:   string,
-  source?:     UsageSource,   // default 'chat'
-  enableMcp?:  boolean        // default false
+  source?:     UsageSource,          // default 'chat'
+  enableMcp?:  boolean,              // default false
+  onStatus?:   (status: string) => void,
 ): Promise<void>
 ```
 
 - Drives a streaming async generator from the SDK.
-- When `enableMcp` is `true`, MCP servers are passed via `options.mcpServers`; the system prompt is extended with `MCP_CHAT_SYSTEM_ADDENDUM`.
+- When `enableMcp` is `true`, MCP servers are sourced from the warm connection pool via `mcp-bridge.ts` (`buildBridgedMcpServers()`) rather than cold-spawned. The bridge wraps each connected server as an in-process `{ type: 'sdk', instance }` proxy — zero subprocess spawns, zero cold-boot latency. `ensureServersConnected()` is called first to best-effort reconnect any dead pool entries. Disconnected servers are absent from the chat turn (fast, honest). See [mcp-and-oauth.md](mcp-and-oauth.md#mcp-in-the-agent-sdk) for the bridge design.
 - Tool call gating is handled in-process via `canUseTool` (see below) rather than an allowlist flag.
-- If the stream fails before any output reaches the client, it is retried once at the escalated tier. User-cancelled streams (`'Cancelled'`) and idle-timed-out streams (`'Stream timed out'`) are never retried.
+- **Status heartbeat:** when `onStatus` is provided, a phase label is emitted immediately on startup (`'Connecting to tools…'` for MCP, `'Working…'` otherwise) and then re-emitted every 8 s so the renderer's 150 s safety backstop keeps resetting during long silent waits (MCP cold-boot, tool execution). The heartbeat is cleared as soon as the first text chunk arrives. The phase label advances to `'Working…'` on the first SDK message and `'Using {server}…'` when the model emits a tool call.
+- **Timeout errors:** on idle-timeout the error now carries `noEscalate = true` and a human-readable message:
+  - Pre-first-message: `'Timed out starting up tools. Check that your MCP servers are reachable, then try again.'`
+  - Mid-stream: `'The assistant stopped mid-response. Please try again.'`
+- Streams are never retried for user-cancelled (`'Cancelled'`) or timed-out responses (any error with `noEscalate = true`).
 
 ### `cancelAgentChat` — interrupt an active stream
 
@@ -282,6 +287,10 @@ This clause is appended in `inferIntent` (`inference.ts`) after `buildOwnerClaus
 **ASAR path fix — `pathToClaudeCodeExecutable` must be set explicitly.** The SDK's `sdk.mjs` lives inside `app.asar`; when it resolves the platform binary relative to its own `import.meta.url` it produces a path that includes `app.asar` — which is a file, not a directory — causing `spawn ENOTDIR` on every AI call. The fix is in `agent.ts`: `resolveClaudeExecutable()` computes the real, unpacked path via `app.getAppPath().replace('app.asar', 'app.asar.unpacked')`, then all three `query()` call sites pass `pathToClaudeCodeExecutable: resolveClaudeExecutable()`. This short-circuits the SDK's broken default without affecting dev mode (where `app.getAppPath()` points to the project root and the binary exists at the direct `node_modules` path).
 
 ## Changelog
+
+- 2026-06-26 — **Eliminate MCP cold-boot in chat via in-process bridge (`agent.ts`, `mcp.ts`, `mcp-bridge.ts`):** `streamAgentChat` no longer builds stdio/http/sse configs that the SDK cold-spawns. Instead it calls `await ensureServersConnected()` then `buildBridgedMcpServers()` (new `mcp-bridge.ts`), which produces `{ type: 'sdk', instance }` in-process proxy servers backed by the warm `mcp.ts` pool. The SDK calls `instance.connect(transport)` on these — no subprocess is ever spawned for chat turns. Cold-boot latency (previously up to 140 s per chat turn for N stdio MCP servers) drops to zero. Disconnected servers are simply absent from the map rather than hanging the stream. The `canUseTool` write-gate, `ask_user` server, and status heartbeat are unaffected.
+
+- 2026-06-26 — **Chat status heartbeat + specific timeout errors (`agent.ts`, `claude.ts`, `ambient.ts`, `plan.ts`, renderer):** `streamAgentChat`/`streamAgentChatOnce` accept an optional `onStatus` callback. When provided, a phase label is emitted immediately and every 8 s via `setInterval` so the renderer's 150 s safety backstop resets during long MCP cold-boot/tool-wait silences — making the backstop a true "main process died" guard rather than a race against the server watchdog. Phase transitions: `'Connecting to tools…'` on startup, `'Working…'` on first SDK message, `'Using {server}…'` on each tool call. The heartbeat clears on the first real text chunk. Timeout errors now carry `noEscalate = true` and specific text depending on whether the first SDK message had arrived. `ambient.ts` and `plan.ts` pass `onStatus` callbacks that broadcast status frames (`{ done: false, status }`) on their respective push channels. The renderer components (`IntentCard`, `PlanItemCard`, `PlanItemDetail`) handle status frames — resetting the backstop and updating the phase label — and also reset the backstop when `chat:tool-approval-request` and `chat:ask-question` events arrive. `ChatThread` renders `statusLabel ?? 'Thinking…'` in the thinking bubble.
 
 - 2026-06-25 — **Fix "Stream timed out" on observation chat — tool-call idle (`agent.ts`):** `resetIdle()` now accepts an optional `ms` parameter. When the SDK yields an assistant message containing `tool_use` blocks, `resetIdle` is called a second time with `STREAM_STARTUP_TIMEOUT_MS` (140 s), giving the MCP server network round-trip the same generous budget as the initial cold-spawn. Without this the 120 s inter-chunk timer fired during tool execution before the result arrived.
 

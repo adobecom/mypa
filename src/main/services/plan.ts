@@ -154,7 +154,12 @@ export async function handlePlanMessage(
       rawContext,
       itemId,
       'plan_chat',
-      true  // enableMcp — live read-only tools + write-action protocol
+      true,  // enableMcp — live read-only tools + write-action protocol
+      (status) => {
+        // Broadcast a status-only frame so the renderer displays current phase and
+        // resets its 150s safety backstop during long silent MCP waits.
+        broadcast('plan:item-message', { itemId, chunk: '', done: false, status })
+      },
     )
     const toSave = segments.filter((s) => s.trim())
     const segsToProcess = toSave.length > 0 ? toSave : [fullResponse]

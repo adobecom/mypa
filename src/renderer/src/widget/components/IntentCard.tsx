@@ -114,6 +114,7 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
   const [chatStreaming, setChatStreaming] = useState(false)
   const [chatStreamContent, setChatStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
+  const [chatStatusLabel, setChatStatusLabel] = useState<string | null>(null)
   const [revising, setRevising] = useState(false)
   const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null)
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
@@ -229,17 +230,18 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
     return off
   }, [intent.id])
 
-  // Subscribe to streamed assistant reply chunks
+  // Subscribe to streamed assistant reply chunks and status frames
   useEffect(() => {
     const off = api.on('ambient:chat-message', (payload) => {
-      const p = payload as { intentId: string; chunk: string; done: boolean; error?: string }
+      const p = payload as { intentId: string; chunk: string; done: boolean; error?: string; status?: string }
       if (p.intentId !== intent.id) return
       if (p.done) {
-        // Stream finished — clear the safety backstop
+        // Stream finished — clear the safety backstop and status label
         if (chatSafetyTimer.current) { clearTimeout(chatSafetyTimer.current); chatSafetyTimer.current = null }
         setPendingToolApproval(null)
         setPendingQuestion(null)
         setChatStreaming(false)
+        setChatStatusLabel(null)
         if (p.error) {
           setChatError(p.error)
         } else {
@@ -251,13 +253,23 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
             })
             .catch(console.error)
         }
-      } else {
-        // Reset the safety backstop on each live chunk
+      } else if (p.status !== undefined) {
+        // Status frame (empty chunk) — update the phase label and reset the safety backstop.
+        // This prevents the backstop from racing the server watchdog during long silent waits.
         if (chatSafetyTimer.current) clearTimeout(chatSafetyTimer.current)
         chatSafetyTimer.current = setTimeout(() => {
           setChatStreaming(false)
           setChatError('The assistant stopped responding. Please try again.')
         }, 150_000)
+        setChatStatusLabel(p.status)
+      } else {
+        // Real chunk — reset the safety backstop and clear any status label
+        if (chatSafetyTimer.current) clearTimeout(chatSafetyTimer.current)
+        chatSafetyTimer.current = setTimeout(() => {
+          setChatStreaming(false)
+          setChatError('The assistant stopped responding. Please try again.')
+        }, 150_000)
+        setChatStatusLabel(null)
         setChatStreamContent((prev) => prev + p.chunk)
       }
     })
@@ -268,6 +280,12 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
     const unsub = api.on('chat:tool-approval-request', (payload) => {
       const p = payload as PendingToolApproval
       if (p.streamId !== intent.id) return
+      // Reset the safety backstop — the stream is alive, just waiting for user approval.
+      if (chatSafetyTimer.current) clearTimeout(chatSafetyTimer.current)
+      chatSafetyTimer.current = setTimeout(() => {
+        setChatStreaming(false)
+        setChatError('The assistant stopped responding. Please try again.')
+      }, 150_000)
       setPendingToolApproval(p)
     })
     return unsub
@@ -277,6 +295,12 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
     const unsub = api.on('chat:ask-question', (payload) => {
       const p = payload as PendingQuestion
       if (p.streamId !== intent.id) return
+      // Reset the safety backstop — the stream is alive, just waiting for the user's answer.
+      if (chatSafetyTimer.current) clearTimeout(chatSafetyTimer.current)
+      chatSafetyTimer.current = setTimeout(() => {
+        setChatStreaming(false)
+        setChatError('The assistant stopped responding. Please try again.')
+      }, 150_000)
       setPendingQuestion(p)
     })
     return unsub
@@ -597,6 +621,7 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
             messages={chatThread}
             streaming={chatStreaming}
             streamingContent={chatStreamContent}
+            statusLabel={chatStatusLabel}
             onSend={handleChatSend}
             onStop={handleChatStop}
             error={chatError}

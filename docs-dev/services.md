@@ -31,7 +31,7 @@ Implements all AI calls using `@anthropic-ai/claude-agent-sdk` directly (no subp
 |---|---|
 | `runAgent(systemPrompt, userPrompt, source?, timeoutMs?, expectJson?)` | One-shot completion via SDK `query()` with `tools: []` (no built-in tools) and `maxTurns: 1`; model auto-selected via `model-router.ts`; escalates to next tier on failure; records usage per attempt |
 | `runAgentWithMcp(systemPrompt, userPrompt, source?)` | One-shot with live MCP servers passed via `options.mcpServers`; falls back to `runAgent` if no servers are connected |
-| `streamAgentChat(history, userMessage, onChunk, onDone, rawContext?, streamId?, source?, enableMcp?)` | Streaming multi-turn chat via async generator; when `enableMcp` is true, MCP servers are wired in via `options.mcpServers` and `canUseTool` gates write tools on user approval |
+| `streamAgentChat(history, userMessage, onChunk, onDone, rawContext?, streamId?, source?, enableMcp?, onStatus?)` | Streaming multi-turn chat via async generator; when `enableMcp` is true, MCP servers are wired in via `options.mcpServers` and `canUseTool` gates write tools on user approval; `onStatus` receives phase-label updates and a periodic heartbeat so callers can keep the renderer safety backstop alive during silent MCP waits |
 | `cancelAgentChat(streamId)` | Interrupt an active stream via `Query.interrupt()`; returns `true` if found |
 | `resolveToolApproval(approvalId, allow, editedInput?)` | Unblock a pending `canUseTool` write-gate; called by the `chat:resolve-tool-approval` IPC handler |
 | `resolveQuestion(questionId, answer)` | Unblock a pending `ask_user` tool invocation; called by the `chat:answer-question` IPC handler |
@@ -49,7 +49,7 @@ Forwards calls to `agent.ts`. The subprocess-spawn code has been removed. See [c
 |---|---|
 | `runClaude(systemPrompt, userPrompt, source?, timeoutMs?, expectJson?)` | Shim → `runAgent(...)` |
 | `runClaudeWithMcp(systemPrompt, userPrompt, source?)` | Shim → `runAgentWithMcp(...)` |
-| `streamChat(history, userMessage, onChunk, onDone, rawContext?, streamId?, source?, enableMcp?)` | Shim → `streamAgentChat(...)` |
+| `streamChat(history, userMessage, onChunk, onDone, rawContext?, streamId?, source?, enableMcp?, onStatus?)` | Shim → `streamAgentChat(...)` |
 | `cancelStream(streamId)` | Shim → `cancelAgentChat(streamId)` |
 | `generatePlanDraft(intent)` | Parse free-text intent → `PlanDraft` |
 | `generateRoutineDigest(name, promptTemplate, rawOutput)` | Summarize MCP output → `RoutineDigest` (`{ summary, body }`) |
@@ -97,8 +97,22 @@ Transport is selected from `McpServerConfig.transport` (`'stdio' | 'http' | 'sse
 | `connectAllServers()` | Connect all **enabled** servers from config (`enabled !== false`); serialized via mutex; disabled servers are explicitly disconnected |
 | `reconnectServer(name)` | Test or restore a named server under the mutex; returns `McpServerStatus`. Non-destructive when already connected: probes the live client with `listTools`; only falls back to a full reconnect if the probe fails or the server was not in the Map. Used by Settings "Test connection". |
 | `disconnectAllServers()` | Disconnect all active connections |
-| `callTool(server, tool, params)` | Call a tool on a connected server; throws when `result.isError` is set |
+| `callTool(server, tool, params)` | Call a tool on a connected server; flattens result to string; throws when `result.isError` is set |
+| `callToolRaw(server, tool, params)` | Like `callTool` but returns the raw MCP result (`{ content, isError? }`) without flattening or throwing; used by `mcp-bridge.ts` |
 | `getServerStatus()` | Return `McpServerStatus[]` from the in-memory Map; returns `{ disabled: true }` for servers with `enabled === false` |
+| `ensureServersConnected()` | Best-effort reconnect of any configured, enabled server not currently in the live Map; called before MCP-enabled chat turns |
+
+---
+
+## `mcp-bridge.ts` — In-process Agent SDK bridge
+
+Wraps the warm `mcp.ts` connection pool as in-process MCP proxy servers for the Agent SDK's `{ type: 'sdk', instance }` variant. Eliminates the per-chat cold-boot cost (no subprocess spawns for chat turns). See [mcp-and-oauth.md](mcp-and-oauth.md#mcp-in-the-agent-sdk) for the full design.
+
+**Key export:**
+
+| Export | Description |
+|---|---|
+| `buildBridgedMcpServers()` | Returns `Record<string, { type: 'sdk'; name: string; instance: Server }>` — one entry per connected pool server, keyed by sanitized name. Each proxy serves `tools/list` from the cached tool list (in-process, no round-trip) and forwards `tools/call` to the live client via `callToolRaw`. Disconnected servers are absent. |
 
 ---
 
@@ -354,6 +368,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-06-26 — **Eliminate MCP cold-boot in chat (`mcp.ts`, `mcp-bridge.ts`, `agent.ts`):** New `callToolRaw` export in `mcp.ts` returns raw `CallToolResult` without flattening (sibling to `callTool`). New `src/main/services/mcp-bridge.ts` with `buildBridgedMcpServers()` — creates one in-process `Server` proxy per connected pool entry, serving `tools/list` from cached tools and forwarding `tools/call` via `callToolRaw`. `streamAgentChat` in `agent.ts` now calls `await ensureServersConnected()` + `buildBridgedMcpServers()` instead of building stdio/http/sse configs — the SDK receives `{ type: 'sdk', instance }` servers and never spawns subprocesses for chat turns.
 
 - 2026-06-25 — **MCP transport generalization + enable/disable + isError + Linear ingestion.** `mcp.ts`: `connectServer` branches on `McpServerConfig.transport` (`'stdio' | 'http' | 'sse'`); uses `StreamableHTTPClientTransport` and `SSEClientTransport` from `@modelcontextprotocol/sdk` for URL-based servers; stderr ring buffer is stdio-only. `callTool` now throws when `result.isError` is set. `connectAllServers` skips servers with `enabled === false` (and calls `disconnectServer` for them). `getServerStatus` returns `{ disabled: true }` for disabled servers. Dead code removed: `lastKnownTools` Map and `getKnownServerTools()` export (CLI-era `--allowedTools` path). `agent.ts`: `sdkMcpServers` build loop handles `http`/`sse` transports with url+headers; skips disabled servers. `claude-import.ts`: `supported` now true for http/sse entries; `url` field forwarded. `ingestion.ts`: added `makeLinearAdapter()` + `parseLinearIssueText()` helper for plain-text Linear output; `STAGGER_OFFSETS.linear = 60_000`. `ambient.ts`: `VERB_TO_TOOL` and `AUTO_EXECUTABLE` extended with `linear:comment`; `enrichPayloadForRouting` and `buildToolArgs` gain linear branches.
 

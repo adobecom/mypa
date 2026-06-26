@@ -23,6 +23,7 @@ export default function PlanItemCard({
   const [streaming, setStreaming] = useState(false)
   const [streamContent, setStreamContent] = useState('')
   const [chatError, setChatError] = useState<string | null>(null)
+  const [chatStatusLabel, setChatStatusLabel] = useState<string | null>(null)
   const [pendingToolApproval, setPendingToolApproval] = useState<PendingToolApproval | null>(null)
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
   const safetyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -54,7 +55,7 @@ export default function PlanItemCard({
 
   useEffect(() => {
     const unsub = api.on('plan:item-message', (payload) => {
-      const p = payload as { itemId: string; chunk: string; done: boolean; error?: string }
+      const p = payload as { itemId: string; chunk: string; done: boolean; error?: string; status?: string }
       if (p.itemId !== item.id) return
       if (p.done) {
         if (safetyTimer.current) { clearTimeout(safetyTimer.current); safetyTimer.current = null }
@@ -62,11 +63,20 @@ export default function PlanItemCard({
         setPendingQuestion(null)
         setStreaming(false)
         setStreamContent('')
+        setChatStatusLabel(null)
         if (p.error) {
           setChatError(p.error)
         } else {
           api.plan.getThread(item.id).then(setThread)
         }
+      } else if (p.status !== undefined) {
+        // Status frame — update phase label and reset the safety backstop.
+        if (safetyTimer.current) clearTimeout(safetyTimer.current)
+        safetyTimer.current = setTimeout(() => {
+          setStreaming(false)
+          setChatError('The assistant stopped responding. Please try again.')
+        }, 150_000)
+        setChatStatusLabel(p.status)
       } else {
         if (safetyTimer.current) clearTimeout(safetyTimer.current)
         safetyTimer.current = setTimeout(() => {
@@ -74,6 +84,7 @@ export default function PlanItemCard({
           setChatError('The assistant stopped responding. Please try again.')
         }, 150_000)
         setStreaming(true)
+        setChatStatusLabel(null)
         setStreamContent((prev) => prev + p.chunk)
       }
     })
@@ -84,6 +95,12 @@ export default function PlanItemCard({
     const unsub = api.on('chat:tool-approval-request', (payload) => {
       const p = payload as PendingToolApproval
       if (p.streamId !== item.id) return
+      // Reset the safety backstop — stream is alive, waiting for user approval.
+      if (safetyTimer.current) clearTimeout(safetyTimer.current)
+      safetyTimer.current = setTimeout(() => {
+        setStreaming(false)
+        setChatError('The assistant stopped responding. Please try again.')
+      }, 150_000)
       setPendingToolApproval(p)
     })
     return unsub
@@ -93,6 +110,12 @@ export default function PlanItemCard({
     const unsub = api.on('chat:ask-question', (payload) => {
       const p = payload as PendingQuestion
       if (p.streamId !== item.id) return
+      // Reset the safety backstop — stream is alive, waiting for the user's answer.
+      if (safetyTimer.current) clearTimeout(safetyTimer.current)
+      safetyTimer.current = setTimeout(() => {
+        setStreaming(false)
+        setChatError('The assistant stopped responding. Please try again.')
+      }, 150_000)
       setPendingQuestion(p)
     })
     return unsub
@@ -150,6 +173,7 @@ export default function PlanItemCard({
               messages={thread}
               streaming={streaming}
               streamingContent={streamContent}
+              statusLabel={chatStatusLabel}
               onSend={handleSend}
               onStop={handleStop}
               sendDisabled={streaming}
