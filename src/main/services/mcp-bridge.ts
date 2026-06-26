@@ -31,6 +31,11 @@ export function buildBridgedMcpServers(): Record<string, { type: 'sdk'; name: st
     if (!status.connected || status.tools.length === 0) continue
 
     const safeName = status.name.replace(/[^a-zA-Z0-9_-]/g, '_')
+    // mypa_builtin is reserved for the in-process ask_user server added by
+    // buildAskUserServer(). A user-configured server that sanitizes to the same
+    // key would silently overwrite it in allMcpServers and bypass canUseTool
+    // write-gating. Skip it instead of producing an unpredictable collision.
+    if (safeName === 'mypa_builtin') continue
     const originalName = status.name
     // Snapshot cached tools at bridge-build time so this chat turn has a
     // consistent view even if the pool refreshes mid-stream.

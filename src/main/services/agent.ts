@@ -504,8 +504,12 @@ async function streamAgentChatOnce(
             const toolName: string = toolBlocks[0]?.name ?? ''
             const nameParts = toolName.split('__')
             const serverLabel = nameParts.length >= 2 ? nameParts[1] : toolName
-            phase = `Using ${serverLabel}…`
-            onStatus(phase)
+            // Don't show "Using mypa_builtin…" — ask_user is an invisible in-process
+            // tool; the rendered question chip is already sufficient user feedback.
+            if (serverLabel !== 'mypa_builtin') {
+              phase = `Using ${serverLabel}…`
+              onStatus(phase)
+            }
           }
         }
         const textBlocks = (msg.message?.content ?? []).filter(

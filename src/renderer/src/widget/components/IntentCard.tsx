@@ -255,12 +255,14 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
         }
       } else if (p.status !== undefined) {
         // Status frame (empty chunk) — update the phase label and reset the safety backstop.
-        // This prevents the backstop from racing the server watchdog during long silent waits.
+        // Also set streaming=true defensively: in normal flow ambient:chat-user-message sets
+        // it first, but this guard ensures the label renders even if that echo was dropped.
         if (chatSafetyTimer.current) clearTimeout(chatSafetyTimer.current)
         chatSafetyTimer.current = setTimeout(() => {
           setChatStreaming(false)
           setChatError('The assistant stopped responding. Please try again.')
         }, 150_000)
+        setChatStreaming(true)
         setChatStatusLabel(p.status)
       } else {
         // Real chunk — reset the safety backstop and clear any status label
@@ -312,6 +314,7 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
   }
 
   function handleChatStop(): void {
+    setChatStatusLabel(null)
     api.ambient.cancelChatStream(intent.id).catch(console.error)
   }
 
