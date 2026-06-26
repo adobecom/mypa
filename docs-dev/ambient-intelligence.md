@@ -85,7 +85,28 @@ A **signal** is a raw observed event from an external surface. Each signal is:
 - Marked `processed = 0` on insert; set to `1` after `ingestSignalIntoGraph` runs.
 - Optionally embedded (local vector stored in `embedding` BLOB) for semantic similarity.
 
-Supported surfaces: `github`, `jira`, `slack`.
+Supported surfaces: `github`, `jira`, `slack`, `linear`.
+
+### Adding a new surface (three-touchpoint recipe)
+
+To wire a new MCP server as a first-class surface (with ingestion reads and ambient auto-writes), update these three files in the same commit:
+
+1. **`src/shared/types.ts`** — add the new name to `IntentSurface`.
+
+2. **`src/main/services/ingestion.ts`** — implement `makeXxxAdapter(): SurfaceAdapter`:
+   - `surface: IntentSurface` — the new name
+   - `serverName` — matches the name in `AppConfig.mcp_servers`
+   - `isAvailable()` — checks `getServerStatus()`
+   - `poll()` — calls a fixed read tool, parses the output into `RawObservation[]`, sets `complete = false` when truncated
+   - `normalize(raw)` — maps `RawObservation` to `SignalInput`, calling `computeFingerprint` and `scrubRaw`
+   - Add the adapter to the `adapters` array and add a `STAGGER_OFFSETS` entry (space stagger by 20 000 ms increments from the last surface)
+
+3. **`src/main/services/ambient.ts`** — three spots:
+   - `VERB_TO_TOOL` — add `{ surfaceName: { comment: 'tool_name', … } }` entries (read-only verbs go in `AUTO_EXECUTABLE` too; destructive verbs like `close`/`merge` deliberately excluded)
+   - `enrichPayloadForRouting` — add a branch that injects `_`-prefixed routing IDs (issue key, channel ID, etc.) into `obj.proposed_action.payload` from `focusNodes` graph node keys (`surface:kind:id` format)
+   - `buildToolArgs` — add a branch that maps `_`-prefixed payload fields and LLM-authored content into the correct MCP tool argument shape
+
+**Deferral notes:** Notion is document-centric and a weaker intent fit (no inbox/assigned-item concept); defer wiring it as an ingestion surface. Postgres, brave-search, google-maps, memory, puppeteer, and filesystem are utility servers (no actionable signal stream); they remain chat/routine only.
 
 ---
 
@@ -292,6 +313,8 @@ These rows appear in `ambient.getLog()` interleaved with real `emitted`/`execute
 - `totalHits: N > 0` but no `emitted` row follows ⇒ inference dropped every candidate; see the `dropped:` breakdown in the cycle console log
 
 ## Changelog
+
+- 2026-06-25 — **Linear as a first-class ambient surface.** Added `'linear'` to `IntentSurface`. New `makeLinearAdapter()` in `ingestion.ts` polls `linear_get_user_issues` (text output), parses results with `parseLinearIssueText()`, and stores nodes as `linear:issue:<id>`. Added `STAGGER_OFFSETS.linear = 60_000`. Extended `VERB_TO_TOOL` with `linear: { comment: 'linear_add_comment' }`, `AUTO_EXECUTABLE` with `'linear:comment'`, `enrichPayloadForRouting` with a linear branch (injects `_issue_id`), and `buildToolArgs` with a linear branch (maps to `{ issueId, body }`). Added "Adding a new surface (three-touchpoint recipe)" guide section documenting the pattern for Notion and future surfaces.
 
 - 2026-06-22 — **Empty-sentinel filtering.** The inference system prompt instructs the model to emit `{"type":"flag","rationale":"nothing actionable","target":"nothing","verb":"none","confidence":0}` when there is nothing to surface. A malformed copy with `confidence ≥ 0.4` bypassed the confidence floor and rendered as a confusing card. Fixed by adding `isEmptySentinel()` in `inference.ts` — drops any flag intent where `verb==='none'` and rationale is `'nothing actionable'` or target is `'nothing'`, regardless of confidence. Applied in both `inferIntent` and `inferRoutineIntents`. `QueueView.tsx` also applies a defensive render-side filter to hide any already-persisted sentinel rows without a DB migration.
 

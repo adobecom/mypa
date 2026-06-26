@@ -161,9 +161,18 @@ export interface DeviceFlowStart {
 
 export interface McpServerConfig {
   name: string
-  command: string
+  /** Stdio command (required for stdio transport, absent for http/sse). */
+  command?: string
   args?: string[]
   env?: Record<string, string>
+  /** When false the server is configured but not connected. Defaults to true. */
+  enabled?: boolean
+  /** Transport type. Defaults to 'stdio' when command is present, 'http' when url is present. */
+  transport?: 'stdio' | 'http' | 'sse'
+  /** Server URL — required for http and sse transports. */
+  url?: string
+  /** Additional HTTP headers sent with every request (e.g. Authorization: Bearer …). */
+  headers?: Record<string, string>
 }
 
 export interface McpTool {
@@ -177,6 +186,8 @@ export interface McpServerStatus {
   connected: boolean
   tools: McpTool[]
   error?: string
+  /** True when the server is intentionally disabled (enabled: false in config). */
+  disabled?: boolean
 }
 
 export interface DetectedMcpServer {
@@ -184,9 +195,11 @@ export interface DetectedMcpServer {
   command?: string
   args?: string[]
   env?: Record<string, string>
-  /** 'stdio' | 'http' | 'sse' */
+  /** 'stdio' | 'http' | 'sse' | 'unknown' */
   type: string
-  /** true only for stdio servers (command present) */
+  /** Server URL — present for http/sse entries. */
+  url?: string
+  /** true for stdio, http, and sse servers (all are now supported transports). */
   supported: boolean
 }
 
@@ -288,7 +301,7 @@ export const DEFAULT_CONFIG: AppConfig = {
 
 // ─── Ambient Intelligence ────────────────────────────────────────────────────
 
-export type IntentSurface = 'github' | 'jira' | 'slack'
+export type IntentSurface = 'github' | 'jira' | 'slack' | 'linear'
 export type IntentType = 'action' | 'suggestion' | 'flag' | 'digest'
 export type IntentStatus =
   | 'pending'
@@ -608,6 +621,8 @@ export type AuthSource = 'apikey' | 'env' | 'cli-login' | 'none'
 export interface SetupHealthServer {
   name: string
   connected: boolean
+  /** True when the server is intentionally disabled (enabled: false in config). */
+  disabled?: boolean
   missingEnvKeys: string[]
   /** Filesystem path problems (missing, not a directory, unresolved tilde, etc.) */
   invalidArgs?: string[]

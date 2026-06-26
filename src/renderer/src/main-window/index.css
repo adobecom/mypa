@@ -649,9 +649,77 @@ html, body, #root {
 
 .mcp-server-row__dot--connected    { background: var(--green); box-shadow: 0 0 6px rgba(74, 222, 158, 0.5); }
 .mcp-server-row__dot--disconnected { background: var(--red); box-shadow: 0 0 6px rgba(248, 123, 123, 0.5); }
+.mcp-server-row__dot--disabled     { background: var(--text-muted); }
 
 .mcp-server-row__name { font-weight: 500; flex: 1; }
 .mcp-server-row__count { font-size: 11px; color: var(--text-muted); }
+
+/* ─── MCP tool inspector ────────────────────────────────────────────────────── */
+
+.mcp-tool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
+
+.mcp-tool-list__item {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+}
+.mcp-tool-list__item:last-child { border-bottom: none; }
+
+.mcp-tool-list__name {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mcp-tool-list__desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.mcp-tool-list__params {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px;
+  margin-top: 5px;
+}
+
+.mcp-tool-list__param-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  padding: 1px 0;
+}
+
+.mcp-tool-list__param-name {
+  font-family: var(--font-mono, monospace);
+  color: var(--text-secondary, var(--text-primary));
+  min-width: 120px;
+}
+
+.mcp-tool-list__param-type {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.mcp-tool-list__param-required {
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
 
 /* ─── Toast notifications ───────────────────────────────────────────────────── */
 

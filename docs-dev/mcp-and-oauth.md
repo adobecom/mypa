@@ -2,7 +2,7 @@
 
 ## MCP (Model Context Protocol)
 
-mypa connects to MCP servers over stdio transport using `@modelcontextprotocol/sdk`. Each server provides tools that routines and plan actions call.
+mypa connects to MCP servers using `@modelcontextprotocol/sdk`. Three transports are supported: stdio (local subprocess), HTTP (Streamable HTTP), and SSE (HTTP+SSE). Each server provides tools that routines and plan actions call.
 
 **Source files:**
 - `src/main/services/mcp.ts` — client manager
@@ -16,14 +16,20 @@ mypa connects to MCP servers over stdio transport using `@modelcontextprotocol/s
 
 ```ts
 interface McpServerConfig {
-  name:     string
-  command:  string           // executable to spawn (e.g. 'npx', 'uvx', '/path/to/bin')
-  args?:    string[]
-  env?:     Record<string, string>   // encrypted at rest with safeStorage
+  name:       string
+  command?:   string                    // executable — required for stdio; absent for http/sse
+  args?:      string[]
+  env?:       Record<string, string>    // encrypted at rest with safeStorage
+  enabled?:   boolean                   // false = configured but not connected (default true)
+  transport?: 'stdio' | 'http' | 'sse' // defaults to 'stdio' when command present, 'http' when url present
+  url?:       string                    // required for http and sse transports
+  headers?:   Record<string, string>    // optional auth headers sent with every request
 }
 ```
 
 Servers are stored in `AppConfig.mcp_servers`. Env var values with an `enc:` prefix are decrypted before being passed to the subprocess (see [configuration.md](configuration.md)).
+
+**Transport selection** — `connectServer` infers the transport when `transport` is absent: stdio when `command` is present, HTTP when `url` is present. Explicit `transport: 'sse'` selects the older HTTP+SSE transport (for servers that predate the Streamable HTTP spec).
 
 ---
 
@@ -38,8 +44,9 @@ Maintains a `Map<string, Client>` of active connections keyed by server name.
 | `connectAllServers()` | Called at startup and on every `config:update` — iterates `config.mcp_servers`, connects all; serialized via mutex |
 | `reconnectServer(name)` | Test or restore one named server under the mutex; returns `McpServerStatus`. When already connected, probes the live client with `listTools` (non-destructive); falls back to a full reconnect only when the server is not in the Map or the probe fails. This is the "Test connection" IPC action — the UI dot always reflects the actual live state. |
 | `disconnectAllServers()` | Called at shutdown |
-| `callTool(server, tool, params)` | Call a tool on a connected server; throws if server not found |
-| `getServerStatus()` | Return `McpServerStatus[]` from the in-memory Map (no reconnect) |
+| `callTool(server, tool, params)` | Call a tool on a connected server; throws if server not found or if `result.isError` is truthy |
+| `getServerStatus()` | Return `McpServerStatus[]` from the in-memory Map (no reconnect); disabled servers appear with `connected: false, disabled: true` |
+| `ensureServersConnected()` | Best-effort reconnect of any configured (and not-disabled) server not in the live Map; called before chat turns |
 
 **Concurrency:** a module-level `connectQueue` promise chain serializes `connectAllServers()` and `reconnectServer()`. Two near-simultaneous `config:update` calls (e.g. rapid saves or OAuth reconnect overlapping a save) cannot race and destroy each other's live connections.
 
@@ -194,15 +201,23 @@ Provider configurations (client IDs, scopes, token endpoints) live in `src/share
 
 ## MCP in the Agent SDK
 
-Since the Agent SDK migration, MCP servers are passed to AI calls via `options.mcpServers` on the SDK query — not via a `--mcp-config` temp file written to disk. `agent.ts` calls `getKnownServerTools()` from `mcp.ts` to build the server list; the same `lastKnownTools` cache that survives dead in-process clients is used, so live MCP state is not required for the list to be non-empty.
+MCP servers are passed to AI calls via `options.mcpServers` in the SDK `query()` call — not via a `--mcp-config` temp file. `agent.ts` builds the `sdkMcpServers` map directly from `cfg.mcp_servers`, supporting all three transports:
 
-The `canUseTool` callback in `agent.ts` replaces the old `--allowedTools` CLI flag:
+- **stdio** → `{ type: 'stdio', command, args?, env? }`
+- **http** → `{ type: 'http', url, headers? }`
+- **sse** → `{ type: 'sse', url, headers? }`
+
+Disabled servers (`enabled: false`) are skipped from the map.
+
+The `canUseTool` callback gates write tools:
 - Read-only tool names (prefix: `get`, `list`, `search`, `read`, `fetch`, `find`, `describe`, `view`, `show`, `check`, `query`, `inspect`) are auto-allowed.
 - Write tools block the stream and broadcast `chat:tool-approval-request` until the user responds via `resolveToolApproval()`.
 
 The in-process `ask_user` MCP server (created by `buildAskUserServer`) is registered under server key `mypa_builtin` and is always allowed by `canUseTool`.
 
 ## Changelog
+
+- 2026-06-25 — **MCP gap-closing audit:** four changes shipped together. (1) *HTTP/SSE transport:* `McpServerConfig` gains `transport?`, `url?`, and `headers?`; `mcp.ts:connectServer` branches on transport to use `StreamableHTTPClientTransport` or `SSEClientTransport` from the MCP SDK instead of always spawning a subprocess; `agent.ts:sdkMcpServers` emits `type:'http'`/`'sse'` entries for URL servers; `claude-import.ts` marks http/sse servers as `supported:true`. `ServerCatalogPicker` adds a "Custom server (URL)" phase D with name / URL / transport / optional auth-header inputs. (2) *Enable/disable toggle:* `McpServerConfig` gains `enabled?: boolean` (default true); `connectAllServers` skips and disconnects disabled servers; `getServerStatus` returns `disabled: true`; `SetupHealthServer` gains `disabled` field and skips credential validation for disabled servers; Settings UI adds a Power icon Enable/Disable button per row with opacity dimming. (3) *Tool inspector:* Settings server rows are expandable (chevron on tool count) to show per-tool name, description, and a compact `inputSchema` parameter grid (param name / type / required badge). No new IPC needed — data already arrives in `McpServerStatus.tools`. (4) *Correctness hygiene:* `callTool` now checks `result.isError` and throws on server-reported tool errors instead of returning error payloads as success strings. Dead CLI-era exports `getKnownServerTools()` and `lastKnownTools` removed from `mcp.ts` (no external callers; were vestigial from the pre-SDK `--allowedTools` path).
 
 - 2026-06-22 — **Agent SDK migration — MCP wiring changed:** MCP servers are now passed via `options.mcpServers` in the SDK query (not via a `--mcp-config` temp file). The `--allowedTools` CLI flag is replaced by the `canUseTool` SDK callback in `agent.ts` (read-only prefix auto-allow; write tools await user approval via `chat:tool-approval-request`). A new in-process `ask_user` MCP server (`mypa_builtin`) is registered alongside the user's configured servers for every chat stream.
 

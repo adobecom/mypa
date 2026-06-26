@@ -344,16 +344,35 @@ export async function streamAgentChat(
     : `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented. ${askUserGuidance}`
 
   // Build SDK mcpServers map from config when MCP is requested
-  const sdkMcpServers: Record<string, { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }> = {}
+  type SdkMcpEntry =
+    | { type?: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }
+    | { type: 'http'; url: string; headers?: Record<string, string> }
+    | { type: 'sse'; url: string; headers?: Record<string, string> }
+  const sdkMcpServers: Record<string, SdkMcpEntry> = {}
   if (enableMcp) {
     for (const srv of cfg.mcp_servers) {
-      if (!srv.command) continue
+      if (srv.enabled === false) continue
       const safeName = srv.name.replace(/[^a-zA-Z0-9_-]/g, '_')
-      sdkMcpServers[safeName] = {
-        type: 'stdio',
-        command: srv.command,
-        ...(srv.args?.length ? { args: srv.args } : {}),
-        ...(Object.keys(srv.env ?? {}).length ? { env: srv.env } : {}),
+      const transportKind = srv.transport ?? (srv.command ? 'stdio' : srv.url ? 'http' : null)
+      if (transportKind === 'http' && srv.url) {
+        sdkMcpServers[safeName] = {
+          type: 'http',
+          url: srv.url,
+          ...(srv.headers ? { headers: srv.headers } : {})
+        }
+      } else if (transportKind === 'sse' && srv.url) {
+        sdkMcpServers[safeName] = {
+          type: 'sse',
+          url: srv.url,
+          ...(srv.headers ? { headers: srv.headers } : {})
+        }
+      } else if (srv.command) {
+        sdkMcpServers[safeName] = {
+          type: 'stdio',
+          command: srv.command,
+          ...(srv.args?.length ? { args: srv.args } : {}),
+          ...(Object.keys(srv.env ?? {}).length ? { env: srv.env } : {}),
+        }
       }
     }
   }
@@ -387,7 +406,7 @@ async function streamAgentChatOnce(
   onChunk: (chunk: string) => void,
   streamId: string | undefined,
   source: UsageSource,
-  mcpServers?: Record<string, { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }>,
+  mcpServers?: Record<string, unknown>,
 ): Promise<string> {
   // Format conversation as a flat prompt — mirrors the CLI's -p approach.
   const prompt = messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')

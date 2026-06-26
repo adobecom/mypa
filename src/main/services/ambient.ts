@@ -85,11 +85,11 @@ export function startAmbient(getWin: () => BrowserWindow | null): void {
     return
   }
 
-  // Require at least one of github/jira/slack to be configured
-  const ambientSurfaces = ['github', 'jira', 'slack']
+  // Require at least one ingestion surface to be configured
+  const ambientSurfaces = ['github', 'jira', 'slack', 'linear']
   const hasSurface = cfg.mcp_servers.some((s) => ambientSurfaces.includes(s.name))
   if (!hasSurface) {
-    console.log('[ambient] no github/jira/slack server configured, skipping start')
+    console.log('[ambient] no github/jira/slack/linear server configured, skipping start')
     return
   }
 
@@ -742,6 +742,23 @@ function enrichPayloadForRouting(obj: IntentObject, focusNodes: GraphNode[]): vo
         _issue_key: issueKey
       }
     }
+    return
+  }
+
+  if (surface === 'linear') {
+    // Linear external_id is the issue identifier, e.g. "ENG-123".
+    // The graph node key is "linear:issue:{external_id}".
+    // Note: linear_add_comment accepts the identifier format in addition to the
+    // internal UUID, so passing the identifier directly is safe here.
+    const issueNode = focusNodes.find((n) => n.key.startsWith('linear:issue:'))
+    if (!issueNode) return
+    const issueId = issueNode.key.replace(/^linear:issue:/, '')
+    if (issueId) {
+      obj.proposed_action.payload = {
+        ...obj.proposed_action.payload,
+        _issue_id: issueId
+      }
+    }
   }
 }
 
@@ -754,7 +771,8 @@ const VERB_TO_TOOL: Record<string, Record<string, string>> = {
     approve: 'create_pull_request_review',
   },
   jira:   { comment: 'jira_add_comment' },
-  slack:  { reply: 'conversations_add_message', send: 'conversations_add_message' }
+  slack:  { reply: 'conversations_add_message', send: 'conversations_add_message' },
+  linear: { comment: 'linear_add_comment' }
 }
 
 // Hard allowlist of (surface:verb) pairs that may ever be auto-executed (tier < 2).
@@ -765,7 +783,8 @@ const AUTO_EXECUTABLE: ReadonlySet<string> = new Set([
   'github:label',
   'jira:comment',
   'slack:reply',
-  'slack:send'
+  'slack:send',
+  'linear:comment'
 ])
 
 function verbToTool(surface: string, verb: string): string | null {
@@ -831,6 +850,13 @@ function buildToolArgs(intent: Intent): Record<string, unknown> {
     // depending on the server version; satisfying both avoids false pre-flight failures.
     const text = body ?? comment
     return { ...clean, issue_key: _issue_key, comment: text, body: text }
+  }
+
+  if (intent.surface === 'linear') {
+    const { _issue_id, body, ...rest } = p
+    const clean = Object.fromEntries(Object.entries(rest).filter(([k]) => !k.startsWith('_')))
+    // linear_add_comment requires: issueId (identifier or UUID) and body (markdown)
+    return { ...clean, issueId: _issue_id, body }
   }
 
   // Any future surface: strip _ fields and pass the rest verbatim

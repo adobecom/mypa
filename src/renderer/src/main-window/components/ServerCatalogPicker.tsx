@@ -11,7 +11,7 @@ interface Props {
   existingNames?: string[]
 }
 
-type Phase = 'catalog' | 'configure' | 'import'
+type Phase = 'catalog' | 'configure' | 'import' | 'custom'
 
 export default function ServerCatalogPicker({ onAdd, onCancel, oauthCreds, onCredentialSave, existingNames = [] }: Props): React.ReactElement {
   const [phase, setPhase] = useState<Phase>('catalog')
@@ -39,12 +39,23 @@ export default function ServerCatalogPicker({ onAdd, onCancel, oauthCreds, onCre
     )
   }
 
+  if (phase === 'custom') {
+    return (
+      <CustomServerPanel
+        existingNames={existingNames}
+        onBack={() => setPhase('catalog')}
+        onAdd={onAdd}
+      />
+    )
+  }
+
   return (
     <CatalogGrid
       existingNames={existingNames}
       onSelect={(entry) => { setSelected(entry); setPhase('configure') }}
       onCancel={onCancel}
       onImport={() => setPhase('import')}
+      onCustom={() => setPhase('custom')}
     />
   )
 }
@@ -55,11 +66,13 @@ function CatalogGrid({
   onSelect,
   onCancel,
   onImport,
+  onCustom,
   existingNames
 }: {
   onSelect: (entry: McpCatalogEntry) => void
   onCancel: () => void
   onImport: () => void
+  onCustom: () => void
   existingNames: string[]
 }): React.ReactElement {
   const [query, setQuery] = useState('')
@@ -170,6 +183,27 @@ function CatalogGrid({
           )
         })
       )}
+
+      {/* Custom / URL-based server entry point */}
+      <button
+        className="btn btn--ghost"
+        onClick={onCustom}
+        style={{
+          width: '100%',
+          justifyContent: 'flex-start',
+          gap: 8,
+          marginTop: 4,
+          padding: '8px 12px',
+          border: '1px dashed var(--border)',
+          borderRadius: 'var(--radius-md)',
+        }}
+      >
+        <ExternalLink size={13} style={{ flexShrink: 0 }} />
+        <div style={{ textAlign: 'left' }}>
+          <div style={{ fontSize: 13, fontWeight: 500 }}>Custom server (URL)</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>Connect to any HTTP or SSE remote MCP server</div>
+        </div>
+      </button>
     </div>
   )
 }
@@ -727,12 +761,22 @@ function ImportPanel({
     const imported: string[] = []
     try {
       for (const s of toImport) {
-        await onAdd({
-          name: s.name,
-          command: s.command!,
-          args: s.args,
-          env: s.env && Object.keys(s.env).length ? s.env : undefined
-        })
+        if (s.command) {
+          await onAdd({
+            name: s.name,
+            command: s.command,
+            args: s.args,
+            env: s.env && Object.keys(s.env).length ? s.env : undefined
+          })
+        } else {
+          // http or sse server detected from Claude Code config
+          await onAdd({
+            name: s.name,
+            transport: (s.type === 'sse' ? 'sse' : 'http') as 'http' | 'sse',
+            url: s.url,
+            env: s.env && Object.keys(s.env).length ? s.env : undefined
+          })
+        }
         imported.push(s.name)
       }
       setDone(true)
@@ -812,7 +856,7 @@ function ImportPanel({
                   {srv.name}
                   {!srv.supported && (
                     <span style={{ fontSize: 10, color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 4, padding: '1px 5px' }}>
-                      {srv.type} — unsupported
+                      {srv.type} — unknown type
                     </span>
                   )}
                 </div>
@@ -843,6 +887,146 @@ function ImportPanel({
             {importing ? <span className="spinner" /> : `Import ${selectedCount > 0 ? selectedCount : ''} server${selectedCount !== 1 ? 's' : ''}`}
           </button>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Phase D: Custom URL server ───────────────────────────────────────────────
+
+function CustomServerPanel({
+  existingNames,
+  onBack,
+  onAdd
+}: {
+  existingNames: string[]
+  onBack: () => void
+  onAdd: (srv: McpServerConfig) => Promise<void> | void
+}): React.ReactElement {
+  const [name, setName] = useState('')
+  const [url, setUrl] = useState('')
+  const [transport, setTransport] = useState<'http' | 'sse'>('http')
+  const [headerKey, setHeaderKey] = useState('')
+  const [headerValue, setHeaderValue] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const nameTaken = existingNames.includes(name.trim())
+  const canAdd = name.trim().length > 0 && url.trim().length > 0 && !nameTaken
+
+  const handleAdd = async () => {
+    if (!canAdd) return
+    setSaving(true)
+    setError('')
+    try {
+      const srv: McpServerConfig = {
+        name: name.trim(),
+        transport,
+        url: url.trim(),
+        ...(headerKey.trim() && headerValue.trim()
+          ? { headers: { [headerKey.trim()]: headerValue.trim() } }
+          : {})
+      }
+      await onAdd(srv)
+      onBack()
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to add server')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+        <button className="btn btn--ghost btn--sm" onClick={onBack} style={{ padding: '4px 6px' }}>
+          <ArrowLeft size={14} />
+        </button>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>Custom server (URL)</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Connect to an HTTP or SSE remote MCP server</div>
+        </div>
+      </div>
+
+      {error && <div className="alert alert--error" style={{ marginBottom: 10 }}>{error}</div>}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div>
+          <label className="form-label">Name</label>
+          <input
+            className="form-input"
+            placeholder="my-server"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          {nameTaken && (
+            <div className="form-hint" style={{ color: 'var(--color-danger, #f87b7b)' }}>
+              A server named "{name}" already exists.
+            </div>
+          )}
+        </div>
+
+        <div>
+          <label className="form-label">Server URL</label>
+          <input
+            className="form-input"
+            placeholder="https://example.com/mcp"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+          />
+        </div>
+
+        <div>
+          <label className="form-label">Transport</label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {(['http', 'sse'] as const).map((t) => (
+              <button
+                key={t}
+                className={`btn btn--sm ${transport === t ? 'btn--primary' : 'btn--ghost'}`}
+                onClick={() => setTransport(t)}
+              >
+                {t === 'http' ? 'HTTP (Streamable)' : 'SSE (legacy)'}
+              </button>
+            ))}
+          </div>
+          <div className="form-hint">
+            {transport === 'http'
+              ? 'Use HTTP for servers that support the MCP Streamable HTTP transport (recommended).'
+              : 'Use SSE for older servers that only support the HTTP+SSE transport.'}
+          </div>
+        </div>
+
+        <div>
+          <label className="form-label">Auth header (optional)</label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              className="form-input"
+              placeholder="Authorization"
+              value={headerKey}
+              onChange={(e) => setHeaderKey(e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <input
+              className="form-input"
+              placeholder="Bearer …"
+              value={headerValue}
+              onChange={(e) => setHeaderValue(e.target.value)}
+              style={{ flex: 2 }}
+            />
+          </div>
+          <div className="form-hint">Optional HTTP header sent with every request (e.g. for token-based auth).</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+        <button className="btn btn--ghost btn--sm" onClick={onBack}>Cancel</button>
+        <button
+          className="btn btn--primary btn--sm"
+          onClick={handleAdd}
+          disabled={!canAdd || saving}
+        >
+          {saving ? <span className="spinner" /> : 'Add server'}
+        </button>
       </div>
     </div>
   )
