@@ -30,6 +30,27 @@ app.on('activate', () => {
   openOrFocusMainWindow()
 })
 
+// Guard against async EPIPE errors emitted on the claude-agent-sdk subprocess's
+// stdin stream when the child exits while a write is still queued (e.g. on abort
+// or timeout). The SDK attaches no 'error' listener to that private stream, so the
+// error would otherwise surface as an Electron uncaught-exception OS dialog.
+// All other errors are logged and, in packaged builds, shown as an error dialog
+// (parity with the prior Electron default behavior).
+process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
+  if (err?.code === 'EPIPE' || /\bEPIPE\b/.test(err?.message ?? '')) {
+    console.warn('[main] ignoring benign EPIPE from subprocess stdin:', err.message)
+    return
+  }
+  console.error('[main] uncaught exception:', err)
+  if (app.isPackaged) {
+    dialog.showErrorBox('mypa encountered an error', err?.stack ?? String(err))
+  }
+})
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[main] unhandled rejection:', reason)
+})
+
 async function main(): Promise<void> {
   // Augment PATH so packaged GUI builds can find claude, npx, etc.
   // Must run before any child-process spawning (MCP, claude CLI, which-checks).
