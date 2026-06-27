@@ -250,12 +250,13 @@ export async function runAmbientCycle(
 
     const packet = await assembleContextPacket(hit.kind, hit.focusNodeIds)
     let result: InferIntentResult
+    let usedDeepSlot = false
     try {
       if (isDeepEligible(hit) && deepEnrichmentCount < MAX_DEEP_PER_CYCLE) {
         console.log(`[ambient] deep enrichment #${deepEnrichmentCount + 1} for ${hit.relation ?? hit.kind} item`)
         try {
           result = await inferDeepIntent(hit, packet)
-          deepEnrichmentCount++
+          usedDeepSlot = true
         } catch (deepErr) {
           console.error('[ambient] deep enrichment failed, falling back to lightweight inference:', deepErr)
           result = await inferIntent(hit, packet)
@@ -273,6 +274,8 @@ export async function runAmbientCycle(
       dropCounts[reason] = (dropCounts[reason] ?? 0) + 1
       continue
     }
+    // Only consume a deep slot when the result survived all drop checks
+    if (usedDeepSlot) deepEnrichmentCount++
 
     // Mark focus nodes covered within this cycle to prevent same-cycle duplicates
     for (const id of hit.focusNodeIds) covered.add(id)
@@ -621,6 +624,8 @@ async function executeActions(intent: Intent, win: BrowserWindow | null): Promis
   const actionType = `${primaryAction.server}:${primaryAction.tool}`
 
   try {
+    // Pre-flight pass: validate ALL actions before executing any, so we never commit
+    // a partial side effect (action[0] executed) when action[1] would fail validation.
     for (const action of actions) {
       const at = `${action.server}:${action.tool}`
       const schema = getToolInputSchema(action.server, action.tool)
@@ -634,6 +639,10 @@ async function executeActions(intent: Intent, win: BrowserWindow | null): Promis
           return
         }
       }
+    }
+    // Execution pass: all pre-flights passed — execute in order
+    for (const action of actions) {
+      const at = `${action.server}:${action.tool}`
       const toolResult = await callTool(action.server, action.tool, action.params)
       console.log(`[ambient] executeActions executed ${at}:`, toolResult.slice(0, 200))
     }
@@ -1075,7 +1084,7 @@ export function ambientDismissIntent(id: string): Intent | null {
   dbAppendActionLog({
     intent_id: id,
     event: 'dismissed',
-    action_type: `${intent.surface}:${intent.verb}`,
+    action_type: dismissActionType,
     tier: intent.tier,
     detail: {},
     created_at: new Date().toISOString()
@@ -1142,6 +1151,22 @@ export async function reviseIntentFromChat(
           reversibility: result.intent.reversibility,
           required_approval: result.intent.required_approval
         })
+        // For agentic intents (actions[]), propagate any revised draft text back into
+        // actions[0].params so the approve path sends the updated content, not the
+        // original pre-revision params. The reproposeIntent path uses the verb/payload
+        // contract; we merge the text param across.
+        if (intent.actions && intent.actions.length > 0) {
+          const newPayload = result.intent.proposed_action.payload ?? {}
+          const draftKey = ['body', 'text', 'comment', 'message'].find(
+            (k) => typeof newPayload[k] === 'string'
+          )
+          if (draftKey) {
+            const updatedActions = intent.actions.map((a, i) =>
+              i === 0 ? { ...a, params: { ...a.params, [draftKey]: newPayload[draftKey] } } : a
+            )
+            dbUpdateIntentActions(id, updatedActions)
+          }
+        }
         applied = true
       }
     }

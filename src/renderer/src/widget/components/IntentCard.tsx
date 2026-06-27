@@ -351,13 +351,18 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
       const result = await api.ambient.reviseFromChat(intent.id)
       if (result) {
         onIntentChange(result.intent as Intent)
-        // Update draft text to the new proposal if it has a payload body
-        const newPayload = (result.intent as Intent).payload ?? {}
+        // For agentic intents, the revised draft lives in actions[0].params;
+        // fall back to payload for legacy verb-based intents.
+        const updatedIntent = result.intent as Intent
+        const actionParams = updatedIntent.actions && updatedIntent.actions.length > 0
+          ? updatedIntent.actions[0].params
+          : null
+        const newDraftSource: Record<string, unknown> = actionParams ?? (updatedIntent.payload ?? {})
         const newDraftKey = ['body', 'text', 'comment', 'message'].find(
-          (k) => typeof newPayload[k] === 'string'
+          (k) => typeof newDraftSource[k] === 'string'
         )
         if (newDraftKey) {
-          setDraftText(String(newPayload[newDraftKey]))
+          setDraftText(String(newDraftSource[newDraftKey]))
         }
         // Re-fetch thread so the appended assistant reply appears
         api.ambient.getChatThread(intent.id)

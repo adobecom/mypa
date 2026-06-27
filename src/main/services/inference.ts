@@ -490,11 +490,11 @@ Rules:
 
 /**
  * Parses the raw text response from a deep-inference agentic run into an IntentObject
- * with a validated actions[] array. Actions for disconnected servers are dropped.
+ * with a validated actions[] array. Actions for disconnected or unknown-tool servers are dropped.
  */
 function parseDeepIntentObject(
   text: string,
-  connectedServers: Set<string>
+  connectedServerMap: Map<string, Set<string>>
 ): IntentObject | null {
   const match = text.match(/\{[\s\S]*\}/)
   if (!match) return null
@@ -516,7 +516,7 @@ function parseDeepIntentObject(
   const required_approval = raw.required_approval !== false
   const target = String(raw.target ?? '')
 
-  // Parse and validate the actions array — only keep actions for connected servers
+  // Parse and validate the actions array — only keep actions for connected servers with known tools
   const rawActions = Array.isArray(raw.actions) ? raw.actions : []
   const actions: McpActionRef[] = rawActions.flatMap((a) => {
     if (typeof a !== 'object' || a === null) return []
@@ -525,7 +525,8 @@ function parseDeepIntentObject(
     const params = (typeof (a as Record<string, unknown>).params === 'object' && (a as Record<string, unknown>).params !== null)
       ? (a as Record<string, unknown>).params as Record<string, unknown>
       : {}
-    if (!server || !tool || !connectedServers.has(server)) return []
+    const knownTools = connectedServerMap.get(server)
+    if (!server || !tool || !knownTools || !knownTools.has(tool)) return []
     // Validate required params against the live tool schema as a best-effort pre-flight
     const schema = getToolInputSchema(server, tool)
     if (schema) {
@@ -583,18 +584,29 @@ export async function inferDeepIntent(
 
   const resolvedPacket = packet ?? await assembleContextPacket(hit.kind, hit.focusNodeIds)
 
-  // Collect connected servers and their available tools for the prompt
+  // Collect connected stdio-only servers that have at least one tool advertised.
+  // runAgentWithMcp only provisions stdio servers (those with a command field),
+  // so including http/sse servers in the prompt would cause the agent to propose
+  // tool calls it can't actually make.
   const serverStatus = getServerStatus()
-  const connectedServers = serverStatus.filter((s) => s.connected && !s.disabled)
-  const connectedServerNames = new Set(connectedServers.map((s) => s.name))
+  const stdioNames = new Set(cfg.mcp_servers.filter((s) => s.command).map((s) => s.name))
+  const connectedServers = serverStatus.filter(
+    (s) => s.connected && !s.disabled && stdioNames.has(s.name) && s.tools.length > 0
+  )
+  // Map of server → Set<toolName> used by parseDeepIntentObject for strict validation (INF-6)
+  const connectedServerMap = new Map(
+    connectedServers.map((s) => [s.name, new Set(s.tools.map((t) => t.name))])
+  )
 
   if (connectedServers.length === 0) {
-    console.log('[inference:deep] no MCP servers connected — falling back to lightweight inference')
+    console.log('[inference:deep] no stdio MCP servers with tools connected — falling back to lightweight inference')
     return inferIntent(hit, resolvedPacket)
   }
 
+  // Sanitize server/tool names before embedding them in the prompt (INF-5)
+  const sanitize = (name: string): string => name.replace(/[^a-zA-Z0-9_\-.]/g, '_')
   const serverList = connectedServers
-    .map((s) => `  ${s.name}:\n${s.tools.map((t) => `    - ${t.name}`).join('\n')}`)
+    .map((s) => `  ${sanitize(s.name)}:\n${s.tools.map((t) => `    - ${sanitize(t.name)}`).join('\n')}`)
     .join('\n')
 
   // Render focus-node identifiers so the agent knows what to look up
@@ -609,30 +621,35 @@ export async function inferDeepIntent(
   const systemPrompt = DEEP_SYSTEM_PROMPT + buildOwnerClause() + buildDirectivesClause() + persona +
     `\n\nAvailable MCP servers and tools:\n${serverList}`
 
-  const userPrompt = `The following work item has been directed at the user and requires their attention.
-Trigger reason: ${hit.reason}
-Relation: ${hit.relation ?? 'waiting'}
+  // Sanitize user-controlled free-text before injecting into the prompt to prevent
+  // prompt injection via PR titles, branch names, or issue descriptions (INF-2/INF-3).
+  const sanitizeText = (s: string): string => s.replace(/[\r\n]+/g, ' ').trim()
 
-Focus items to investigate:
-${focusLines || '  (no focus nodes — use the trigger reason to guide your search)'}
-
-Here is the current cached context from the user's work environment. Use this as a starting point, then use your MCP tools to gather the full picture before proposing.
+  const userPrompt = `A work item has been directed at the user and requires their attention.
 
 <context>
 ${context}
+
+<trigger>
+Relation: ${sanitizeText(hit.relation ?? 'waiting')}
+Reason: ${sanitizeText(hit.reason)}
+
+Focus items to investigate:
+${focusLines || '  (no focus nodes — use the trigger reason to guide your search)'}
+</trigger>
 </context>
 
-Go gather the full context needed (PR diff, linked tickets, issue thread, etc.), form a genuine technical opinion, then respond with the JSON proposal.`
+Use your MCP tools to gather the full context needed (PR diff, linked tickets, issue thread, etc.), form a genuine technical opinion, then respond with the JSON proposal.`
 
   let text: string
   try {
     text = await runClaudeWithMcp(systemPrompt, userPrompt, 'review')
   } catch (e) {
-    console.error('[inference:deep] runClaudeWithMcp failed:', e)
-    return { obj: null, dropReason: 'error' }
+    console.error('[inference:deep] runClaudeWithMcp failed — falling back to lightweight inference:', e)
+    return inferIntent(hit, resolvedPacket)
   }
 
-  const parsed = parseDeepIntentObject(text, connectedServerNames)
+  const parsed = parseDeepIntentObject(text, connectedServerMap)
   if (!parsed) {
     console.warn('[inference:deep] failed to parse deep IntentObject')
     return { obj: null, dropReason: 'parse-fail' }

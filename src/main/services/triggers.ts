@@ -267,6 +267,18 @@ export function evalEventTriggers(newSignals: Signal[]): TriggerHit[] {
 // If two hits overlap in focusNodeIds, merge them into one to avoid
 // emitting redundant intents.
 
+// Priority for deep-enrichment eligibility — higher wins on merge.
+const RELATION_PRIORITY: Record<string, number> = {
+  review_requested: 3,
+  assigned: 2,
+  mentioned: 2,
+  dm: 1,
+  thread_reply: 1,
+}
+function relationPriority(r: string | undefined): number {
+  return r ? (RELATION_PRIORITY[r] ?? 0) : 0
+}
+
 export function coalesceHits(hits: TriggerHit[]): TriggerHit[] {
   if (hits.length <= 1) return hits
   const result: TriggerHit[] = []
@@ -277,8 +289,10 @@ export function coalesceHits(hits: TriggerHit[]): TriggerHit[] {
       if (existing) {
         existing.focusNodeIds = [...new Set([...existing.focusNodeIds, ...hit.focusNodeIds])]
         existing.reason += `; ${hit.reason}`
-        // Prefer the most specific relation for deep-enrichment eligibility
-        if (!existing.relation && hit.relation) existing.relation = hit.relation
+        // Prefer the highest-priority relation so review_requested beats dm/thread_reply
+        if (relationPriority(hit.relation) > relationPriority(existing.relation)) {
+          existing.relation = hit.relation
+        }
         continue
       }
     } else {
