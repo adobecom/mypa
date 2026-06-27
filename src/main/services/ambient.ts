@@ -9,6 +9,7 @@ import {
   dbUpdateIntentStatus,
   dbSetIntentChallengeReason,
   dbUpdateIntentPayload,
+  dbUpdateIntentActions,
   dbCreateAmbientActionRecord,
   dbAppendActionLog,
   dbGetAllPolicies,
@@ -30,8 +31,8 @@ import { violatesScope } from './scope'
 import { callTool, getToolInputSchema, ensureServersConnected } from './mcp'
 import { startIngestion, stopIngestion, pollOnce, getLastCompletePollAt } from './ingestion'
 import { ingestSignalIntoGraph, assembleContextPacket, startDecayTimer, stopDecayTimer, renderPacketForPrompt } from './memory-graph'
-import { evalEventTriggers, evalTime, coalesceHits, evalWaitingOnMeFromGraph, evalStaleAndMine } from './triggers'
-import { inferIntent, reproposeIntent } from './inference'
+import { evalEventTriggers, evalTime, coalesceHits, evalWaitingOnMeFromGraph, evalStaleAndMine, isDeepEligible } from './triggers'
+import { inferIntent, inferDeepIntent, reproposeIntent } from './inference'
 import { streamChat, cancelStream } from './claude'
 import type { InferIntentResult } from './inference'
 import { enqueueEmbeddings, enqueueBackfill, enqueueMemoryBackfill } from './embeddings'
@@ -228,6 +229,10 @@ export async function runAmbientCycle(
   let skippedCovered = 0
   let skippedCooldown = 0
   const dropCounts: Record<string, number> = {}
+  // Cap expensive Opus deep-enrichment runs per cycle to bound latency and cost.
+  // Remaining eligible hits fall back to the lightweight single-turn inference.
+  const MAX_DEEP_PER_CYCLE = 2
+  let deepEnrichmentCount = 0
 
   for (const hit of hits) {
     // Skip hits whose focus nodes are already covered by a pending intent.
@@ -245,8 +250,20 @@ export async function runAmbientCycle(
 
     const packet = await assembleContextPacket(hit.kind, hit.focusNodeIds)
     let result: InferIntentResult
+    let usedDeepSlot = false
     try {
-      result = await inferIntent(hit, packet)
+      if (isDeepEligible(hit) && deepEnrichmentCount < MAX_DEEP_PER_CYCLE) {
+        console.log(`[ambient] deep enrichment #${deepEnrichmentCount + 1} for ${hit.relation ?? hit.kind} item`)
+        try {
+          result = await inferDeepIntent(hit, packet)
+          usedDeepSlot = true
+        } catch (deepErr) {
+          console.error('[ambient] deep enrichment failed, falling back to lightweight inference:', deepErr)
+          result = await inferIntent(hit, packet)
+        }
+      } else {
+        result = await inferIntent(hit, packet)
+      }
     } catch (e) {
       console.error('[ambient] inference error:', e)
       dropCounts.error = (dropCounts.error ?? 0) + 1
@@ -257,6 +274,8 @@ export async function runAmbientCycle(
       dropCounts[reason] = (dropCounts[reason] ?? 0) + 1
       continue
     }
+    // Only consume a deep slot when the result survived all drop checks
+    if (usedDeepSlot) deepEnrichmentCount++
 
     // Mark focus nodes covered within this cycle to prevent same-cycle duplicates
     for (const id of hit.focusNodeIds) covered.add(id)
@@ -592,7 +611,81 @@ function recordIntentFailure(intent: Intent, msg: string, win: BrowserWindow | n
   refreshTray(win)
 }
 
+/**
+ * Execute a generic actions[] intent — the schema-driven path for agentic deep-proposals.
+ * Loops over intent.actions, validates each against the tool's live inputSchema, then
+ * calls callTool(server, tool, params). No verb maps, no buildToolArgs — fully generic.
+ */
+async function executeActions(intent: Intent, win: BrowserWindow | null): Promise<void> {
+  const actions = intent.actions ?? []
+  if (actions.length === 0) return
+
+  const primaryAction = actions[0]
+  const actionType = `${primaryAction.server}:${primaryAction.tool}`
+
+  try {
+    // Pre-flight pass: validate ALL actions before executing any, so we never commit
+    // a partial side effect (action[0] executed) when action[1] would fail validation.
+    for (const action of actions) {
+      const at = `${action.server}:${action.tool}`
+      const schema = getToolInputSchema(action.server, action.tool)
+      if (schema) {
+        const required = (schema.required as string[] | undefined) ?? []
+        const missing = required.filter((k) => action.params[k] === undefined || action.params[k] === null)
+        if (missing.length > 0) {
+          const humanMsg = `Could not resolve required details (${missing.join(', ')}) for ${at}. Use "Chat about it" to discuss or correct this action.`
+          console.warn(`[ambient] executeActions pre-flight failed for ${at}: missing ${missing.join(', ')}`)
+          recordIntentFailure(intent, humanMsg, win)
+          return
+        }
+      }
+    }
+    // Execution pass: all pre-flights passed — execute in order
+    for (const action of actions) {
+      const at = `${action.server}:${action.tool}`
+      const toolResult = await callTool(action.server, action.tool, action.params)
+      console.log(`[ambient] executeActions executed ${at}:`, toolResult.slice(0, 200))
+    }
+
+    dbUpdateIntentStatus(intent.id, 'executed')
+    recordExecution(actionType)
+    dbAppendActionLog({
+      intent_id: intent.id,
+      event: 'executed',
+      action_type: actionType,
+      tier: intent.tier,
+      detail: {},
+      created_at: new Date().toISOString()
+    })
+
+    try {
+      dbCreateAmbientActionRecord(intent)
+      updateBadgeCount()
+    } catch (graduationErr) {
+      console.error('[ambient] failed to create graduation plan record:', graduationErr)
+    }
+  } catch (e: any) {
+    console.error(`[ambient] executeActions failed for ${actionType}:`, e)
+    recordIntentFailure(intent, String(e?.message ?? e), win)
+    return
+  }
+
+  const updated = dbGetIntent(intent.id)!
+  pushIntent(updated, win)
+  refreshTray(win)
+
+  if (updated.status === 'executed') {
+    broadcast('ambient:action-executed', updated)
+  }
+}
+
 async function executeIntent(intent: Intent, win: BrowserWindow | null): Promise<void> {
+  // Route to the generic schema-driven executor when the intent carries actions[]
+  if (intent.actions && intent.actions.length > 0) {
+    await executeActions(intent, win)
+    return
+  }
+
   const actionType = `${intent.surface}:${intent.verb}`
   try {
     if (intent.surface && intent.verb && intent.verb !== 'none' && intent.verb !== 'summarize') {
@@ -944,23 +1037,38 @@ export async function ambientApproveIntent(
   if (!intent) throw new Error(`Intent ${id} not found`)
   const win = getWidgetWin?.() ?? null
 
-  // Persist user-edited payload before execution so executeIntent reads the updated text
+  // Persist user-edited draft before execution
   if (editedPayload && Object.keys(editedPayload).length > 0) {
-    dbUpdateIntentPayload(id, editedPayload)
+    if (intent.actions && intent.actions.length > 0) {
+      // Generic path: merge the edited draft key back into actions[0].params
+      const DRAFT_KEYS = ['body', 'message', 'text', 'comment']
+      const draftKey = DRAFT_KEYS.find((k) => typeof (editedPayload as Record<string, unknown>)[k] === 'string')
+      if (draftKey) {
+        const updatedActions = intent.actions.map((a, i) =>
+          i === 0 ? { ...a, params: { ...a.params, [draftKey]: (editedPayload as Record<string, unknown>)[draftKey] } } : a
+        )
+        dbUpdateIntentActions(id, updatedActions)
+      }
+    } else {
+      dbUpdateIntentPayload(id, editedPayload)
+    }
   }
 
   dbUpdateIntentStatus(id, 'approved')
-  recordApproval(`${intent.surface}:${intent.verb}`)
+  const approvalActionType = (intent.actions && intent.actions.length > 0)
+    ? `${intent.actions[0].server}:${intent.actions[0].tool}`
+    : `${intent.surface}:${intent.verb}`
+  recordApproval(approvalActionType)
   dbAppendActionLog({
     intent_id: id,
     event: 'approved',
-    action_type: `${intent.surface}:${intent.verb}`,
+    action_type: approvalActionType,
     tier: intent.tier,
     detail: { edited: !!editedPayload },
     created_at: new Date().toISOString()
   })
 
-  // Execute the action (reads fresh intent from DB, which now has the edited payload)
+  // Execute the action (reads fresh intent from DB, which now has the edited payload/actions)
   await executeIntent(dbGetIntent(id)!, win)
   return dbGetIntent(id)!
 }
@@ -969,11 +1077,14 @@ export function ambientDismissIntent(id: string): Intent | null {
   const intent = dbGetIntent(id)
   if (!intent) return null
   dbUpdateIntentStatus(id, 'dismissed')
-  recordDismissal(`${intent.surface}:${intent.verb}`)
+  const dismissActionType = (intent.actions && intent.actions.length > 0)
+    ? `${intent.actions[0].server}:${intent.actions[0].tool}`
+    : `${intent.surface}:${intent.verb}`
+  recordDismissal(dismissActionType)
   dbAppendActionLog({
     intent_id: id,
     event: 'dismissed',
-    action_type: `${intent.surface}:${intent.verb}`,
+    action_type: dismissActionType,
     tier: intent.tier,
     detail: {},
     created_at: new Date().toISOString()
@@ -1040,6 +1151,22 @@ export async function reviseIntentFromChat(
           reversibility: result.intent.reversibility,
           required_approval: result.intent.required_approval
         })
+        // For agentic intents (actions[]), propagate any revised draft text back into
+        // actions[0].params so the approve path sends the updated content, not the
+        // original pre-revision params. The reproposeIntent path uses the verb/payload
+        // contract; we merge the text param across.
+        if (intent.actions && intent.actions.length > 0) {
+          const newPayload = result.intent.proposed_action.payload ?? {}
+          const draftKey = ['body', 'text', 'comment', 'message'].find(
+            (k) => typeof newPayload[k] === 'string'
+          )
+          if (draftKey) {
+            const updatedActions = intent.actions.map((a, i) =>
+              i === 0 ? { ...a, params: { ...a.params, [draftKey]: newPayload[draftKey] } } : a
+            )
+            dbUpdateIntentActions(id, updatedActions)
+          }
+        }
         applied = true
       }
     }
