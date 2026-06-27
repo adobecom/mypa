@@ -431,6 +431,10 @@ async function streamAgentChatOnce(
     options: {
       systemPrompt,
       model,
+      // Remove all built-in tools (Bash, Edit, Write, etc.) — chat sessions use
+      // MCP tools and the in-process ask_user tool only. tools: [] does not affect
+      // MCP servers supplied via the mcpServers option.
+      tools: [],
       maxTurns: hasMcp ? 10 : 1,
       permissionMode: 'default',
       ...(hasMcp ? { mcpServers: allMcpServers } : {}),
@@ -446,6 +450,14 @@ async function streamAgentChatOnce(
         if (serverName === 'mypa_builtin') return { behavior: 'allow' }
 
         if (isReadOnlyTool(baseName)) return { behavior: 'allow' }
+
+        // Defense-in-depth: only genuine MCP write tools (mcp__server__tool format,
+        // i.e. parts.length >= 3) may enter the user-approval flow. A bare built-in
+        // tool name (e.g. "Bash") reaching here would await an approval card that the
+        // renderer cannot surface, hanging the stream indefinitely. Deny it cleanly.
+        if (parts.length < 3) {
+          return { behavior: 'deny', message: 'Built-in tools are not available in chat sessions' }
+        }
 
         if (!mcpServers || !streamId) {
           return { behavior: 'deny', message: 'Write tools require an active MCP-enabled chat session' }
@@ -655,6 +667,8 @@ async function runAgentWithMcpOnce(
       options: {
         systemPrompt,
         model,
+        // Strip built-in tools — one-shot MCP reads use MCP tools only (no Bash/Edit/Write).
+        tools: [],
         maxTurns: 10,
         permissionMode: 'default',
         mcpServers,
