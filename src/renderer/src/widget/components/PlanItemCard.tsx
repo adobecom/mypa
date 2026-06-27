@@ -71,11 +71,14 @@ export default function PlanItemCard({
         }
       } else if (p.status !== undefined) {
         // Status frame — update phase label and reset the safety backstop.
+        // Set streaming=true defensively so the label renders even if the
+        // plan:user-message echo was dropped or arrived out of order.
         if (safetyTimer.current) clearTimeout(safetyTimer.current)
         safetyTimer.current = setTimeout(() => {
           setStreaming(false)
           setChatError('The assistant stopped responding. Please try again.')
         }, 150_000)
+        setStreaming(true)
         setChatStatusLabel(p.status)
       } else {
         if (safetyTimer.current) clearTimeout(safetyTimer.current)
@@ -139,6 +142,7 @@ export default function PlanItemCard({
   }
 
   const handleStop = async () => {
+    setChatStatusLabel(null)
     await api.plan.cancelStream(item.id)
     setStreaming(false)
     setStreamContent('')
