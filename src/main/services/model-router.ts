@@ -37,6 +37,7 @@ const SOURCE_TIER: Record<UsageSource, Tier> = {
   memory:          'balanced',
   chat:            'balanced',
   suggest:         'capable',
+  review:          'capable',
   other:           'balanced',
 }
 

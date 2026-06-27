@@ -12,6 +12,9 @@ export interface TriggerHit {
   kind: TriggerKind
   focusNodeIds: string[]
   reason: string
+  /** Populated for 'waiting' hits — the signal relation that triggered this.
+   *  Used by isDeepEligible() to route to agentic deep-enrichment inference. */
+  relation?: Signal['relation']
 }
 
 // ─── Spike trigger ────────────────────────────────────────────────────────────
@@ -135,8 +138,21 @@ function buildWaitingHit(signal: Signal): TriggerHit | null {
   return {
     kind: 'waiting',
     focusNodeIds: node ? [node.id] : [],
-    reason
+    reason,
+    relation: signal.relation
   }
+}
+
+/**
+ * Returns true for hits that should trigger proactive agentic deep-enrichment
+ * (Opus + MCP read tools) instead of the lightweight single-turn inference.
+ * Applies to all items directed at the user: review requests, assignments, mentions.
+ */
+export function isDeepEligible(hit: TriggerHit): boolean {
+  if (hit.kind !== 'waiting') return false
+  return hit.relation === 'review_requested' ||
+    hit.relation === 'assigned' ||
+    hit.relation === 'mentioned'
 }
 
 /**
@@ -261,6 +277,8 @@ export function coalesceHits(hits: TriggerHit[]): TriggerHit[] {
       if (existing) {
         existing.focusNodeIds = [...new Set([...existing.focusNodeIds, ...hit.focusNodeIds])]
         existing.reason += `; ${hit.reason}`
+        // Prefer the most specific relation for deep-enrichment eligibility
+        if (!existing.relation && hit.relation) existing.relation = hit.relation
         continue
       }
     } else {

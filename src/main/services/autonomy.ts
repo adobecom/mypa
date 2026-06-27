@@ -12,7 +12,17 @@ import type { IntentObject, IntentType, Tier } from '@shared/types'
 
 // ─── Action type key ──────────────────────────────────────────────────────────
 
+/**
+ * Returns a stable key for policy lookup and trust accumulation.
+ * For generic agentic intents (actions[] present), keys on server:tool for the
+ * primary action — more granular and surface-agnostic.
+ * Legacy intents fall back to surface:verb.
+ */
 export function actionTypeOf(obj: IntentObject): string {
+  if (obj.actions && obj.actions.length > 0) {
+    const a = obj.actions[0]
+    return `${a.server}:${a.tool}`
+  }
   return `${obj.proposed_action.surface}:${obj.proposed_action.verb}`
 }
 
@@ -47,6 +57,13 @@ export function resolveTier(obj: IntentObject): Tier {
 
   // Safety floor: irreversible or required_approval actions can never be below tier 2
   if (obj.reversibility === 'irreversible' || obj.required_approval) {
+    if (tier < 2) tier = 2
+  }
+
+  // Destructive-tool heuristic: any generic action whose tool name contains a
+  // destructive word is forced to require approval regardless of policy.
+  const DESTRUCTIVE_WORDS = /\b(delete|merge|close|transition|remove|archive|destroy)\b/i
+  if (obj.actions && obj.actions.some((a) => DESTRUCTIVE_WORDS.test(a.tool))) {
     if (tier < 2) tier = 2
   }
 

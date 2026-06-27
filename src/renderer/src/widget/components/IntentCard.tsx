@@ -43,6 +43,28 @@ const VERB_LABELS: Record<string, string | null> = {
   none: null,
 }
 
+/**
+ * Derive a human-readable CTA label from a generic MCP tool call.
+ * Well-known tool names get purpose-built labels; everything else is humanized
+ * from the tool name itself — so new MCP surfaces work without any code changes.
+ */
+function buildActionCtaLabel(server: string, tool: string): string {
+  const key = `${server}:${tool}`
+  const WELL_KNOWN: Record<string, string> = {
+    'github:create_pull_request_review': 'Submit review',
+    'github:add_issue_comment':          'Post comment',
+    'github:add_labels_to_issue':        'Add label',
+    'github:merge_pull_request':         'Merge PR',
+    'jira:jira_add_comment':             'Post comment',
+    'slack:conversations_add_message':   'Send message',
+    'linear:linear_add_comment':         'Post comment',
+  }
+  if (WELL_KNOWN[key]) return WELL_KNOWN[key]
+  // Generic fallback: "create_pull_request_review" -> "Create pull request review"
+  const words = tool.split('_').filter(Boolean).join(' ')
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
 const TYPE_LABELS: Record<string, string> = {
   action: 'Action',
   suggestion: 'Observation',
@@ -133,12 +155,15 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
   const needsApproval = !isObservation && intent.tier >= 2
   const agentWillHandle = !isObservation && !needsApproval && !isTerminal && intent.tier <= 1
 
-  // Editable draft — initialized from the payload's body/text/comment/message field
+  // Editable draft — for generic agentic intents (actions[]) look in actions[0].params;
+  // for legacy verb-based intents look in payload. Same key detection, different source.
+  const primaryActionParams = intent.actions && intent.actions.length > 0 ? intent.actions[0].params : null
+  const draftSource: Record<string, unknown> = primaryActionParams ?? (intent.payload ?? {})
   const payloadDraftKey = ['body', 'text', 'comment', 'message'].find(
-    (k) => typeof (intent.payload ?? {})[k] === 'string'
+    (k) => typeof draftSource[k] === 'string'
   )
   const [draftText, setDraftText] = useState<string>(
-    payloadDraftKey ? String((intent.payload ?? {})[payloadDraftKey]) : ''
+    payloadDraftKey ? String(draftSource[payloadDraftKey]) : ''
   )
   const draftRef = useAutoGrowTextarea(draftText)
   const challengeRef = useAutoGrowTextarea(challengeReason)
@@ -795,7 +820,9 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
                   disabled={loading || (!!payloadDraftKey && !draftText.trim())}
                   style={{ fontSize: 11 }}
                 >
-                  {payloadDraftKey ? 'Send' : 'Approve'}
+                  {intent.actions && intent.actions.length > 0
+                  ? buildActionCtaLabel(intent.actions[0].server, intent.actions[0].tool)
+                  : payloadDraftKey ? 'Send' : 'Approve'}
                 </button>
               )}
             </>

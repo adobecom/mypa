@@ -129,8 +129,13 @@ const WRITE_WORDS = new Set([
 
 function isReadOnlyTool(toolName: string): boolean {
   const lower = toolName.toLowerCase()
-  if (!READ_ONLY_PREFIXES.some((p) => lower === p || lower.startsWith(p + '_'))) return false
-  const words = lower.split('_')
+  const words = lower.split('_').filter(Boolean)
+  // Require at least one word component to be a read-only prefix.
+  // Checking any component (not just the first) allows vendor-prefixed tools like
+  // jira_get_issue or workday_search_tasks to be recognised as read-only.
+  if (!words.some((w) => READ_ONLY_PREFIXES.includes(w))) return false
+  // Secondary guard: deny if any non-first component is an explicit write word.
+  // This blocks hybrid names like get_or_create or fetch_and_update.
   return !words.slice(1).some((w) => WRITE_WORDS.has(w))
 }
 

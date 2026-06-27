@@ -375,6 +375,10 @@ export interface IntentObject {
   rationale: string
   reversibility: IntentReversibility
   required_approval: boolean
+  /** Concrete MCP tool calls proposed by agentic deep-enrichment.
+   *  When present and non-empty, execution uses this instead of proposed_action.
+   *  proposed_action is kept as a display/policy summary derived from actions[0]. */
+  actions?: McpActionRef[]
 }
 
 export interface Intent {
@@ -397,6 +401,8 @@ export interface Intent {
   resolved_at: string | null
   error: string | null
   challenge_reason: string | null
+  /** Concrete MCP tool calls from agentic deep-enrichment (see IntentObject.actions). */
+  actions?: McpActionRef[]
 }
 
 export interface Signal {
@@ -573,6 +579,7 @@ export type UsageSource =
   | 'memory'
   | 'chat'
   | 'suggest'
+  | 'review'
   | 'other'
 
 export type UsageRange = '7d' | '30d' | '90d' | 'all'

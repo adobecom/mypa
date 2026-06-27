@@ -793,8 +793,8 @@ export function dbCreateIntent(
     .prepare(
       `INSERT INTO intents
         (id, type, trigger_kind, confidence, urgency, surface, verb, target, payload, rationale,
-         reversibility, required_approval, tier, status, context_packet, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+         reversibility, required_approval, tier, status, context_packet, created_at, actions)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     )
     .run(
       id,
@@ -812,7 +812,8 @@ export function dbCreateIntent(
       tier,
       'pending',
       JSON.stringify(contextPacket),
-      created_at
+      created_at,
+      JSON.stringify(obj.actions ?? [])
     )
   return dbGetIntent(id)!
 }
@@ -871,13 +872,20 @@ export function dbUpdateIntentPayload(id: string, payload: Record<string, unknow
     .run(JSON.stringify(payload), id)
 }
 
+export function dbUpdateIntentActions(id: string, actions: McpActionRef[]): void {
+  getDb()
+    .prepare('UPDATE intents SET actions = ? WHERE id = ?')
+    .run(JSON.stringify(actions), id)
+}
+
 function deserializeIntent(row: any): Intent {
   return {
     ...row,
     required_approval: row.required_approval === 1,
     payload: safeJsonParse<Record<string, unknown>>(row.payload, {}),
     context_packet: safeJsonParse<Record<string, unknown>>(row.context_packet, {}),
-    challenge_reason: row.challenge_reason ?? null
+    challenge_reason: row.challenge_reason ?? null,
+    actions: safeJsonParse<McpActionRef[]>(row.actions, [])
   }
 }
 
