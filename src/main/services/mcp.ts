@@ -15,6 +15,8 @@ interface ActiveServer {
 }
 
 const servers = new Map<string, ActiveServer>()
+// Last-known connection error per server name; cleared on successful (re)connect.
+const serverErrors = new Map<string, string>()
 
 // Serialize all connection mutations (connectAllServers, reconnectServer) so that
 // two near-simultaneous config:update calls cannot race on the Map and disconnect
@@ -274,8 +276,11 @@ export function connectAllServers(): Promise<void> {
       }
       try {
         await connectServer(srv)
+        serverErrors.delete(srv.name)
         console.log(`[mcp] connected: ${srv.name}`)
       } catch (err) {
+        const errMsg = String((err as Error)?.message ?? err).split('\n')[0]
+        serverErrors.set(srv.name, errMsg)
         console.error(`[mcp] failed to connect ${srv.name}:`, err)
       }
     }
@@ -314,6 +319,7 @@ export async function reconnectServer(name: string): Promise<McpServerStatus> {
           inputSchema: (t.inputSchema as Record<string, unknown>) ?? {}
         }))
         active.tools = tools  // refresh cached tool list in place
+        serverErrors.delete(name)
         console.log(`[mcp] tested: ${name} (${tools.length} tools)`)
         return { name, connected: true, tools }
       } catch {
@@ -324,6 +330,7 @@ export async function reconnectServer(name: string): Promise<McpServerStatus> {
     // Not connected, or live probe failed: full disconnect + reconnect
     try {
       const tools = await connectServer(srv)
+      serverErrors.delete(name)
       console.log(`[mcp] reconnected: ${name}`)
       return { name, connected: true, tools }
     } catch (err: any) {
@@ -331,7 +338,9 @@ export async function reconnectServer(name: string): Promise<McpServerStatus> {
       // Take only the first line for the UI — the enriched error may contain
       // a multi-line stderr tail that is for console diagnostics, not user display.
       const rawMsg = err?.message ?? String(err)
-      return { name, connected: false, tools: [], error: rawMsg.split('\n')[0] }
+      const errMsg = rawMsg.split('\n')[0]
+      serverErrors.set(name, errMsg)
+      return { name, connected: false, tools: [], error: errMsg }
     }
   })
 }
@@ -349,10 +358,12 @@ export function getServerStatus(): McpServerStatus[] {
       return { name: srv.name, connected: false, tools: [], disabled: true }
     }
     const active = servers.get(srv.name)
+    const lastError = active ? undefined : serverErrors.get(srv.name)
     return {
       name: srv.name,
       connected: !!active,
-      tools: active?.tools ?? []
+      tools: active?.tools ?? [],
+      ...(lastError ? { error: lastError } : {}),
     }
   })
 }
