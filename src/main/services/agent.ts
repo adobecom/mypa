@@ -9,7 +9,7 @@ import { selectModel, escalate } from './model-router'
 import { readConfig, buildOwnerClause } from './config'
 import { buildAgentEnv } from './auth'
 import { broadcast } from '../windows'
-import { ensureServersConnected } from './mcp'
+import { ensureServersConnected, getServerStatus } from './mcp'
 import { buildBridgedMcpServers } from './mcp-bridge'
 import type { UsageSource, ChatMessage, PendingToolApproval, PendingQuestion } from '@shared/types'
 
@@ -360,13 +360,30 @@ export async function streamAgentChat(
   }
   const sdkMcpServers = enableMcp ? buildBridgedMcpServers() : {}
 
-  const approxLen = systemPrompt.length + messages.reduce((n, m) => n + m.content.length, 0)
+  // When MCP is on but some configured servers failed to connect, append an explicit
+  // note so the model reports the outage rather than confabulating tool results.
+  // Silent omission (servers just not appearing in the tool list) is what causes the
+  // model to fabricate detailed false root causes instead of saying "unavailable."
+  let effectiveSystemPrompt = systemPrompt
+  if (enableMcp) {
+    const statuses = getServerStatus()
+    const unavailable = statuses.filter((s) => !s.connected && s.disabled !== true)
+    if (unavailable.length > 0) {
+      const detail = unavailable
+        .map((s) => (s.error ? `${s.name} (${s.error})` : s.name))
+        .join(', ')
+      effectiveSystemPrompt +=
+        `\n\nIMPORTANT: The following MCP servers are configured but unavailable right now (failed to connect): ${detail}. Do NOT attempt to use tools from these servers and do NOT claim to have retrieved data from them — tell the user they are unavailable instead.`
+    }
+  }
+
+  const approxLen = effectiveSystemPrompt.length + messages.reduce((n, m) => n + m.content.length, 0)
   let model = selectModel(source, approxLen)
 
   while (true) {
     try {
       const full = await streamAgentChatOnce(
-        model, systemPrompt, messages, onChunk, streamId, source,
+        model, effectiveSystemPrompt, messages, onChunk, streamId, source,
         Object.keys(sdkMcpServers).length > 0 ? sdkMcpServers : undefined,
         onStatus,
       )
