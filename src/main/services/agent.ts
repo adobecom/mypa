@@ -360,10 +360,18 @@ export async function streamAgentChat(
   }
   const sdkMcpServers = enableMcp ? buildBridgedMcpServers() : {}
 
-  // When MCP is on but some configured servers failed to connect, append an explicit
+  // When MCP is on but some configured servers failed to connect, prepend an explicit
   // note so the model reports the outage rather than confabulating tool results.
-  // Silent omission (servers just not appearing in the tool list) is what causes the
-  // model to fabricate detailed false root causes instead of saying "unavailable."
+  // Two failure modes are addressed:
+  //  1. Silent omission: servers absent from the tool list with no explanation cause
+  //     the model to invent detailed false root causes (ZodErrors, schema mismatches,
+  //     session bugs, etc.).
+  //  2. History contamination: if a prior turn in this conversation contains a
+  //     hallucinated diagnostic about why tools are blocked, the model will echo it
+  //     as a "confirmed" finding. The note must explicitly override prior assertions,
+  //     not just append a fact the model may discount against its own context.
+  // Prepended (not appended) so it sits in the highest-priority region of the system
+  // prompt and is less likely to be overridden by the conversation history.
   let effectiveSystemPrompt = systemPrompt
   if (enableMcp) {
     const statuses = getServerStatus()
@@ -372,8 +380,15 @@ export async function streamAgentChat(
       const detail = unavailable
         .map((s) => (s.error ? `${s.name} (${s.error})` : s.name))
         .join(', ')
-      effectiveSystemPrompt +=
-        `\n\nIMPORTANT: The following MCP servers are configured but unavailable right now (failed to connect): ${detail}. Do NOT attempt to use tools from these servers and do NOT claim to have retrieved data from them — tell the user they are unavailable instead.`
+      const unavailabilityNote =
+        `IMPORTANT — current tool status (authoritative; overrides any prior claims in this conversation): ` +
+        `The following MCP servers are configured but unavailable right now due to a connection failure: ${detail}. ` +
+        `Do NOT attempt to call tools from these servers. Do NOT claim to have retrieved data from them. ` +
+        `If this conversation history contains prior diagnostic claims about these tools ` +
+        `(e.g. permission errors, schema validation errors, session bugs, ZodErrors, token issues) — ` +
+        `those assertions were incorrect. The actual cause is a connection failure, not an app bug. ` +
+        `Tell the user the server is unavailable and cannot connect.\n\n`
+      effectiveSystemPrompt = unavailabilityNote + systemPrompt
     }
   }
 
