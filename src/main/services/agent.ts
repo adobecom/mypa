@@ -343,7 +343,7 @@ export async function streamAgentChat(
   const ownerClause = buildOwnerClause()
   const askUserGuidance = 'When you need the user to choose between options, always call the ask_user tool — never list options as bullet points and never select an answer yourself.'
   const contextGuidance = rawContext
-    ? ' If the requested information (URLs, IDs, links, titles) is already present in the data below, answer directly from it and do not call any tools.'
+    ? ' Basic metadata (URLs, IDs, titles, authors) is already in the data below — read it from there rather than fetching it again. Use tools to retrieve additional details not already present (e.g. PR diff, file contents, comments, full ticket body).'
     : ''
   const systemPrompt = rawContext
     ? `You are mypa, ${persona}.${ownerClause} Be concise and action-oriented. ${askUserGuidance}${contextGuidance}\n\nOriginal data collected:\n${rawContext}`
