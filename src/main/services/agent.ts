@@ -127,8 +127,21 @@ const WRITE_WORDS = new Set([
   'send', 'push', 'add', 'insert', 'modify', 'set', 'edit', 'submit',
 ])
 
+// Explicit read-only overrides for MCP tool names that contain no read-verb
+// component and would otherwise be misclassified as writes by the prefix heuristic.
+// Slack's core read tools are the canonical example: conversations_history,
+// conversations_replies, conversations_unreads have no "get/list/search/..." word.
+// IMPORTANT: entries here bypass the WRITE_WORDS secondary guard entirely —
+// only add a tool name if you have verified it performs no server-side mutations.
+const READ_ONLY_TOOL_NAMES = new Set([
+  'conversations_history',
+  'conversations_replies',
+  'conversations_unreads',
+])
+
 function isReadOnlyTool(toolName: string): boolean {
   const lower = toolName.toLowerCase()
+  if (READ_ONLY_TOOL_NAMES.has(lower)) return true
   const words = lower.split('_').filter(Boolean)
   // Require at least one word component to be a read-only prefix.
   // Checking any component (not just the first) allows vendor-prefixed tools like
