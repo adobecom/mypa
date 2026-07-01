@@ -178,6 +178,21 @@ export function getOwnerHandles(): string[] {
 }
 
 /**
+ * Returns true when the given free-text target string refers to the owner themselves.
+ * Comparison is exact but normalised (case-insensitive, leading @ stripped) to avoid
+ * false positives on names that merely contain the owner's name as a substring.
+ */
+export function targetIsOwner(target: string): boolean {
+  const t = target.trim().toLowerCase().replace(/^@/, '')
+  if (!t) return false
+  const owner = readConfig().owner
+  const candidates = new Set<string>()
+  if (owner?.name) candidates.add(owner.name.trim().toLowerCase())
+  for (const h of getOwnerHandles()) candidates.add(h.trim().toLowerCase().replace(/^@/, ''))
+  return candidates.has(t)
+}
+
+/**
  * Builds a one-sentence owner instruction appended to system prompts so the
  * model addresses the owner as "you" rather than by handle or in the third person.
  * Returns '' when no owner identity is configured.
