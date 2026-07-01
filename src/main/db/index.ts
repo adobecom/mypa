@@ -684,6 +684,13 @@ export function dbGetTopNodesByWeight(limit: number): GraphNode[] {
   return rows.map(deserializeNode)
 }
 
+export function dbGetNodesByType(type: NodeType): GraphNode[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM graph_nodes WHERE type = ? ORDER BY weight DESC')
+    .all(type) as any[]
+  return rows.map(deserializeNode)
+}
+
 function deserializeNode(row: any): GraphNode {
   return {
     ...row,

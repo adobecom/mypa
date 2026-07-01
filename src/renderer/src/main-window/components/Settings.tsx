@@ -1249,13 +1249,17 @@ function CheckInScheduleCard(): React.ReactElement {
 // ─── About You: Working Context sub-section ──────────────────────────────────
 
 /**
- * Read-only scope allowlists embedded inside the About You identity hub.
- * Derived automatically from check-in conversations.
- * Only scope-capable surfaces that the user has connected are shown.
+ * Editable scope allowlists embedded inside the About You identity hub.
+ * Candidates are derived from orgs/projects/channels already observed in the
+ * knowledge graph, unioned with any already-configured identifiers.
+ * Toggles save immediately to config.scope.allowed.
  */
 function WorkingContextSection(): React.ReactElement {
   const api = window.electron
+  // Current saved allowlist — the source of truth for "selected" state
   const [allowed, setAllowed] = useState<Record<string, string[]>>({})
+  // Graph-derived candidates per surface (union with current allowed)
+  const [candidates, setCandidates] = useState<Record<string, string[]>>({})
   const [enabledIntegrationIds, setEnabledIntegrationIds] = useState<string[]>([])
 
   useEffect(() => {
@@ -1263,9 +1267,26 @@ function WorkingContextSection(): React.ReactElement {
       setAllowed(cfg.scope?.allowed ?? {})
       setEnabledIntegrationIds((cfg.mcp_servers ?? []).map((s) => s.name))
     })
+    api.config.getScopeCandidates().then(setCandidates)
   }, [])
 
   const enabledSurfaces = SCOPE_SURFACES.filter((s) => enabledIntegrationIds.includes(s.integrationId))
+
+  function handleToggle(surface: string, id: string): void {
+    // Use functional setState so rapid consecutive toggles always read the
+    // latest state rather than the stale closure value.
+    setAllowed((prev) => {
+      const lower = id.toLowerCase()
+      const current = (prev[surface] ?? []).map((s) => s.toLowerCase())
+      const nextList = current.includes(lower)
+        ? (prev[surface] ?? []).filter((s) => s.toLowerCase() !== lower)
+        : [...(prev[surface] ?? []), id.toLowerCase()]
+      // Send the full allowed map — deepMerge replaces arrays as leaves
+      const nextAllowed = { ...prev, [surface]: nextList }
+      api.config.update({ scope: { allowed: nextAllowed } }).catch(console.error)
+      return nextAllowed
+    })
+  }
 
   return (
     <>
@@ -1275,7 +1296,7 @@ function WorkingContextSection(): React.ReactElement {
           Working Context
         </div>
         <div className="form-hint" style={{ marginBottom: 12 }}>
-          Derived from your check-ins. Tell mypa which orgs, projects, or channels to focus on in a 1:1.
+          Pick which {enabledSurfaces.length === 1 ? enabledSurfaces[0].itemNoun + 's' : 'orgs, projects, or channels'} mypa should focus on. Drawn from your recent activity.
         </div>
 
         {enabledSurfaces.length === 0 ? (
@@ -1283,32 +1304,38 @@ function WorkingContextSection(): React.ReactElement {
             Connect GitHub, Jira, or Slack to enable scope filtering.
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {enabledSurfaces.map((spec) => {
-              const identifiers = allowed[spec.surface] ?? []
+              const surfaceCandidates = candidates[spec.surface] ?? []
+              const selectedLower = new Set((allowed[spec.surface] ?? []).map((s) => s.toLowerCase()))
               return (
-                <div key={spec.surface} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                  <div style={{ width: 86, fontSize: 12, color: 'var(--text-muted)', flexShrink: 0, paddingTop: 2 }}>
+                <div key={spec.surface}>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 5 }}>
                     {spec.label}
                   </div>
-                  {identifiers.length > 0 ? (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      {identifiers.map((id) => (
-                        <span
-                          key={id}
-                          style={{
-                            display: 'inline-flex', alignItems: 'center',
-                            padding: '2px 7px', borderRadius: 4, fontSize: 12,
-                            background: 'var(--bg-elevated)', border: '1px solid var(--border-muted)'
-                          }}
-                        >
-                          {id}
-                        </span>
-                      ))}
+                  {surfaceCandidates.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                      No {spec.itemNoun}s observed yet — unfiltered until you&apos;ve worked across connected {spec.integrationId}
                     </div>
                   ) : (
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                      all {spec.itemNoun}s
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {surfaceCandidates.map((id) => {
+                        const selected = selectedLower.has(id.toLowerCase())
+                        return (
+                          <button
+                            key={id}
+                            className={`btn btn--sm ${selected ? 'btn--primary' : 'btn--ghost'}`}
+                            onClick={() => handleToggle(spec.surface, id)}
+                          >
+                            {id}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                  {surfaceCandidates.length > 0 && selectedLower.size === 0 && (
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, fontStyle: 'italic' }}>
+                      None selected — all {spec.itemNoun}s pass through
                     </div>
                   )}
                 </div>

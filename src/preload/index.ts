@@ -40,7 +40,8 @@ const api: IpcApi = {
     reconnectAll: () => ipcRenderer.invoke('config:reconnect-all'),
     getMcpStatus: () => ipcRenderer.invoke('config:get-mcp-status'),
     getClaudeKey: () => ipcRenderer.invoke('config:get-claude-key'),
-    setClaudeKey: (key) => ipcRenderer.invoke('config:set-claude-key', key)
+    setClaudeKey: (key) => ipcRenderer.invoke('config:set-claude-key', key),
+    getScopeCandidates: () => ipcRenderer.invoke('config:get-scope-candidates')
   },
   oauth: {
     startDevice: () => ipcRenderer.invoke('oauth:start-device'),

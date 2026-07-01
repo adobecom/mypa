@@ -115,11 +115,34 @@ type ContainerResult = {
   containerLabel: string | null
 }
 
+/**
+ * Parse "{owner}/{repo}" from a GitHub URL (html_url or api repos URL).
+ * Returns null when the URL cannot be parsed.
+ */
+function parseGithubOwnerRepo(url: string): string | null {
+  if (!url) return null
+  // html_url: https://github.com/{owner}/{repo}/pull/… or /issues/…
+  const htmlMatch = url.match(/github\.com\/([^/]+)\/([^/?#]+)/)
+  if (htmlMatch) return `${htmlMatch[1]}/${htmlMatch[2]}`
+  // api URL: https://api.github.com/repos/{owner}/{repo}
+  const apiMatch = url.match(/api\.github\.com\/repos\/([^/]+)\/([^/?#]+)/)
+  if (apiMatch) return `${apiMatch[1]}/${apiMatch[2]}`
+  return null
+}
+
 function deriveContainer(signal: Signal): ContainerResult {
   if (signal.surface === 'github') {
-    const repo = (signal.raw as any)?.repository?.full_name ?? (signal.raw as any)?.repo ?? null
-    if (!repo) return { containerKey: null, containerType: null, containerLabel: null }
-    return { containerKey: `github:repo:${repo}`, containerType: 'repo', containerLabel: String(repo) }
+    // Priority 1: parse owner/repo from the canonical html_url stored on the signal
+    const ownerRepo =
+      parseGithubOwnerRepo(signal.url) ??
+      // Priority 2: repository_url from GitHub search_issues API (api.github.com/repos/…)
+      parseGithubOwnerRepo(String((signal.raw as any)?.repository_url ?? '')) ??
+      // Priority 3: legacy webhook-style fields
+      ((signal.raw as any)?.repository?.full_name as string | undefined) ??
+      ((signal.raw as any)?.repo as string | undefined) ??
+      null
+    if (!ownerRepo) return { containerKey: null, containerType: null, containerLabel: null }
+    return { containerKey: `github:repo:${ownerRepo}`, containerType: 'repo', containerLabel: ownerRepo }
   }
   if (signal.surface === 'jira') {
     const key = signal.external_id.split('-')[0] // "PROJ-123" → "PROJ"

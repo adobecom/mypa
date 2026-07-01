@@ -18,6 +18,47 @@ const VALID_VERBS: Record<string, readonly string[]> = {
   slack:  ['reply', 'send', 'summarize', 'none']
 }
 
+// ─── Output sanitization ─────────────────────────────────────────────────────
+
+/**
+ * Sanitize a model-generated rationale string before it is stored or rendered.
+ *
+ * - Collapses internal newlines/extra whitespace to a single space.
+ * - Cuts to the first sentence boundary (. ? !) so multi-sentence reasoning
+ *   dumps are trimmed to the most relevant clause.
+ * - Blanks obvious planning/reasoning preambles (text that describes what the
+ *   model is about to do rather than summarising what it found). This is
+ *   belt-and-suspenders: the renderer no longer uses rationale as the primary
+ *   title, but sanitising here prevents the raw text leaking into the detail
+ *   panel, push notifications, or the Done-record title.
+ * - Clamps to 300 characters.
+ */
+// Each alternative carries its own word-boundary anchor so that the delimiter
+// consumed by `first[,\s]` (a non-word char) does not prevent the match.
+const RATIONALE_PREAMBLE_RE = /^(i\s+(cannot|can't|need\s+to|will|should|must|'ll|am\s+unable)\b|cannot\b|before\s+i\b|let\s+me\b|first[,\s]|read\s+the\s+full\b|i\s+am\s+unable\b)/i
+
+export function sanitizeRationale(raw: string): string {
+  const trimmed = raw.trim().replace(/\s+/g, ' ')
+  if (!trimmed) return ''
+  // If it looks like planning text, blank it — the renderer will fall back to
+  // the verb+target title and the why tab will simply be empty.
+  if (RATIONALE_PREAMBLE_RE.test(trimmed)) return ''
+  // Cut to first sentence boundary
+  const sentenceEnd = trimmed.search(/[.?!]\s/)
+  const sentence = sentenceEnd !== -1 ? trimmed.slice(0, sentenceEnd + 1) : trimmed
+  return sentence.slice(0, 300)
+}
+
+/**
+ * Sanitize a model-generated target string — clamp and collapse whitespace.
+ * No prefix filtering: target is always a noun phrase, never planning text.
+ */
+function sanitizeTarget(raw: string): string {
+  return raw.trim().replace(/\s+/g, ' ').slice(0, 160)
+}
+
+// ─── Prompts ──────────────────────────────────────────────────────────────────
+
 const SYSTEM_PROMPT = `You are an ambient intelligence agent embedded in a developer's personal assistant.
 Your job is to observe activity signals from GitHub, Jira, and Slack, and determine if there is a concrete action worth surfacing to the user — something they should do or approve right now.
 
@@ -32,7 +73,7 @@ You respond ONLY with a single valid JSON object matching this exact schema:
     "target": <human-readable string — e.g. "PR #482 on repo/name">,
     "payload": <JSON object with the action details — see below>
   },
-  "rationale": <one concise sentence explaining why this matters to the user right now>,
+  "rationale": <one concise PAST-TENSE sentence summarising what you found and why this action is right. Never describe what you are about to do, your process, or any rules you are following — only the conclusion>,
   "reversibility": "reversible" | "irreversible",
   "required_approval": <boolean — true if this must not be done without user confirmation>
 }
@@ -186,10 +227,10 @@ export function parseIntentObject(text: string): IntentObject | null {
     proposed_action: {
       surface: String(pa.surface ?? 'github') as IntentSurface,
       verb,
-      target: String(pa.target ?? ''),
+      target: sanitizeTarget(String(pa.target ?? '')),
       payload
     },
-    rationale: String(obj.rationale ?? '').slice(0, 300),
+    rationale: sanitizeRationale(String(obj.rationale ?? '')),
     reversibility: obj.reversibility === 'irreversible' ? 'irreversible' : 'reversible',
     required_approval: obj.required_approval !== false
   }
@@ -209,7 +250,7 @@ Respond ONLY with a valid JSON array of 0–3 objects. Each object must match th
     "target": <human-readable string, e.g. "PR #482 on repo/name">,
     "payload": <object with action details>
   },
-  "rationale": <one sentence — why this deserves the user's attention right now>,
+  "rationale": <one concise PAST-TENSE sentence summarising what you found and why this deserves the user's attention. Never describe your process or intentions — only the conclusion>,
   "reversibility": "reversible" | "irreversible",
   "required_approval": <boolean>
 }
@@ -312,7 +353,7 @@ After gathering any needed information, respond ONLY with a JSON object in this 
     "target": <human-readable string>,
     "payload": <JSON object with action details>
   },
-  "rationale": <one concise sentence explaining why this action is right>,
+  "rationale": <one concise PAST-TENSE sentence summarising what you found and why this action is right. Never describe your process or intentions — only the conclusion>,
   "confidence": <number 0.0–1.0>,
   "reversibility": "reversible" | "irreversible",
   "required_approval": <boolean>
@@ -470,7 +511,7 @@ After gathering all needed context, respond ONLY with a JSON object matching thi
     }
   ],
   "target": <human-readable description of the work item, e.g. "PR #169 on adobecom/event-libs">,
-  "rationale": <one concise sentence: what you found and why this action is right>,
+  "rationale": <one concise PAST-TENSE sentence summarising what you found and why this action is right. Never describe what you are about to do, your process, or any rules you are following — only the conclusion>,
   "reversibility": "reversible" | "irreversible",
   "required_approval": <boolean — always true for any write action>
 }
@@ -511,10 +552,10 @@ function parseDeepIntentObject(
 
   const confidence = Math.max(0, Math.min(1, Number(raw.confidence ?? 0)))
   const urgency = Math.max(0, Math.min(1, Number(raw.urgency ?? 0)))
-  const rationale = String(raw.rationale ?? '').slice(0, 300)
+  const rationale = sanitizeRationale(String(raw.rationale ?? ''))
   const reversibility: IntentReversibility = raw.reversibility === 'irreversible' ? 'irreversible' : 'reversible'
   const required_approval = raw.required_approval !== false
-  const target = String(raw.target ?? '')
+  const target = sanitizeTarget(String(raw.target ?? ''))
 
   // Parse and validate the actions array — only keep actions for connected servers with known tools
   const rawActions = Array.isArray(raw.actions) ? raw.actions : []

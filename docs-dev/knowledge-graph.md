@@ -171,4 +171,6 @@ Renders the graph as a force-directed canvas using `react-force-graph-2d`. Node 
 
 ## Changelog
 
+- 2026-06-30 — **GitHub container derivation fixed (`memory-graph.ts:deriveContainer`).** `deriveContainer` previously looked for `signal.raw.repository.full_name` which GitHub's `search_issues` API never returns. The function now parses `owner/repo` from `signal.url` (html_url, always present) via a new `parseGithubOwnerRepo` helper, with fallbacks to `signal.raw.repository_url` (api.github.com/repos/…) and legacy webhook-style fields. This means GitHub `pull_request` and `issue` nodes now correctly get a `repo` container node (`github:repo:owner/repo`) and a `part_of` edge — which activates `scope.ts:violatesScope`'s container comparison for Adobe-org filtering.
+
 - 2026-06-06 — initial documentation; reflects ontology expansion in commit d8a8774 (4→14 node types, 7→19 edge types)
