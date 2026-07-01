@@ -142,17 +142,15 @@ Orchestrates the full MCP → Claude → notification pipeline for a routine run
 
 | Export | Description |
 |---|---|
-| `executeRoutine(routine, widgetWin)` | Run all MCP actions, call `generateRoutineDigest`, run `inferRoutineIntents` over the raw output, route each result through `routeIntent`, fire OS notification, push events to renderer |
+| `executeRoutine(routine, widgetWin)` | Run all MCP actions; on all-failure marks run `error` + emits a failure flag; on partial failure prepends error preamble to inference input; on success runs digest + intent pipeline |
 | `handleRunMessage(runId, userMsg)` | Streaming follow-up chat on a run thread; broadcasts `routine:user-message` before streaming |
 | `dismissRun(runId, status)` | Mark a run as resolved/dismissed |
 
 **Execution steps (Phase B):**
-1. Execute all MCP actions → collect `rawOutput`
-2. `generateRoutineDigest` → persist `{ summary, body }` digest + chat message (renders the full markdown body); on failure logs the error and stores an honest "could not generate" message
-3. `extractCoveredEntities(rawOutput)` (from `entity-link.ts`) → snapshot of detected work items; persisted as `covered_entities` on the run row
-4. `inferRoutineIntents(name, rawOutput)` → up to 3 `IntentObject`s
-5. `routeIntent(obj, 'routine', ...)` for each — tier resolution, DB persist, graph node, notify
-6. OS notification (digest `summary`) + push events to both windows
+1. Execute all MCP actions → collect `rawOutput`. Each action's outcome is tracked: `successCount` increments on success; `failures[]` accumulates `{ server, tool, message, authFailure }` on error. `isAuthFailure(err)` matches 401/403/expired-token patterns.
+2. **All-failed branch** (`successCount === 0 && failures.length > 0`): mark run `status:'error'` with an auth-aware summary, fire a failure OS notification, skip inference entirely, emit one non-LLM `type:'flag'` `IntentObject` via `routeIntent` so the failure appears in the insight feed non-actionably (no Send/Approve CTA).
+3. **Partial-failure / success branch**: `generateRoutineDigest` → persist `{ summary, body }` digest + chat message. `extractCoveredEntities(rawOutput)` → `covered_entities`. `inferRoutineIntents(name, inferenceInput)` where `inferenceInput` prepends an error-preamble for any partial failures so the model treats them as observations, not actions. `routeIntent(obj, 'routine', ...)` for each — tier resolution, DB persist, graph node, notify.
+4. OS notification (digest `summary`) + push events to both windows.
 
 ---
 
@@ -183,6 +181,7 @@ Reads and writes `~/.mypa/config.json`. See [configuration.md](configuration.md)
 | `writeConfig(config)` | Encrypt secrets, write config |
 | `updateConfig(partial)` | Deep-merge partial update, write, return updated config |
 | `getOwnerHandles()` | Flat list of configured owner handles (non-empty, trimmed) — used for graph-render tagging |
+| `targetIsOwner(target)` | Returns `true` when a free-text target string (e.g. from LLM output) resolves to the owner; exact, normalised comparison against `owner.name` + all surface handles — used by the self-target guard in `ambient.ts` |
 | `buildOwnerClause()` | Returns a one-sentence system-prompt instruction addressing the owner as "you"; returns `''` when `AppConfig.owner` is not set |
 
 Secrets encrypted at rest:
@@ -216,7 +215,7 @@ Runs the recurring background poll cycle (default every 5 minutes). Reads config
 
 | Export | Description |
 |---|---|
-| `routeIntent(obj, triggerKind, contextPacket, focusNodeIds, win)` | Route an already-inferred `IntentObject` through the full tier/DB/graph/notify pipeline. Used by `routines.ts` to feed routine-generated action candidates into the same queue as ambient intents. |
+| `routeIntent(obj, triggerKind, contextPacket, focusNodeIds, win)` | Route an already-inferred `IntentObject` through the full tier/DB/graph/notify pipeline (mute check → scope check → `enrichPayloadForRouting` → `guardSelfTarget` → `dbCreateIntent` → graph node → `handleIntent`). Used by `routines.ts` to feed routine-generated action candidates into the same queue as ambient intents. |
 | `reviseIntentFromChat(id)` | One-shot re-proposal over the Chat thread: loads `intent_chat_threads` history → calls `reproposeIntent` with a synthetic instruction → if above confidence/urgency floors, applies proposal via `dbReproposeIntent` → appends assistant reply to chat thread → broadcasts `ambient:chat-message` + `ambient:intent-updated`. Returns `{ intent, applied, message }` or null on error. |
 | `revalidatePendingIntents()` (internal) | Freshness revalidation: for each pending intent, maps work-item focus nodes to their `signals` rows, checks whether the surface has completed a successful non-truncated poll after the intent was created, and whether the signal was absent from that poll. Requires 2 consecutive misses (tracked in `intentMissCount`) before expiring the intent. Broadcasts `ambient:intent-updated` with `status: 'expired'` and refreshes the tray. Surface-agnostic — works for any adapter. |
 | `surfaceIntent(intentId, win)` (internal) | Shared surfacing path for all tiers: marks intent `surfaced`, broadcasts `ambient:intent-created`, and (for `type='action'`) fires an OS `Notification` + `updateBadgeCount()`. Previously tier-3 had a separate early-return path that skipped the notification and badge. |
@@ -368,6 +367,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-06-30 — **Fix routine failures producing self-targeted "Send" intents (`routines.ts`, `config.ts`, `ambient.ts`, `inference.ts`).** Three-layer fix. (1) `routines.ts` `executeRoutine`: added `isAuthFailure(err)` classifier (matches 401/403/expired-token patterns). Step 1 loop now tracks `failures[]` and `successCount` in addition to `rawOutput`. On all-failed: marks run `status:'error'` with an auth-aware message, fires a failure OS notification, skips `inferRoutineIntents` entirely (primary fix), and emits one non-LLM `type:'flag'` via `routeIntent`. On partial failure: prepends an error preamble to `inferenceInput` so the model treats failed steps as observations. (2) `config.ts` `targetIsOwner(target)`: new predicate — normalised exact match against `owner.name` + all surface handles. (3) `ambient.ts` `guardSelfTarget(obj)`: new function called after `enrichPayloadForRouting` in both `runAmbientCycle` and `routeIntent`; converts any `slack:send`/`slack:reply` whose `proposed_action.target` resolves to the owner into a `type:'flag'` so no Send/Approve CTA is shown. Root cause: a Jira 401 was silently swallowed into `rawOutput`, then `ROUTINE_SYSTEM_PROMPT`'s "STRONGLY PREFER type:action" directive + `buildOwnerClause` (naming the owner as the only person in context) caused the LLM to fabricate a self-targeted Slack send.
 
 - 2026-06-30 — **Fix non-Adobe signal ingestion + scope gate activation (`memory-graph.ts`, `ingestion.ts`, `config.ts`, `scope.ts`, `db/index.ts`):** Four-part fix restoring the intended Adobe-only scope enforcement. (1) `deriveContainer` in `memory-graph.ts` — replaced `signal.raw.repository.full_name` lookup (never present in GitHub `search_issues` responses) with URL-based parsing: new `parseGithubOwnerRepo(url)` helper extracts `owner/repo` from `html_url` first, then falls back to `repository_url` API field, then legacy webhook fields. This causes `repo` container nodes and `part_of` edges to be correctly created so `scope.ts:violatesScope` can compare against the allowlist. (2) `ingestion.ts` scrubRaw allowlist — added `'repository_url'` so the API field is preserved on the stored signal for the fallback path. (3) GitHub poll `ingestion.ts:poll()` — reads `config.scope?.allowed?.github` at poll time and appends `org:<x>` qualifiers to all four search queries; empty list = no filter (backward compatible). (4) `seedScopeIfUnset()` exported from `config.ts` — idempotent one-time seed called in `index.ts` after `initDb()` that writes `scope.allowed.github=['adobecom']` when no scope has ever been configured, ensuring the filter is active immediately for affected users. New `dbGetNodesByType(type)` added to `db/index.ts` for the candidate builder. New `buildScopeCandidates()` exported from `scope.ts` — enumerates distinct org/project/channel identifiers from the knowledge graph (falling back to `pull_request`/`issue` node URLs for GitHub before `repo` nodes exist) and unions with the current configured allowlist, for use by the Settings scope multi-select UI.
 

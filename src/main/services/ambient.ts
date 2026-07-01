@@ -26,7 +26,7 @@ import {
   dbGetPlanThread,
   dbUpdatePlanMessageMetadata,
 } from '../db/index'
-import { readConfig } from './config'
+import { readConfig, targetIsOwner } from './config'
 import { violatesScope } from './scope'
 import { callTool, getToolInputSchema, ensureServersConnected } from './mcp'
 import { startIngestion, stopIngestion, pollOnce, getLastCompletePollAt } from './ingestion'
@@ -312,6 +312,9 @@ export async function runAmbientCycle(
     // issue_key for Jira, channel_id/thread_ts for Slack) into the payload so that
     // buildToolArgs can assemble the correct MCP tool arguments at execution time.
     enrichPayloadForRouting(obj, packet.focusNodes as GraphNode[])
+
+    // Drop self-targeted sends before they reach the DB or UI.
+    guardSelfTarget(obj)
 
     const intent = dbCreateIntent(obj, hit.kind as TriggerKind, tier, packet as unknown as Record<string, unknown>)
 
@@ -768,6 +771,29 @@ async function executeIntent(intent: Intent, win: BrowserWindow | null): Promise
 // This replaces the earlier inline Slack-only enrichment blocks in runAmbientCycle
 // and routeIntent, and extends the same pattern to GitHub and Jira.
 
+/**
+ * Defense-in-depth guard: a proposal to send/reply to the owner themselves on Slack
+ * is never useful (they can't act on a message they sent to themselves). Convert it to
+ * a flag so the observation still surfaces, but without a Send/Approve CTA.
+ *
+ * Note: for deep-inference intents that carry actions[], the real recipient is a Slack
+ * channel id in actions[0].params — not comparable to the owner's display name. That
+ * path is not addressed here because routine intents (the source of the reported bug)
+ * use the verb/payload path, not actions[]. A self-targeted send from deep-inference is
+ * structurally unlikely, but if it occurs it would show "Send message" from
+ * buildActionCtaLabel and actually call the MCP tool, so it is a different risk profile
+ * that can be addressed separately if it materialises.
+ */
+function guardSelfTarget(obj: IntentObject): void {
+  const { surface, verb, target } = obj.proposed_action
+  if (surface === 'slack' && (verb === 'send' || verb === 'reply') && targetIsOwner(target ?? '')) {
+    console.log(`[ambient] self-targeted ${surface}:${verb} — converting to flag`)
+    obj.type = 'flag'
+    obj.proposed_action.verb = 'none'
+    obj.actions = undefined
+  }
+}
+
 function enrichPayloadForRouting(obj: IntentObject, focusNodes: GraphNode[]): void {
   const { surface, verb } = obj.proposed_action
 
@@ -987,6 +1013,9 @@ export async function routeIntent(
 
   // Inject surface-specific routing identifiers (same enrichment as runAmbientCycle).
   enrichPayloadForRouting(obj, focusNodesForScope as GraphNode[])
+
+  // Drop self-targeted sends before they reach the DB or UI.
+  guardSelfTarget(obj)
 
   const intent = dbCreateIntent(obj, triggerKind, tier, contextPacket)
 
