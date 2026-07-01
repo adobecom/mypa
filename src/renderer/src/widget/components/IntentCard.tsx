@@ -389,6 +389,20 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
   const recentSignals = safeArray(cp.recentSignals, isRecord)
   const focusNodes = safeArray(cp.focusNodes, isRecord)
 
+  // Derive the card title from verb + target — this is the clean, structured title the user
+  // sees. rationale is demoted to the expanded "Why" detail panel (it may be empty after
+  // sanitization if it contained planning/reasoning text rather than a conclusion).
+  const titleText = (() => {
+    if (intent.target) {
+      return verbLabel ? `${verbLabel} on ${intent.target}` : intent.target
+    }
+    // Flag / no-target fallback: use the first focus node label or the type label
+    const firstFocusLabel = focusNodes[0] && hasString(focusNodes[0], 'label')
+      ? focusNodes[0].label as string
+      : null
+    return firstFocusLabel || typeLabel
+  })()
+
   // Derive a primary URL to link the card title — prefer a focus node URL (work item
   // the intent is about), then fall back to the most recent signal with a URL.
   const primaryUrl: string | null = (() => {
@@ -442,7 +456,8 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
       >
         <span className={dotClass} />
         <div className="routine-card__meta">
-          {/* 2-line title — clickable link when a source URL is available */}
+          {/* Card title — derived from verb + target for a clean structured heading.
+               rationale is demoted to the expanded Why tab. */}
           <div className="intent-card__title">
             <SurfaceIcon surface={intent.surface} />
             {primaryUrl ? (
@@ -451,20 +466,19 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
                 onClick={(e) => { e.stopPropagation(); window.electron.system.openExternal(primaryUrl) }}
                 title={primaryUrl}
               >
-                <span>{intent.rationale}</span>
+                <span>{titleText}</span>
                 <ExternalLink size={11} className="intent-card__title-link-icon" />
               </span>
             ) : (
-              <span>{intent.rationale}</span>
+              <span>{titleText}</span>
             )}
           </div>
 
-          {/* Proposed action line */}
-          {(verbLabel || intent.target) && (
+          {/* Rationale — one-sentence summary of what the agent found. Shown as muted
+               secondary text when available; full text always accessible in the Why tab. */}
+          {intent.rationale && (
             <div className="intent-card__action">
-              {verbLabel && <span className="intent-card__action-verb">{verbLabel}</span>}
-              {verbLabel && intent.target && <span className="intent-card__action-sep"> · </span>}
-              {intent.target && <span>{intent.target}</span>}
+              <span style={{ color: 'var(--text-muted)' }}>{intent.rationale}</span>
             </div>
           )}
 

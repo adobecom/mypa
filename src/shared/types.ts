@@ -246,7 +246,7 @@ export type ResolvedOwnerHandles = Partial<Record<'github' | 'slack' | 'jira' | 
  * container identifiers — GitHub org names, Jira project keys, or Slack channel IDs.
  * All comparisons are case-insensitive.
  *
- * Populated automatically from check-in conversations. Manual editing not required.
+ * Populated automatically from check-in conversations, or edited directly in Settings.
  */
 export interface ScopeConfig {
   /** Per-surface allowlist of container identifiers. */
@@ -686,6 +686,8 @@ export interface IpcApi {
     getMcpStatus(): Promise<McpServerStatus[]>
     getClaudeKey(): Promise<{ configured: boolean; preview: string | null }>
     setClaudeKey(key: string | null): Promise<void>
+    /** Returns graph-derived candidate identifiers for the scope multi-select UI. */
+    getScopeCandidates(): Promise<Record<string, string[]>>
   }
   oauth: {
     startDevice(): Promise<DeviceFlowStart>

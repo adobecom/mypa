@@ -18,8 +18,8 @@
  */
 
 import { readConfig } from './config'
-import { dbGetEdgesFrom, dbGetNodeById } from '../db/index'
-import { scopeSurfaceFor } from '@shared/scope-surfaces'
+import { dbGetEdgesFrom, dbGetNodeById, dbGetNodesByType } from '../db/index'
+import { scopeSurfaceFor, SCOPE_SURFACES } from '@shared/scope-surfaces'
 import type { IntentObject, GraphNode } from '@shared/types'
 
 /**
@@ -107,4 +107,76 @@ function normalizeScopeAllowed(scope: { allowed?: Record<string, string[]> }): R
   }
 
   return base
+}
+
+/**
+ * Build the candidate identifier lists for the scope multi-select UI.
+ *
+ * Candidates are derived from what is already in the knowledge graph — repo
+ * container nodes, jira project nodes, slack channel nodes — so the user is
+ * presented with the real orgs/projects/channels they actually interact with.
+ *
+ * For GitHub we also fall back to scanning pull_request/issue node URLs
+ * directly because repo container nodes may not yet exist on first run
+ * (before the deriveContainer fix propagates through a full poll cycle).
+ *
+ * The returned list for each surface is the union of:
+ *   • identifiers observed in the graph
+ *   • identifiers already in the user's configured allowlist
+ * so a seeded or check-in-added org that has no graph node yet still appears
+ * (and is shown as selected).
+ */
+export function buildScopeCandidates(): Record<string, string[]> {
+  const configured = normalizeScopeAllowed(readConfig().scope ?? {})
+  const result: Record<string, string[]> = {}
+
+  for (const spec of SCOPE_SURFACES) {
+    const seen = new Set<string>()
+    const candidates: string[] = []
+
+    const add = (raw: string): void => {
+      const lower = raw.toLowerCase()
+      if (lower && !seen.has(lower)) {
+        seen.add(lower)
+        candidates.push(raw)
+      }
+    }
+
+    if (spec.surface === 'github') {
+      // Primary: repo container nodes (key = "github:repo:owner/repo")
+      for (const node of dbGetNodesByType('repo')) {
+        const id = spec.parseIdentifier(node.key)
+        if (id) add(id)
+      }
+      // Fallback: scan pull_request + issue node URLs for org names, in case
+      // repo container nodes haven't been created yet (pre-first-poll-after-fix)
+      for (const nodeType of ['pull_request', 'issue'] as const) {
+        for (const node of dbGetNodesByType(nodeType)) {
+          const url = typeof node.attrs?.url === 'string' ? node.attrs.url : ''
+          const m = url.match(/github\.com\/([^/]+)\//)
+          if (m) add(m[1])
+        }
+      }
+    } else if (spec.surface === 'jira') {
+      for (const node of dbGetNodesByType('project')) {
+        const id = spec.parseIdentifier(node.key)
+        if (id) add(id)
+      }
+    } else if (spec.surface === 'slack') {
+      for (const node of dbGetNodesByType('channel')) {
+        const id = spec.parseIdentifier(node.key)
+        if (id) add(id)
+      }
+    }
+
+    // Union with currently configured identifiers so already-selected values
+    // always appear even when the graph has no node for them yet.
+    for (const id of (configured[spec.surface] ?? [])) {
+      add(id)
+    }
+
+    result[spec.surface] = candidates
+  }
+
+  return result
 }

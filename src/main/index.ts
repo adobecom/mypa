@@ -3,7 +3,7 @@ import { fixPath } from './services/path-fix'
 import { handleOAuthCallback } from './services/oauth'
 import { readFileSync } from 'fs'
 import { initDb, dbRunMaintenance } from './db/index'
-import { readConfig } from './services/config'
+import { readConfig, seedScopeIfUnset } from './services/config'
 import { connectAllServers, disconnectAllServers } from './services/mcp'
 import { startScheduler, stopScheduler } from './services/cron'
 import { startAmbient, stopAmbient, ambientComputeTrayState } from './services/ambient'
@@ -94,6 +94,9 @@ async function main(): Promise<void> {
     app.quit()
     return
   }
+
+  // Seed scope allowlist if this is the first run or config predates scope config
+  seedScopeIfUnset()
 
   // Create widget window (hidden initially)
   const win = createWidgetWindow()

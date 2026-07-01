@@ -86,11 +86,20 @@ function makeGithubAdapter(): SurfaceAdapter {
     // Role-tagged queries — more specific than `involves:@me` so we know WHY this item matters.
     // Priority order for de-dup: review_requested > assigned > mentioned > involved.
     const PER_PAGE = 50  // raised from 20 to reduce truncation (truncation disables freshness expiry)
+
+    // If the user has configured GitHub scope, restrict queries to those orgs only.
+    // GitHub treats multiple org: qualifiers as OR, so this is a union of allowed orgs.
+    // When allowedOrgs is empty there is no filter — all orgs pass through (backward compatible).
+    const allowedOrgs: string[] = readConfig().scope?.allowed?.github ?? []
+    const orgFilter = allowedOrgs.length > 0
+      ? ' ' + allowedOrgs.map((o) => `org:${o}`).join(' ')
+      : ''
+
     const QUERIES: Array<{ q: string; relation: string; kind: 'pr' | 'issue' | 'both' }> = [
-      { q: 'is:open is:pr review-requested:@me',  relation: 'review_requested', kind: 'pr' },
-      { q: 'is:open assigned:@me',                 relation: 'assigned',         kind: 'both' },
-      { q: 'is:open mentions:@me',                 relation: 'mentioned',        kind: 'both' },
-      { q: 'is:open involves:@me',                 relation: 'involved',         kind: 'both' },
+      { q: `is:open is:pr review-requested:@me${orgFilter}`,  relation: 'review_requested', kind: 'pr' },
+      { q: `is:open assigned:@me${orgFilter}`,                 relation: 'assigned',         kind: 'both' },
+      { q: `is:open mentions:@me${orgFilter}`,                 relation: 'mentioned',        kind: 'both' },
+      { q: `is:open involves:@me${orgFilter}`,                 relation: 'involved',         kind: 'both' },
     ]
 
     // Map from external_id → {result, relation} — keeps highest-priority relation on de-dup
@@ -200,7 +209,7 @@ function makeGithubAdapter(): SurfaceAdapter {
       // Metadata-only fields — no free-text body content stored beyond title/body already captured.
       raw: scrubRaw(raw.raw, [
         'number', 'id', 'html_url', 'url', 'state', 'draft',
-        'updated_at', 'created_at', 'repository', 'user',
+        'updated_at', 'created_at', 'repository', 'repository_url', 'user',
         'assignee', 'assignees', 'requested_reviewers', 'labels', 'milestone', 'pull_request'
       ])
     }

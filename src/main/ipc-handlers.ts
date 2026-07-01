@@ -43,6 +43,7 @@ import { generateRoutineSetup, cancelStream } from './services/claude'
 import { resolveAuthSource } from './services/auth'
 import { resolveToolApproval, resolveQuestion } from './services/agent'
 import { refreshSchedules, refreshCheckinSchedule, stopScheduler } from './services/cron'
+import { buildScopeCandidates } from './services/scope'
 import { startCheckIn, handleCheckInMessage, endCheckIn, cancelCheckinStream } from './services/checkin'
 import {
   dbGetCheckIns,
@@ -280,6 +281,10 @@ export function registerIpcHandlers(
 
   ipcMain.handle('config:get-mcp-status', async () => {
     return getServerStatus()
+  })
+
+  ipcMain.handle('config:get-scope-candidates', async () => {
+    return buildScopeCandidates()
   })
 
   // ─── OAuth ─────────────────────────────────────────────────────────────────

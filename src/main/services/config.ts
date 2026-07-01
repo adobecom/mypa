@@ -149,6 +149,21 @@ export function updateConfig(partial: Partial<AppConfig>): AppConfig {
   return updated
 }
 
+/**
+ * One-time idempotent seed: if no scope.allowed has ever been set, write a
+ * sensible starting allowlist so the scope gate is active immediately.
+ * Uses 'adobecom' as the default GitHub org (the user's primary workplace org).
+ * Safe to call on every startup — after the first write scope.allowed is defined
+ * and the condition is never true again, even if the user later clears an org.
+ */
+export function seedScopeIfUnset(): void {
+  const cfg = readConfig()
+  if (cfg.scope?.allowed === undefined || cfg.scope?.allowed === null) {
+    updateConfig({ scope: { allowed: { github: ['adobecom'] } } })
+    console.log('[config] seeded scope.allowed.github=["adobecom"]')
+  }
+}
+
 // ─── Owner identity helpers ──────────────────────────────────────────────────
 
 /**
