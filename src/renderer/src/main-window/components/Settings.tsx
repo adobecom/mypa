@@ -6,6 +6,7 @@ import { SCOPE_SURFACES } from '@shared/scope-surfaces'
 import ServerCatalogPicker from './ServerCatalogPicker'
 import { ScheduleBuilder } from './ScheduleBuilder'
 import { useToast } from '../toast/ToastProvider'
+import Tabs from '@renderer/components/Tabs'
 
 const OWNER_SURFACES = ['github', 'slack', 'jira', 'linear', 'notion'] as const
 type OwnerSurface = typeof OWNER_SURFACES[number]
@@ -1260,17 +1261,48 @@ function WorkingContextSection(): React.ReactElement {
   const [allowed, setAllowed] = useState<Record<string, string[]>>({})
   // Graph-derived candidates per surface (union with current allowed)
   const [candidates, setCandidates] = useState<Record<string, string[]>>({})
+  // Only servers with enabled !== false
   const [enabledIntegrationIds, setEnabledIntegrationIds] = useState<string[]>([])
+  // Which surface tab is currently active
+  const [activeSurface, setActiveSurface] = useState<string>('')
+  // Per-surface search query — reset when the active tab changes
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     api.config.get().then((cfg) => {
       setAllowed(cfg.scope?.allowed ?? {})
-      setEnabledIntegrationIds((cfg.mcp_servers ?? []).map((s) => s.name))
+      // Only include servers that are not explicitly disabled
+      setEnabledIntegrationIds(
+        (cfg.mcp_servers ?? []).filter((s) => s.enabled !== false).map((s) => s.name)
+      )
     })
     api.config.getScopeCandidates().then(setCandidates)
   }, [])
 
   const enabledSurfaces = SCOPE_SURFACES.filter((s) => enabledIntegrationIds.includes(s.integrationId))
+
+  // Keep activeSurface pointing at a valid tab whenever the enabled set changes.
+  // enabledKey is a derived string that represents the current set of enabled surfaces;
+  // using it (not enabledSurfaces array ref) as the dep prevents an infinite reset loop.
+  const enabledKey = enabledSurfaces.map((s) => s.surface).join(',')
+  useEffect(() => {
+    if (!activeSurface || !enabledSurfaces.find((s) => s.surface === activeSurface)) {
+      setActiveSurface(enabledSurfaces[0]?.surface ?? '')
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: enabledKey captures set identity
+  }, [enabledKey])
+
+  const activeSpec = enabledSurfaces.find((s) => s.surface === activeSurface)
+  // activeSurface === activeSpec.surface by construction, so it's a stable key into candidates
+  const surfaceCandidates = useMemo(
+    () => (activeSurface ? candidates[activeSurface] ?? [] : []),
+    [activeSurface, candidates]
+  )
+  const q = search.toLowerCase().trim()
+  const filtered = useMemo(
+    () => (!q ? surfaceCandidates : surfaceCandidates.filter((id) => id.toLowerCase().includes(q))),
+    [q, surfaceCandidates]
+  )
 
   function handleToggle(surface: string, id: string): void {
     // Use functional setState so rapid consecutive toggles always read the
@@ -1288,6 +1320,16 @@ function WorkingContextSection(): React.ReactElement {
     })
   }
 
+  const tabItems = enabledSurfaces.map((spec) => ({
+    id: spec.surface,
+    label: spec.label,
+    count: (allowed[spec.surface] ?? []).length,
+  }))
+
+  const selectedLower = activeSpec
+    ? new Set((allowed[activeSpec.surface] ?? []).map((s) => s.toLowerCase()))
+    : new Set<string>()
+
   return (
     <>
       <div style={{ borderTop: '1px solid var(--border-muted)', margin: '18px 0' }} />
@@ -1296,7 +1338,7 @@ function WorkingContextSection(): React.ReactElement {
           Working Context
         </div>
         <div className="form-hint" style={{ marginBottom: 12 }}>
-          Pick which {enabledSurfaces.length === 1 ? enabledSurfaces[0].itemNoun + 's' : 'orgs, projects, or channels'} mypa should focus on. Drawn from your recent activity.
+          Pick which {enabledSurfaces.length === 1 && activeSpec ? activeSpec.itemNoun + 's' : 'orgs, projects, or channels'} mypa should focus on. Drawn from your recent activity.
         </div>
 
         {enabledSurfaces.length === 0 ? (
@@ -1304,43 +1346,55 @@ function WorkingContextSection(): React.ReactElement {
             Connect GitHub, Jira, or Slack to enable scope filtering.
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {enabledSurfaces.map((spec) => {
-              const surfaceCandidates = candidates[spec.surface] ?? []
-              const selectedLower = new Set((allowed[spec.surface] ?? []).map((s) => s.toLowerCase()))
-              return (
-                <div key={spec.surface}>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 5 }}>
-                    {spec.label}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <Tabs
+              items={tabItems}
+              active={activeSurface}
+              onChange={(id) => { setActiveSurface(id); setSearch('') }}
+            />
+
+            {activeSpec && (
+              <div>
+                <input
+                  className="form-input"
+                  placeholder={`Search ${activeSpec.itemNoun}s…`}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  style={{ marginBottom: 8 }}
+                />
+
+                {surfaceCandidates.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                    No {activeSpec.itemNoun}s observed yet — unfiltered until you&apos;ve worked across connected {activeSpec.integrationId}
                   </div>
-                  {surfaceCandidates.length === 0 ? (
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                      No {spec.itemNoun}s observed yet — unfiltered until you&apos;ve worked across connected {spec.integrationId}
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      {surfaceCandidates.map((id) => {
-                        const selected = selectedLower.has(id.toLowerCase())
-                        return (
-                          <button
-                            key={id}
-                            className={`btn btn--sm ${selected ? 'btn--primary' : 'btn--ghost'}`}
-                            onClick={() => handleToggle(spec.surface, id)}
-                          >
-                            {id}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  )}
-                  {surfaceCandidates.length > 0 && selectedLower.size === 0 && (
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, fontStyle: 'italic' }}>
-                      None selected — all {spec.itemNoun}s pass through
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+                ) : filtered.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                    No {activeSpec.itemNoun}s match &ldquo;{search}&rdquo;
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                    {filtered.map((id) => {
+                      const selected = selectedLower.has(id.toLowerCase())
+                      return (
+                        <button
+                          key={id}
+                          className={`btn btn--sm ${selected ? 'btn--primary' : 'btn--ghost'}`}
+                          onClick={() => handleToggle(activeSpec.surface, id)}
+                        >
+                          {id}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {surfaceCandidates.length > 0 && selectedLower.size === 0 && !q && (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, fontStyle: 'italic' }}>
+                    None selected — all {activeSpec.itemNoun}s pass through
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
