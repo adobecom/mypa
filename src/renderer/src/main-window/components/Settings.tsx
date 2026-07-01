@@ -1272,16 +1272,20 @@ function WorkingContextSection(): React.ReactElement {
 
   const enabledSurfaces = SCOPE_SURFACES.filter((s) => enabledIntegrationIds.includes(s.integrationId))
 
-  async function handleToggle(surface: string, id: string): Promise<void> {
-    const current = (allowed[surface] ?? []).map((s) => s.toLowerCase())
-    const lower = id.toLowerCase()
-    const nextList = current.includes(lower)
-      ? (allowed[surface] ?? []).filter((s) => s.toLowerCase() !== lower)
-      : [...(allowed[surface] ?? []), id]
-    // Send the full allowed map — deepMerge replaces arrays as leaves
-    const nextAllowed = { ...allowed, [surface]: nextList }
-    setAllowed(nextAllowed)
-    await api.config.update({ scope: { allowed: nextAllowed } })
+  function handleToggle(surface: string, id: string): void {
+    // Use functional setState so rapid consecutive toggles always read the
+    // latest state rather than the stale closure value.
+    setAllowed((prev) => {
+      const lower = id.toLowerCase()
+      const current = (prev[surface] ?? []).map((s) => s.toLowerCase())
+      const nextList = current.includes(lower)
+        ? (prev[surface] ?? []).filter((s) => s.toLowerCase() !== lower)
+        : [...(prev[surface] ?? []), id.toLowerCase()]
+      // Send the full allowed map — deepMerge replaces arrays as leaves
+      const nextAllowed = { ...prev, [surface]: nextList }
+      api.config.update({ scope: { allowed: nextAllowed } }).catch(console.error)
+      return nextAllowed
+    })
   }
 
   return (

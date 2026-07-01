@@ -33,7 +33,9 @@ const VALID_VERBS: Record<string, readonly string[]> = {
  *   panel, push notifications, or the Done-record title.
  * - Clamps to 300 characters.
  */
-const RATIONALE_PREAMBLE_RE = /^(i\s+(cannot|can't|need\s+to|will|should|must|'ll|am\s+unable)|cannot|before\s+i|let\s+me|first[,\s]|read\s+the\s+full|i\s+am\s+unable)\b/i
+// Each alternative carries its own word-boundary anchor so that the delimiter
+// consumed by `first[,\s]` (a non-word char) does not prevent the match.
+const RATIONALE_PREAMBLE_RE = /^(i\s+(cannot|can't|need\s+to|will|should|must|'ll|am\s+unable)\b|cannot\b|before\s+i\b|let\s+me\b|first[,\s]|read\s+the\s+full\b|i\s+am\s+unable\b)/i
 
 export function sanitizeRationale(raw: string): string {
   const trimmed = raw.trim().replace(/\s+/g, ' ')
