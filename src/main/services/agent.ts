@@ -11,6 +11,7 @@ import { buildAgentEnv } from './auth'
 import { broadcast } from '../windows'
 import { ensureServersConnected, getServerStatus } from './mcp'
 import { buildBridgedMcpServers } from './mcp-bridge'
+import { logError } from './logger'
 import type { UsageSource, ChatMessage, PendingToolApproval, PendingQuestion } from '@shared/types'
 
 // Inter-chunk idle timeout once the stream is producing output.
@@ -592,6 +593,26 @@ async function streamAgentChatOnce(
       // tool_progress is a periodic heartbeat emitted by the SDK while a tool runs.
       // Re-arm with the startup budget so gaps between heartbeats don't trigger a timeout.
       if (msg.type === 'tool_progress') resetIdle(STREAM_STARTUP_TIMEOUT_MS)
+      // Capture tool-result errors so the real failure appears in ~/.mypa/mypa.log
+      // rather than only in the model's narrative (which may confabulate a cause).
+      if (msg.type === 'user') {
+        const userContent: unknown[] = (msg as any).message?.content ?? []  // eslint-disable-line @typescript-eslint/no-explicit-any
+        for (const block of userContent) {
+          const b = block as Record<string, unknown>
+          if (b.type === 'tool_result' && b.is_error) {
+            const toolUseId = String(b.tool_use_id ?? '')
+            const text = typeof b.content === 'string'
+              ? b.content
+              : Array.isArray(b.content)
+              ? (b.content as Array<Record<string, unknown>>)
+                  .filter((c) => c.type === 'text')
+                  .map((c) => String(c.text ?? ''))
+                  .join('\n')
+              : JSON.stringify(b.content)
+            logError('agent', `tool_result error (tool_use_id=${toolUseId}): ${text}`)
+          }
+        }
+      }
     }
   } catch (err) {
     clearTimeout(idleTimer)
@@ -730,10 +751,30 @@ async function runAgentWithMcpOnce(
     })) {
       if (msg.type === 'assistant') {
         for (const block of msg.message?.content ?? []) {
-          if ((block as any).type === 'text') text += (block as any).text
+          if ((block as any).type === 'text') text += (block as any).text  // eslint-disable-line @typescript-eslint/no-explicit-any
         }
       }
       if (msg.type === 'result') resultMsg = msg
+      // Capture tool-result errors so the real failure appears in ~/.mypa/mypa.log
+      // rather than only in the model's narrative (which may confabulate a cause).
+      if (msg.type === 'user') {
+        const userContent: unknown[] = (msg as any).message?.content ?? []  // eslint-disable-line @typescript-eslint/no-explicit-any
+        for (const block of userContent) {
+          const b = block as Record<string, unknown>
+          if (b.type === 'tool_result' && b.is_error) {
+            const toolUseId = String(b.tool_use_id ?? '')
+            const text2 = typeof b.content === 'string'
+              ? b.content
+              : Array.isArray(b.content)
+              ? (b.content as Array<Record<string, unknown>>)
+                  .filter((c) => c.type === 'text')
+                  .map((c) => String(c.text ?? ''))
+                  .join('\n')
+              : JSON.stringify(b.content)
+            logError('agent', `tool_result error (tool_use_id=${toolUseId}): ${text2}`)
+          }
+        }
+      }
     }
   } catch (err) {
     clearTimeout(timer)

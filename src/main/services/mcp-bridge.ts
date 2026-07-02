@@ -1,6 +1,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { getServerStatus, callToolRaw } from './mcp'
+import { logError } from './logger'
 
 /**
  * Builds one in-process MCP proxy server per connected entry in the warm pool.
@@ -60,13 +61,58 @@ export function buildBridgedMcpServers(): Record<string, { type: 'sdk'; name: st
 
     // Forward tool calls to the live pooled client.  The closure captures the
     // original (unsanitized) pool key so the correct ActiveServer is looked up.
-    server.setRequestHandler(CallToolRequestSchema, async (req) =>
-      callToolRaw(
-        originalName,
-        req.params.name,
-        (req.params.arguments ?? {}) as Record<string, unknown>,
-      ),
-    )
+    //
+    // Two hardening layers applied before returning to the SDK's internal MCP
+    // client (which may be a much older version than mypa's @modelcontextprotocol/sdk):
+    //
+    //  1. try/catch: a thrown callToolRaw (timeout, dead connection, unexpected
+    //     rejection) is converted to a valid MCP error result rather than an
+    //     opaque protocol error that the model would narrate as a ZodError.
+    //
+    //  2. Normalization: strip fields that an older MCP client validator may not
+    //     recognise (structuredContent, _meta, non-text content variants) so the
+    //     response shape is stable across SDK versions.
+    server.setRequestHandler(CallToolRequestSchema, async (req) => {
+      const toolLabel = `${originalName}::${req.params.name}`
+      let raw: Awaited<ReturnType<typeof callToolRaw>>
+      try {
+        raw = await callToolRaw(
+          originalName,
+          req.params.name,
+          (req.params.arguments ?? {}) as Record<string, unknown>,
+        )
+      } catch (err) {
+        logError('bridge', `tool call failed: ${toolLabel}`, err)
+        return {
+          content: [{ type: 'text' as const, text: (err instanceof Error ? err.message : String(err)) }],
+          isError: true,
+        }
+      }
+
+      // Normalize: keep only text/image content blocks; stringify everything
+      // else.  This drops structuredContent, _meta, and any future unknown
+      // fields that an older embedded MCP client might reject with a ZodError.
+      const normalizedContent = (raw.content ?? []).map((block: unknown) => {
+        const b = block as Record<string, unknown>
+        if (b.type === 'text') return { type: 'text' as const, text: String(b.text ?? '') }
+        // Only pass through image blocks when both required fields are present strings;
+        // a malformed block missing data or mimeType would fail SDK Zod validation.
+        if (b.type === 'image' && typeof b.data === 'string' && typeof b.mimeType === 'string')
+          return { type: 'image' as const, data: b.data, mimeType: b.mimeType }
+        // Stringify unknown block types (resource links, embedded docs, malformed images, etc.)
+        return { type: 'text' as const, text: JSON.stringify(b) }
+      })
+
+      if (raw.isError) {
+        const errorText = normalizedContent
+          .filter((b) => b.type === 'text')
+          .map((b) => (b as { type: 'text'; text: string }).text)
+          .join('\n')
+        logError('bridge', `tool returned isError: ${toolLabel}`, errorText || '(no text content)')
+      }
+
+      return { content: normalizedContent, isError: raw.isError ?? false }
+    })
 
     result[safeName] = { type: 'sdk', name: safeName, instance: server }
   }
