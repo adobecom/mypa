@@ -104,9 +104,26 @@ Transport is selected from `McpServerConfig.transport` (`'stdio' | 'http' | 'sse
 
 ---
 
+## `logger.ts` — Persistent file logger
+
+Append-only file logger that writes structured lines to `~/.mypa/mypa.log`. All writes also mirror to `console` so dev-terminal output is unchanged. A 1 MB size cap triggers a half-truncation on the next write (retains the newest half). Dependency-free.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `logInfo(scope, msg)` | Write an informational line (`[scope] msg`); mirrors to `console.log` |
+| `logError(scope, msg, err?)` | Write an error line with optional Error stack; mirrors to `console.error` |
+
+---
+
 ## `mcp-bridge.ts` — In-process Agent SDK bridge
 
 Wraps the warm `mcp.ts` connection pool as in-process MCP proxy servers for the Agent SDK's `{ type: 'sdk', instance }` variant. Eliminates the per-chat cold-boot cost (no subprocess spawns for chat turns). See [mcp-and-oauth.md](mcp-and-oauth.md#mcp-in-the-agent-sdk) for the full design.
+
+Each `CallToolRequest` handler applies two hardening layers before returning to the SDK's embedded MCP client (which may be an older `@modelcontextprotocol/sdk` version than mypa's):
+1. **try/catch**: a thrown `callToolRaw` (timeout, dead connection) is converted to a valid `{ content, isError: true }` result and logged via `logger.ts` instead of propagating as an opaque protocol error.
+2. **Normalization**: strips `structuredContent`, `_meta`, and non-text/non-image content variants from the result before returning, so the response shape is stable across SDK versions.
 
 **Key export:**
 
@@ -367,6 +384,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-07-01 — **Bridge hardening, tool-error logging, and persistent file logger (`mcp-bridge.ts`, `agent.ts`, `logger.ts` new).** Root-cause fix for MCP tool calls in routine chat producing confabulated "ZodError in the permission wrapper" model diagnoses. (1) New `logger.ts` — append-only file logger writing to `~/.mypa/mypa.log` with 1 MB size-cap rotation; `logError(scope, msg, err?)` and `logInfo(scope, msg)` mirror to `console` so dev-terminal output is unchanged. (2) `mcp-bridge.ts` `CallToolRequestSchema` handler — wraps `callToolRaw` in try/catch (thrown calls, e.g. 30 s pool timeout, now return `{ content, isError: true }` and are logged instead of propagating as an opaque protocol error); normalizes the result to text/image-only content (strips `structuredContent`, `_meta`, non-standard variants) so the shape is valid against any `@modelcontextprotocol/sdk` version embedded in the native binary. (3) `agent.ts` — both `streamAgentChatOnce` and `runAgentWithMcpOnce` now inspect `user`-type SDK messages for `tool_result` blocks with `is_error: true` and log them via `logError('agent', …)`. Previously the only record of a tool failure was the model's narrative, which is documented to confabulate ZodError/schema/session diagnoses.
 
 - 2026-06-30 — **Fix routine failures producing self-targeted "Send" intents (`routines.ts`, `config.ts`, `ambient.ts`, `inference.ts`).** Three-layer fix. (1) `routines.ts` `executeRoutine`: added `isAuthFailure(err)` classifier (matches 401/403/expired-token patterns). Step 1 loop now tracks `failures[]` and `successCount` in addition to `rawOutput`. On all-failed: marks run `status:'error'` with an auth-aware message, fires a failure OS notification, skips `inferRoutineIntents` entirely (primary fix), and emits one non-LLM `type:'flag'` via `routeIntent`. On partial failure: prepends an error preamble to `inferenceInput` so the model treats failed steps as observations. (2) `config.ts` `targetIsOwner(target)`: new predicate — normalised exact match against `owner.name` + all surface handles. (3) `ambient.ts` `guardSelfTarget(obj)`: new function called after `enrichPayloadForRouting` in both `runAmbientCycle` and `routeIntent`; converts any `slack:send`/`slack:reply` whose `proposed_action.target` resolves to the owner into a `type:'flag'` so no Send/Approve CTA is shown. Root cause: a Jira 401 was silently swallowed into `rawOutput`, then `ROUTINE_SYSTEM_PROMPT`'s "STRONGLY PREFER type:action" directive + `buildOwnerClause` (naming the owner as the only person in context) caused the LLM to fabricate a self-targeted Slack send.
 
