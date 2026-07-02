@@ -491,11 +491,15 @@ async function streamAgentChatOnce(
         const parts = toolName.split('__')
         const serverName = parts.length >= 2 ? parts[1] : ''
         const baseName = parts.length >= 3 ? parts.slice(2).join('__') : toolName
+        // The CLI binary's runtime Zod schema requires updatedInput to be a record
+        // on allow responses (stricter than the .d.ts types which mark it optional).
+        // Always echo the original input back so the allow branch validates.
+        const inputRecord = (toolInput as Record<string, unknown>) ?? {}
 
         // Always allow our own built-in tools (ask_user etc.)
-        if (serverName === 'mypa_builtin') return { behavior: 'allow' }
+        if (serverName === 'mypa_builtin') return { behavior: 'allow', updatedInput: inputRecord }
 
-        if (isReadOnlyTool(baseName)) return { behavior: 'allow' }
+        if (isReadOnlyTool(baseName)) return { behavior: 'allow', updatedInput: inputRecord }
 
         // Defense-in-depth: only genuine MCP write tools (mcp__server__tool format,
         // i.e. parts.length >= 3) may enter the user-approval flow. A bare built-in
@@ -512,7 +516,7 @@ async function streamAgentChatOnce(
         // Gate write tools via user approval
         const approvalId = crypto.randomUUID()
         const approval = buildPendingToolApproval(
-          approvalId, toolName, (toolInput as Record<string, unknown>) ?? {}, streamId,
+          approvalId, toolName, inputRecord, streamId,
         )
         let cancelFn: (() => void) | undefined
         const resultPromise = new Promise<{ allow: boolean; editedInput?: Record<string, unknown> }>(
@@ -527,7 +531,7 @@ async function streamAgentChatOnce(
         pendingToolApprovals.delete(approvalId)
         pendingApprovalCancels.delete(streamId)
         if (!allow) return { behavior: 'deny', message: 'Dismissed by user' }
-        return editedInput ? { behavior: 'allow', updatedInput: editedInput } : { behavior: 'allow' }
+        return { behavior: 'allow', updatedInput: editedInput ?? inputRecord }
       },
       abortController: ac,
     },
@@ -740,10 +744,11 @@ async function runAgentWithMcpOnce(
         mcpServers,
         env: buildAgentEnv(),
         pathToClaudeCodeExecutable: resolveClaudeExecutable(),
-        canUseTool: async (toolName: string) => {
+        canUseTool: async (toolName: string, toolInput: unknown) => {
           const parts = toolName.split('__')
           const baseName = parts.length >= 3 ? parts.slice(2).join('__') : toolName
-          if (isReadOnlyTool(baseName)) return { behavior: 'allow' }
+          const inputRecord = (toolInput as Record<string, unknown>) ?? {}
+          if (isReadOnlyTool(baseName)) return { behavior: 'allow', updatedInput: inputRecord }
           return { behavior: 'deny', message: 'write tools not available in one-shot MCP mode' }
         },
         abortController: ac,
