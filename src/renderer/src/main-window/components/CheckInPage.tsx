@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { CheckCircle, Loader2, AlertCircle, MessageSquare } from 'lucide-react'
 import ChatThread from '../../widget/components/ChatThread'
-import type { CheckIn, ChatMessage, CheckInExtractionSummary, PendingToolApproval, PendingQuestion } from '../../../../../../shared/types'
+import type { CheckIn, ChatMessage, CheckInExtractionSummary, PendingToolApproval, PendingQuestion } from '@shared/types'
 
 function formatTs(ts: string): string {
   return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })

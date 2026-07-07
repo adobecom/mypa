@@ -1,7 +1,7 @@
 import React from 'react'
 import { Settings } from 'lucide-react'
 import LogoMark from '../../LogoMark'
-import type { TrayState } from '../../../../../../shared/types'
+import type { TrayState } from '@shared/types'
 
 export type Tab = 'queue' | 'routines'
 

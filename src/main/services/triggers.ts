@@ -275,7 +275,7 @@ const RELATION_PRIORITY: Record<string, number> = {
   dm: 1,
   thread_reply: 1,
 }
-function relationPriority(r: string | undefined): number {
+function relationPriority(r: string | null | undefined): number {
   return r ? (RELATION_PRIORITY[r] ?? 0) : 0
 }
 

@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Sparkles, X } from 'lucide-react'
-import type { PlanDraft, PlanItemTiming } from '../../../../../../shared/types'
+import type { PlanDraft, PlanItemTiming } from '@shared/types'
 import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 
 const TIMINGS: { value: PlanItemTiming; label: string }[] = [

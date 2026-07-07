@@ -2,7 +2,7 @@ import React, { Fragment } from 'react'
 import { Inbox } from 'lucide-react'
 import IntentCard from './IntentCard'
 import PlanItemCard from './PlanItemCard'
-import type { Intent, PlanItem, PlanItemTiming, RoutineRun } from '../../../../../../shared/types'
+import type { Intent, PlanItem, PlanItemTiming, RoutineRun } from '@shared/types'
 
 const TERMINAL: Intent['status'][] = ['executed', 'dismissed', 'challenged', 'failed', 'expired']
 const TIMING_ORDER: PlanItemTiming[] = ['now', 'morning', 'afternoon', 'evening', 'anytime']

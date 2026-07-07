@@ -259,7 +259,7 @@ function parseMemoryOutput(text: string): RawMemoryOutput | null {
   try {
     const obj = JSON.parse(match[0]) as Record<string, unknown>
     if (!Array.isArray(obj.memories)) return null
-    return obj as RawMemoryOutput
+    return obj as unknown as RawMemoryOutput
   } catch {
     return null
   }

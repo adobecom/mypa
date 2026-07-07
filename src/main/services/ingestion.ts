@@ -284,7 +284,7 @@ function makeJiraAdapter(): SurfaceAdapter {
           // mcp-atlassian often omits the url field on simplified dicts; reconstruct from config.
           const key = String(i.key ?? i.id ?? '')
           if (!key) return ''
-          const jiraBaseUrl = readConfig().mcpServers?.find((s) => s.name === 'jira')?.env?.JIRA_URL
+          const jiraBaseUrl = readConfig().mcp_servers?.find((s) => s.name === 'jira')?.env?.JIRA_URL
           if (!jiraBaseUrl) return ''
           return `${jiraBaseUrl.replace(/\/$/, '')}/browse/${key}`
         })(),

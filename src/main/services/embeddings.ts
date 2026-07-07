@@ -93,7 +93,7 @@ let embeddingQueue: Promise<void> = Promise.resolve()
 export function enqueueEmbeddings(signals: Signal[]): void {
   if (signals.length === 0) return
   embeddingQueue = embeddingQueue
-    .then(() => embedBatch(signals))
+    .then(async () => { await embedBatch(signals) })
     .catch((e) => console.error('[embeddings] queue error:', e))
 }
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Sparkles } from 'lucide-react'
-import type { AmbientDigest, DigestSlot } from '../../../../../../shared/types'
+import type { AmbientDigest, DigestSlot } from '@shared/types'
 import MarkdownText from '@renderer/components/MarkdownText'
 
 const SLOTS: DigestSlot[] = ['morning', 'midday', 'eod']

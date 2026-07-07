@@ -3,6 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { readConfig, updateConfig } from './config'
 import type { McpServerConfig, McpTool, McpServerStatus, ResolvedOwnerHandles } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
@@ -190,11 +191,11 @@ export async function callTool(
   const server = servers.get(serverName)
   if (!server) throw new Error(`MCP server "${serverName}" not connected`)
 
-  const result = await withTimeout(
+  const result = (await withTimeout(
     server.client.callTool({ name: toolName, arguments: params }),
     30_000,
     `callTool ${serverName}::${toolName}`
-  )
+  )) as CallToolResult
   const content = result.content ?? []
   const text = content
     .map((c: any) => (c.type === 'text' ? c.text : JSON.stringify(c)))
@@ -213,14 +214,14 @@ export async function callToolRaw(
   serverName: string,
   toolName: string,
   params: Record<string, unknown>,
-) {
+): Promise<CallToolResult> {
   const server = servers.get(serverName)
   if (!server) throw new Error(`MCP server "${serverName}" not connected`)
-  return withTimeout(
+  return (await withTimeout(
     server.client.callTool({ name: toolName, arguments: params }),
     30_000,
     `callTool ${serverName}::${toolName}`,
-  )
+  )) as CallToolResult
 }
 
 export function connectAllServers(): Promise<void> {

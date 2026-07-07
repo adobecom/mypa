@@ -421,8 +421,8 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
                         <span style={{ textTransform: 'capitalize' }}>{surface}</span>
                         {status && (
                           status.needsReview
-                            ? <AlertTriangle size={11} color="var(--color-warning, #f59e0b)" title="Confirm — may not match your graph" />
-                            : <Check size={11} color="var(--color-success, #22c55e)" title="Auto-filled" />
+                            ? <span title="Confirm — may not match your graph"><AlertTriangle size={11} color="var(--color-warning, #f59e0b)" /></span>
+                            : <span title="Auto-filled"><Check size={11} color="var(--color-success, #22c55e)" /></span>
                         )}
                       </label>
                       <input

@@ -15,6 +15,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.preload.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "postinstall": "electron-rebuild -f -w better-sqlite3",
     "pack": "electron-builder --dir",
     "dist": "electron-vite build && electron-builder --publish=never"
