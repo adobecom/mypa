@@ -35,11 +35,29 @@ function rotateIfNeeded(): void {
   }
 }
 
+// Common secret shapes that might appear in an MCP tool's error/response text
+// (e.g. a misconfigured server echoing its own auth header back). Redacted
+// before anything is written to disk in plaintext.
+const SECRET_PATTERNS: RegExp[] = [
+  /\bBearer\s+[A-Za-z0-9._-]{10,}/gi,
+  /\bgh[pousr]_[A-Za-z0-9]{10,}/g, // GitHub PAT / OAuth / user-to-server / refresh tokens
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}/g, // Slack tokens
+  /\bsk-[A-Za-z0-9_-]{10,}/g // generic API-key-shaped secrets (OpenAI/Anthropic-style)
+]
+
+function redact(text: string): string {
+  let out = text
+  for (const pattern of SECRET_PATTERNS) {
+    out = out.replace(pattern, '[redacted]')
+  }
+  return out
+}
+
 function write(line: string): void {
   try {
     ensureDir()
     rotateIfNeeded()
-    appendFileSync(LOG_PATH, line + '\n', 'utf8')
+    appendFileSync(LOG_PATH, redact(line) + '\n', 'utf8')
   } catch {
     // File I/O is best-effort — never let it throw into callers.
   }

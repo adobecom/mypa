@@ -1,4 +1,5 @@
 import { dbInsertUsage } from '../db/index'
+import { logError } from './logger'
 import type { UsageSource } from '@shared/types'
 
 // ─── Usage recorder ───────────────────────────────────────────────────────────
@@ -34,7 +35,9 @@ export function recordUsage(
       cache_read_tokens: u.cache_read_input_tokens ?? 0,
       cost_usd: cliResult.total_cost_usd ?? cliResult.cost_usd ?? 0
     })
-  } catch {
-    // never let telemetry break a call
+  } catch (err) {
+    // Never let telemetry break a call, but a silent failure here means
+    // cost/usage numbers under-report with no trace — always log it.
+    logError('usage', 'recordUsage failed', err)
   }
 }

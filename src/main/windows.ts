@@ -31,12 +31,17 @@ export function createWidgetWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
       backgroundThrottling: false
     }
   })
 
   widgetWin.setTitle('mypa-widget')
   attachExternalLinkGuards(widgetWin)
+
+  widgetWin.on('closed', () => {
+    widgetWin = null
+  })
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     widgetWin.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/widget.html`)
@@ -77,6 +82,7 @@ export function createMainWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
       backgroundThrottling: false
     }
   })

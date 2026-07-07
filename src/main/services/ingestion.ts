@@ -666,6 +666,18 @@ const STAGGER_OFFSETS: Record<IntentSurface, number> = {
 const intervalIds = new Map<IntentSurface, ReturnType<typeof setInterval>>()
 let newSignalCallback: ((signals: Signal[]) => void) | null = null
 
+// Consecutive-failure backoff: a surface whose poll keeps throwing (expired
+// token, rate limit, MCP server down) backs off geometrically instead of
+// hammering the same failing call at full frequency forever. Resets to 0 on
+// the next successful poll. Capped at MAX_BACKOFF_MULTIPLIER × the base interval.
+const consecutiveFailures = new Map<IntentSurface, number>()
+const MAX_BACKOFF_MULTIPLIER = 4
+
+function backoffMultiplier(surface: IntentSurface): number {
+  const failures = consecutiveFailures.get(surface) ?? 0
+  return Math.min(2 ** failures, MAX_BACKOFF_MULTIPLIER)
+}
+
 export function startIngestion(onNewSignals: (signals: Signal[]) => void): void {
   if (intervalIds.size > 0) return // already running
   newSignalCallback = onNewSignals
@@ -673,21 +685,23 @@ export function startIngestion(onNewSignals: (signals: Signal[]) => void): void 
   const baseMs = cfg.ambient?.pollIntervalMs ?? 5 * 60 * 1000
 
   for (const adapter of adapters) {
-    const jitter = Math.floor(Math.random() * 90_000) - 45_000 // ±45 s
-    const interval = baseMs + jitter
     const stagger = STAGGER_OFFSETS[adapter.surface]
 
-    // Delay the first poll by the stagger so MCP connections can settle
-    const initial = setTimeout(() => {
-      runAdapterPoll(adapter).catch(console.error)
-      const id = setInterval(() => {
-        runAdapterPoll(adapter).catch(console.error)
-      }, interval)
-      intervalIds.set(adapter.surface, id)
-    }, stagger + 3_000) // +3 s minimum before first poll
+    // Self-rescheduling setTimeout (rather than setInterval) so each poll's
+    // backoff multiplier can change the delay before the *next* poll.
+    const scheduleNext = (delay: number): void => {
+      const id = setTimeout(async () => {
+        await runAdapterPoll(adapter).catch(console.error)
+        const jitter = Math.floor(Math.random() * 90_000) - 45_000 // ±45 s
+        const nextDelay = Math.max(baseMs * backoffMultiplier(adapter.surface) + jitter, 30_000)
+        scheduleNext(nextDelay)
+      }, delay)
+      intervalIds.set(adapter.surface, id as unknown as ReturnType<typeof setInterval>)
+    }
 
-    // Keep a reference so we can clear it on stop
-    intervalIds.set(adapter.surface, initial as unknown as ReturnType<typeof setInterval>)
+    const initialJitter = Math.floor(Math.random() * 90_000) - 45_000
+    // Delay the first poll by the stagger so MCP connections can settle
+    scheduleNext(Math.max(stagger + 3_000 + initialJitter, 3_000)) // +3 s minimum before first poll
   }
 }
 
@@ -696,6 +710,7 @@ export function stopIngestion(): void {
   intervalIds.clear()
   newSignalCallback = null
   lastCompletePollAt.clear()
+  consecutiveFailures.clear()
 }
 
 export async function pollOnce(): Promise<Signal[]> {
@@ -730,8 +745,10 @@ async function runAdapterPoll(adapter: SurfaceAdapter): Promise<Signal[]> {
         })
       }
     }
+    consecutiveFailures.set(adapter.surface, 0)
   } catch (e) {
     console.error(`[ingestion:${adapter.surface}] poll error:`, e)
+    consecutiveFailures.set(adapter.surface, (consecutiveFailures.get(adapter.surface) ?? 0) + 1)
   }
   if (pollComplete) {
     // Record that we completed a full, non-truncated poll for this surface.

@@ -5,14 +5,28 @@ import { safeStorage } from 'electron'
 import type { AppConfig } from '@shared/types'
 import { DEFAULT_CONFIG } from '@shared/types'
 import { dbGetActiveHardMemories } from '../db'
+import { logError } from './logger'
 
 const CONFIG_DIR = join(homedir(), '.mypa')
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json')
 const ENC_PREFIX = 'enc:'
 
+// Warn (once per process) rather than every encrypt call, since encryptValue
+// runs on every secret field on every config save.
+let warnedPlaintextFallback = false
+
 function encryptValue(val: string): string {
   if (val.startsWith(ENC_PREFIX)) return val  // already encrypted — don't double-encrypt
-  if (!safeStorage.isEncryptionAvailable()) return val
+  if (!safeStorage.isEncryptionAvailable()) {
+    if (!warnedPlaintextFallback) {
+      warnedPlaintextFallback = true
+      logError(
+        'config',
+        'OS credential encryption unavailable — API keys and OAuth tokens will be stored in plaintext in ~/.mypa/config.json'
+      )
+    }
+    return val
+  }
   return ENC_PREFIX + safeStorage.encryptString(val).toString('base64')
 }
 

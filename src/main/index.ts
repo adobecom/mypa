@@ -107,18 +107,42 @@ async function main(): Promise<void> {
     openOrFocusMainWindow
   )
 
+  // Single cleanup path shared by the tray "Quit" action and the OS-initiated
+  // quit (Cmd+Q, dock quit, shutdown). Awaits MCP disconnect (bounded by a
+  // timeout so a hung stdio server can't block quitting) before the process
+  // actually exits, so child processes aren't orphaned. `cleanupStarted`
+  // guards against re-entry: app.quit() re-fires 'before-quit' once cleanup
+  // itself calls app.exit(0) unless something else quits first.
+  let cleanupStarted = false
+  async function cleanupAndExit(): Promise<void> {
+    if (cleanupStarted) return
+    cleanupStarted = true
+    setQuitting()
+    stopScheduler()
+    stopAmbient()
+    try {
+      await Promise.race([
+        disconnectAllServers(),
+        new Promise((resolve) => setTimeout(resolve, 3000))
+      ])
+    } catch (err) {
+      console.error('[main] error disconnecting MCP servers during quit:', err)
+    }
+    destroyTray()
+    app.exit(0)
+  }
+
+  app.on('before-quit', (event) => {
+    if (cleanupStarted) return
+    event.preventDefault()
+    cleanupAndExit()
+  })
+
   // Create tray
   createTray(
     () => toggleWidget(),
     () => openOrFocusMainWindow(),
-    () => {
-      setQuitting()
-      stopScheduler()
-      stopAmbient()
-      disconnectAllServers()
-      destroyTray()
-      app.exit(0)
-    },
+    () => app.quit(),
     () => checkForUpdatesNow(),
     () => installUpdate()
   )
@@ -145,15 +169,6 @@ async function main(): Promise<void> {
   // Set initial tray state and Dock badge
   setTrayState(ambientComputeTrayState())
   updateBadgeCount()
-
-  // Prevent app from quitting when last window closes — stay in tray
-  app.on('before-quit', () => {
-    setQuitting()
-    stopScheduler()
-    stopAmbient()
-    disconnectAllServers()
-    destroyTray()
-  })
 
   win.show()
 
