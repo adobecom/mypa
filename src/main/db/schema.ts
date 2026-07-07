@@ -357,7 +357,14 @@ export function initSchema(db: Database.Database): void {
         CREATE INDEX IF NOT EXISTS idx_signals_surface ON signals(surface, occurred_at);
       `)
     })
-    migrateSignals()
-    db.pragma('foreign_keys = ON')
+    try {
+      migrateSignals()
+    } finally {
+      // Always restore, even if the transaction rolled back — otherwise a
+      // failed migration leaves foreign-key enforcement permanently off for
+      // the rest of the process (and every future boot that re-checks
+      // sigSql and finds the migration already applied or still pending).
+      db.pragma('foreign_keys = ON')
+    }
   }
 }

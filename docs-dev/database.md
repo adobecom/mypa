@@ -384,6 +384,8 @@ Vectors are stored as raw little-endian Float32 BLOBs and similarity search is p
 
 ## Changelog
 
+- 2026-07-07 — **Signals migration hardened:** the `signals` table's `UNIQUE(surface, external_id, fingerprint)` → `UNIQUE(surface, external_id)` migration in `schema.ts` (`CREATE signals_mig` / `INSERT` / `DELETE node_signals` / `DROP` / `RENAME`) now runs inside a single `db.transaction()` instead of as a bare multi-statement `db.exec()`. Previously a crash between `DROP TABLE signals` and the `RENAME` would permanently lose the table with no rollback; now the whole sequence is atomic. `foreign_keys` is still toggled OFF/ON outside the transaction (SQLite treats that pragma as a no-op inside one), but the ON restore is now in a `finally` so a migration failure can't leave FK enforcement permanently disabled.
+
 - 2026-07-07 — **Doc fix:** the `intents` table reference above was missing the `urgency` and `actions` columns, even though both were already documented below (2026-06-11 and 2026-06-26 entries). Table now matches the changelog and the actual schema.
 
 - 2026-06-26 — **`intents.actions` column:** additive `ALTER TABLE` migration adds `actions TEXT NOT NULL DEFAULT '[]'` to the `intents` table. Stores a JSON-encoded `McpActionRef[]` array — the concrete MCP tool calls proposed by agentic deep-enrichment (`inferDeepIntent`). When non-empty, `executeActions()` in `ambient.ts` uses this array instead of the legacy `surface/verb/payload` columns for execution. `dbCreateIntent` persists `obj.actions ?? []`; `deserializeIntent` parses it back into `McpActionRef[]`. New helper `dbUpdateIntentActions(id, actions)` updates the column in-place (used by `ambientApproveIntent` when the user edits the draft text).

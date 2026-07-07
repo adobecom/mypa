@@ -678,11 +678,21 @@ function backoffMultiplier(surface: IntentSurface): number {
   return Math.min(2 ** failures, MAX_BACKOFF_MULTIPLIER)
 }
 
+// Bumped by stopIngestion() to invalidate any in-flight self-rescheduling
+// chain from startIngestion(). Without this, a poll that's already awaiting
+// adapter.poll() when stopIngestion() clears intervalIds would still
+// unconditionally reschedule itself afterward — a "zombie" timer that
+// clearInterval() can no longer see or cancel, silently resurrecting
+// polling for that surface (and confusing startIngestion()'s
+// `intervalIds.size > 0` re-entry guard on the next start).
+let ingestionEpoch = 0
+
 export function startIngestion(onNewSignals: (signals: Signal[]) => void): void {
   if (intervalIds.size > 0) return // already running
   newSignalCallback = onNewSignals
   const cfg = readConfig()
   const baseMs = cfg.ambient?.pollIntervalMs ?? 5 * 60 * 1000
+  const epoch = ingestionEpoch
 
   for (const adapter of adapters) {
     const stagger = STAGGER_OFFSETS[adapter.surface]
@@ -691,7 +701,9 @@ export function startIngestion(onNewSignals: (signals: Signal[]) => void): void 
     // backoff multiplier can change the delay before the *next* poll.
     const scheduleNext = (delay: number): void => {
       const id = setTimeout(async () => {
+        if (epoch !== ingestionEpoch) return // stopIngestion() ran since this chain started
         await runAdapterPoll(adapter).catch(console.error)
+        if (epoch !== ingestionEpoch) return // stopIngestion() ran during the poll
         const jitter = Math.floor(Math.random() * 90_000) - 45_000 // ±45 s
         const nextDelay = Math.max(baseMs * backoffMultiplier(adapter.surface) + jitter, 30_000)
         scheduleNext(nextDelay)
@@ -706,6 +718,7 @@ export function startIngestion(onNewSignals: (signals: Signal[]) => void): void 
 }
 
 export function stopIngestion(): void {
+  ingestionEpoch++
   for (const id of intervalIds.values()) clearInterval(id)
   intervalIds.clear()
   newSignalCallback = null

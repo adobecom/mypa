@@ -35,7 +35,7 @@ function runExclusive<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /** Races `promise` against a timeout. Rejects with a clear message on expiry. */
-async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+export async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>
   const race = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms)
@@ -183,19 +183,32 @@ export function getToolInputSchema(serverName: string, toolName: string): Record
   return tool?.inputSchema ?? null
 }
 
+// Shared by callTool/callToolRaw. The MCP SDK's `Client.callTool()` return type
+// widens to `{}` once piped through the generic `withTimeout<T>` wrapper (a TS
+// inference quirk with its structurally-indexed result type), so the actual
+// runtime shape — always CallToolResult for a plain callTool() invocation with
+// no custom resultSchema — has to be asserted once, here, rather than at every
+// call site.
+async function callToolTimed(
+  serverName: string,
+  toolName: string,
+  params: Record<string, unknown>
+): Promise<CallToolResult> {
+  const server = servers.get(serverName)
+  if (!server) throw new Error(`MCP server "${serverName}" not connected`)
+  return (await withTimeout(
+    server.client.callTool({ name: toolName, arguments: params }),
+    30_000,
+    `callTool ${serverName}::${toolName}`
+  )) as CallToolResult
+}
+
 export async function callTool(
   serverName: string,
   toolName: string,
   params: Record<string, unknown>
 ): Promise<string> {
-  const server = servers.get(serverName)
-  if (!server) throw new Error(`MCP server "${serverName}" not connected`)
-
-  const result = (await withTimeout(
-    server.client.callTool({ name: toolName, arguments: params }),
-    30_000,
-    `callTool ${serverName}::${toolName}`
-  )) as CallToolResult
+  const result = await callToolTimed(serverName, toolName, params)
   const content = result.content ?? []
   const text = content
     .map((c: any) => (c.type === 'text' ? c.text : JSON.stringify(c)))
@@ -215,13 +228,7 @@ export async function callToolRaw(
   toolName: string,
   params: Record<string, unknown>,
 ): Promise<CallToolResult> {
-  const server = servers.get(serverName)
-  if (!server) throw new Error(`MCP server "${serverName}" not connected`)
-  return (await withTimeout(
-    server.client.callTool({ name: toolName, arguments: params }),
-    30_000,
-    `callTool ${serverName}::${toolName}`,
-  )) as CallToolResult
+  return callToolTimed(serverName, toolName, params)
 }
 
 export function connectAllServers(): Promise<void> {
@@ -347,9 +354,10 @@ export async function reconnectServer(name: string): Promise<McpServerStatus> {
 }
 
 export async function disconnectAllServers(): Promise<void> {
-  for (const name of [...servers.keys()]) {
-    await disconnectServer(name)
-  }
+  // Parallel, not sequential — a caller (e.g. app quit) bounding this with an
+  // overall timeout otherwise only reaches as many servers as fit before the
+  // deadline in loop order, orphaning the rest.
+  await Promise.allSettled([...servers.keys()].map((name) => disconnectServer(name)))
 }
 
 export function getServerStatus(): McpServerStatus[] {

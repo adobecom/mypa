@@ -57,7 +57,7 @@ function write(line: string): void {
   try {
     ensureDir()
     rotateIfNeeded()
-    appendFileSync(LOG_PATH, redact(line) + '\n', 'utf8')
+    appendFileSync(LOG_PATH, line + '\n', 'utf8')
   } catch {
     // File I/O is best-effort — never let it throw into callers.
   }
@@ -65,17 +65,17 @@ function write(line: string): void {
 
 /**
  * Log an informational message.
- * Also printed to console.log so dev-terminal output is unchanged.
+ * Also printed to console.log so dev-terminal output is unchanged (redaction aside).
  */
 export function logInfo(scope: string, msg: string): void {
-  const line = `${new Date().toISOString()} [${scope}] ${msg}`
+  const line = redact(`${new Date().toISOString()} [${scope}] ${msg}`)
   console.log(line)
   write(line)
 }
 
 /**
  * Log an error with an optional Error object.
- * Also printed to console.error so dev-terminal output is unchanged.
+ * Also printed to console.error so dev-terminal output is unchanged (redaction aside).
  */
 export function logError(scope: string, msg: string, err?: unknown): void {
   const detail = err instanceof Error
@@ -83,7 +83,7 @@ export function logError(scope: string, msg: string, err?: unknown): void {
     : err !== undefined
     ? `: ${String(err)}`
     : ''
-  const line = `${new Date().toISOString()} [${scope}] ERROR ${msg}${detail}`
+  const line = redact(`${new Date().toISOString()} [${scope}] ERROR ${msg}${detail}`)
   console.error(line)
   write(line)
 }

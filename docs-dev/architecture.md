@@ -113,6 +113,8 @@ See [ipc.md](ipc.md) for the full reference.
 
 ## Changelog
 
+- 2026-07-07 — **Quit-path unification:** the tray "Quit" action and the OS-initiated `before-quit` (Cmd+Q, dock, shutdown) previously each ran their own copy of teardown (`stopScheduler`/`stopAmbient`/`disconnectAllServers`/`destroyTray`) and called the async MCP disconnect without awaiting it before exiting, orphaning in-flight child processes. `index.ts` now routes both through a single `cleanupAndExit()` that awaits `disconnectAllServers()` (bounded to 3s) before `app.exit(0)`; `event.preventDefault()` runs unconditionally on every `before-quit` so a second quit trigger while cleanup is in flight can't let the default quit proceed early. `windows.ts` also sets `sandbox: true` explicitly on both `BrowserWindow`s (previously relying on Electron's default) and nulls `widgetWin` on `'closed'`, matching `mainWin`'s existing pattern.
+
 - 2026-06-22 — **Agent SDK migration:** updated data-flow diagram to show `claude.ts → agent.ts` in the routine and plan paths. `agent.ts` (`@anthropic-ai/claude-agent-sdk`) is now the actual AI entry point; `claude.ts` is a thin shim.
 
 - 2026-06-07 — `src/main/windows.ts` gained `broadcast(channel, ...args)` — sends an IPC event to every open, non-destroyed window (widget + main); used by `routines.ts` and `ambient.ts` for events that should reach both windows
