@@ -316,41 +316,55 @@ export function initSchema(db: Database.Database): void {
   // UPDATE to fail when it tried to set a fingerprint that already existed on a sibling row.
   const sigSql = (db.prepare("SELECT sql FROM sqlite_master WHERE name='signals'").get() as any)?.sql ?? ''
   if (sigSql.includes('UNIQUE (surface, external_id, fingerprint)')) {
+    // foreign_keys is a no-op inside a transaction, so it must be toggled outside it.
+    // The CREATE/INSERT/DELETE/DROP/RENAME sequence itself runs as one atomic
+    // transaction so a crash mid-migration rolls back entirely instead of leaving
+    // the database with `signals` dropped and `signals_mig` never renamed.
     db.pragma('foreign_keys = OFF')
-    db.exec(`
-      CREATE TABLE signals_mig (
-        id           TEXT PRIMARY KEY,
-        surface      TEXT NOT NULL,
-        kind         TEXT NOT NULL,
-        external_id  TEXT NOT NULL,
-        fingerprint  TEXT NOT NULL,
-        title        TEXT NOT NULL DEFAULT '',
-        body         TEXT NOT NULL DEFAULT '',
-        actor        TEXT NOT NULL DEFAULT '',
-        url          TEXT NOT NULL DEFAULT '',
-        raw          TEXT NOT NULL DEFAULT '{}',
-        occurred_at  TEXT,
-        observed_at  TEXT NOT NULL,
-        processed    INTEGER NOT NULL DEFAULT 0,
-        embedding    BLOB,
-        embedding_model TEXT,
-        relation     TEXT,
-        directed     INTEGER NOT NULL DEFAULT 0,
-        last_actor   TEXT,
-        due_at       TEXT,
-        UNIQUE (surface, external_id)
-      );
-      INSERT OR IGNORE INTO signals_mig
-        SELECT id, surface, kind, external_id, fingerprint, title, body, actor, url, raw,
-               occurred_at, observed_at, processed, embedding, embedding_model,
-               NULL, 0, NULL, NULL
-        FROM signals ORDER BY observed_at DESC;
-      DELETE FROM node_signals WHERE signal_id NOT IN (SELECT id FROM signals_mig);
-      DROP TABLE signals;
-      ALTER TABLE signals_mig RENAME TO signals;
-      CREATE INDEX IF NOT EXISTS idx_signals_unprocessed ON signals(processed, observed_at);
-      CREATE INDEX IF NOT EXISTS idx_signals_surface ON signals(surface, occurred_at);
-    `)
-    db.pragma('foreign_keys = ON')
+    const migrateSignals = db.transaction(() => {
+      db.exec(`
+        CREATE TABLE signals_mig (
+          id           TEXT PRIMARY KEY,
+          surface      TEXT NOT NULL,
+          kind         TEXT NOT NULL,
+          external_id  TEXT NOT NULL,
+          fingerprint  TEXT NOT NULL,
+          title        TEXT NOT NULL DEFAULT '',
+          body         TEXT NOT NULL DEFAULT '',
+          actor        TEXT NOT NULL DEFAULT '',
+          url          TEXT NOT NULL DEFAULT '',
+          raw          TEXT NOT NULL DEFAULT '{}',
+          occurred_at  TEXT,
+          observed_at  TEXT NOT NULL,
+          processed    INTEGER NOT NULL DEFAULT 0,
+          embedding    BLOB,
+          embedding_model TEXT,
+          relation     TEXT,
+          directed     INTEGER NOT NULL DEFAULT 0,
+          last_actor   TEXT,
+          due_at       TEXT,
+          UNIQUE (surface, external_id)
+        );
+        INSERT OR IGNORE INTO signals_mig
+          SELECT id, surface, kind, external_id, fingerprint, title, body, actor, url, raw,
+                 occurred_at, observed_at, processed, embedding, embedding_model,
+                 NULL, 0, NULL, NULL
+          FROM signals ORDER BY observed_at DESC;
+        DELETE FROM node_signals WHERE signal_id NOT IN (SELECT id FROM signals_mig);
+        DROP TABLE signals;
+        ALTER TABLE signals_mig RENAME TO signals;
+        CREATE INDEX IF NOT EXISTS idx_signals_unprocessed ON signals(processed, observed_at);
+        CREATE INDEX IF NOT EXISTS idx_signals_surface ON signals(surface, occurred_at);
+      `)
+    })
+    try {
+      migrateSignals()
+    } finally {
+      // Always restore, even if the transaction rolled back — otherwise a
+      // failed migration leaves foreign-key enforcement permanently off for
+      // the rest of the process (and every future boot that re-checks
+      // sigSql and finds the migration already applied or still pending).
+      db.pragma('foreign_keys = ON')
+    }
   }
 }

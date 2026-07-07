@@ -34,7 +34,7 @@ import {
   dbGetRecentUsage
 } from './db/index'
 import { readConfig, updateConfig, clearClaudeApiKey, resetConfig } from './services/config'
-import { reconnectServer, getServerStatus, connectAllServers, disconnectAllServers, resolveOwnerHandles } from './services/mcp'
+import { reconnectServer, getServerStatus, connectAllServers, disconnectAllServers, resolveOwnerHandles, withTimeout } from './services/mcp'
 import { startDeviceFlow, pollDeviceFlow, startPkceFlow } from './services/oauth'
 import { detectClaudeMcpServers } from './services/claude-import'
 import { executeRoutine, handleRunMessage } from './services/routines'
@@ -423,10 +423,12 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('system:factory-reset', async () => {
-    // Tear down background services before wiping data
+    // Tear down background services before wiping data. Bounded the same way
+    // as the app-quit cleanup path — a hung stdio MCP server must not block
+    // factory reset indefinitely.
     try { stopAmbient() } catch { /* ignore */ }
     try { stopScheduler() } catch { /* ignore */ }
-    try { await disconnectAllServers() } catch { /* ignore */ }
+    try { await withTimeout(disconnectAllServers(), 3_000, 'disconnectAllServers on factory reset') } catch { /* ignore */ }
     // Wipe persistent state
     resetDatabase()
     resetConfig()

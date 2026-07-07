@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, KeyboardEvent } from 'react'
 import { Sparkles, ArrowUp, Square, Check, X } from 'lucide-react'
-import type { ChatMessage, ProposedChatAction, PendingToolApproval, PendingQuestion } from '../../../../../../shared/types'
+import type { ChatMessage, ProposedChatAction, PendingToolApproval, PendingQuestion } from '@shared/types'
 import MarkdownText from '@renderer/components/MarkdownText'
 import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 

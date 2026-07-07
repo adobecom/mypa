@@ -5,7 +5,7 @@ import QueueView from './components/QueueView'
 import QuickAddBar from './components/QuickAddBar'
 import PlanReviewCard from './components/PlanReviewCard'
 import AmbientBackground from '../AmbientBackground'
-import type { PlanDraft, PlanItem, RoutineRun, AppConfig, Intent, TrayState } from '../../../../../shared/types'
+import type { PlanDraft, PlanItem, RoutineRun, AppConfig, Intent, TrayState } from '@shared/types'
 
 export default function App(): React.ReactElement {
   const [tab, setTab] = useState<Tab>('queue')

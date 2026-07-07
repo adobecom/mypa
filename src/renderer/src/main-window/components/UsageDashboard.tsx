@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { BarChart3 } from 'lucide-react'
-import type { UsageRange, UsageSummary, UsageDailyPoint, UsageBreakdownRow, UsageEvent } from '../../../../../../shared/types'
+import type { UsageRange, UsageSummary, UsageDailyPoint, UsageBreakdownRow, UsageEvent } from '@shared/types'
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 

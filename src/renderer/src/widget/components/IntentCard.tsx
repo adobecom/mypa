@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { GitBranch, SquareKanban, MessageSquare, ChevronDown, ExternalLink, Wand2, Zap, MessagesSquare } from 'lucide-react'
-import type { Intent, ChatMessage, RoutineRun, PendingToolApproval, PendingQuestion } from '../../../../../../shared/types'
+import type { Intent, ChatMessage, RoutineRun, PendingToolApproval, PendingQuestion } from '@shared/types'
 import MarkdownText from '@renderer/components/MarkdownText'
 import Tabs from '@renderer/components/Tabs'
 import ChatThread from './ChatThread'

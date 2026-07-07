@@ -1,7 +1,7 @@
 import React, { Fragment } from 'react'
 import { ClipboardList } from 'lucide-react'
 import PlanItemCard from './PlanItemCard'
-import type { PlanItem, PlanItemTiming } from '../../../../../../shared/types'
+import type { PlanItem, PlanItemTiming } from '@shared/types'
 
 const TIMING_ORDER: PlanItemTiming[] = ['now', 'morning', 'afternoon', 'evening', 'anytime']
 const TIMING_LABELS: Record<PlanItemTiming, string> = {

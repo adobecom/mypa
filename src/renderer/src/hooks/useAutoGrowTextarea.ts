@@ -60,13 +60,13 @@ export function useAutoGrowTextarea(value: string, maxRows = 4): AutoGrowRef {
   // It also carries `.current` so callers can read the DOM node (e.g. `.focus()`).
   const stableRef = useRef<AutoGrowRef | null>(null)
   if (stableRef.current === null) {
-    const fn = (node: HTMLTextAreaElement | null) => {
+    const fn = ((node: HTMLTextAreaElement | null) => {
       fn.current = node
       // Size immediately on every attach — this is what fires on each (re)mount.
       if (node) applyResize(node, maxRowsRef.current)
-    }
-    ;(fn as AutoGrowRef).current = null
-    stableRef.current = fn as AutoGrowRef
+    }) as AutoGrowRef
+    fn.current = null
+    stableRef.current = fn
   }
 
   // Re-apply sizing after value / maxRows changes (live typing, prop updates).

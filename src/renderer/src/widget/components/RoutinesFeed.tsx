@@ -1,7 +1,7 @@
 import React, { Fragment } from 'react'
 import { Zap, Settings } from 'lucide-react'
 import RoutineCard from './RoutineCard'
-import type { RoutineRun, Intent } from '../../../../../../shared/types'
+import type { RoutineRun, Intent } from '@shared/types'
 
 interface Props {
   runs: RoutineRun[]

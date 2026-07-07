@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import ChatThread from '../../widget/components/ChatThread'
-import type { PlanItem, ChatMessage, PendingToolApproval, PendingQuestion } from '../../../../../../shared/types'
+import type { PlanItem, ChatMessage, PendingToolApproval, PendingQuestion } from '@shared/types'
 
 interface Props {
   itemId: string | null

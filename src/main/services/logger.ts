@@ -35,6 +35,24 @@ function rotateIfNeeded(): void {
   }
 }
 
+// Common secret shapes that might appear in an MCP tool's error/response text
+// (e.g. a misconfigured server echoing its own auth header back). Redacted
+// before anything is written to disk in plaintext.
+const SECRET_PATTERNS: RegExp[] = [
+  /\bBearer\s+[A-Za-z0-9._-]{10,}/gi,
+  /\bgh[pousr]_[A-Za-z0-9]{10,}/g, // GitHub PAT / OAuth / user-to-server / refresh tokens
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}/g, // Slack tokens
+  /\bsk-[A-Za-z0-9_-]{10,}/g // generic API-key-shaped secrets (OpenAI/Anthropic-style)
+]
+
+function redact(text: string): string {
+  let out = text
+  for (const pattern of SECRET_PATTERNS) {
+    out = out.replace(pattern, '[redacted]')
+  }
+  return out
+}
+
 function write(line: string): void {
   try {
     ensureDir()
@@ -47,17 +65,17 @@ function write(line: string): void {
 
 /**
  * Log an informational message.
- * Also printed to console.log so dev-terminal output is unchanged.
+ * Also printed to console.log so dev-terminal output is unchanged (redaction aside).
  */
 export function logInfo(scope: string, msg: string): void {
-  const line = `${new Date().toISOString()} [${scope}] ${msg}`
+  const line = redact(`${new Date().toISOString()} [${scope}] ${msg}`)
   console.log(line)
   write(line)
 }
 
 /**
  * Log an error with an optional Error object.
- * Also printed to console.error so dev-terminal output is unchanged.
+ * Also printed to console.error so dev-terminal output is unchanged (redaction aside).
  */
 export function logError(scope: string, msg: string, err?: unknown): void {
   const detail = err instanceof Error
@@ -65,7 +83,7 @@ export function logError(scope: string, msg: string, err?: unknown): void {
     : err !== undefined
     ? `: ${String(err)}`
     : ''
-  const line = `${new Date().toISOString()} [${scope}] ERROR ${msg}${detail}`
+  const line = redact(`${new Date().toISOString()} [${scope}] ERROR ${msg}${detail}`)
   console.error(line)
   write(line)
 }

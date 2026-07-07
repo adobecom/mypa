@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { ChevronDown, Settings, ExternalLink, GitBranch, SquareKanban, MessageSquare } from 'lucide-react'
 import ChatThread from './ChatThread'
-import type { RoutineRun, ChatMessage, CoveredEntity, Intent, PendingToolApproval, PendingQuestion } from '../../../../../../shared/types'
+import type { RoutineRun, ChatMessage, CoveredEntity, Intent, PendingToolApproval, PendingQuestion } from '@shared/types'
 
 interface Props {
   run: RoutineRun

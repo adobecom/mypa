@@ -4,7 +4,7 @@ import { handleOAuthCallback } from './services/oauth'
 import { readFileSync } from 'fs'
 import { initDb, dbRunMaintenance } from './db/index'
 import { readConfig, seedScopeIfUnset } from './services/config'
-import { connectAllServers, disconnectAllServers } from './services/mcp'
+import { connectAllServers, disconnectAllServers, withTimeout } from './services/mcp'
 import { startScheduler, stopScheduler } from './services/cron'
 import { startAmbient, stopAmbient, ambientComputeTrayState } from './services/ambient'
 import { registerIpcHandlers } from './ipc-handlers'
@@ -107,18 +107,41 @@ async function main(): Promise<void> {
     openOrFocusMainWindow
   )
 
+  // Single cleanup path shared by the tray "Quit" action and the OS-initiated
+  // quit (Cmd+Q, dock quit, shutdown). Awaits MCP disconnect (bounded by a
+  // timeout so a hung stdio server can't block quitting) before the process
+  // actually exits, so child processes aren't orphaned. `cleanupStarted`
+  // guards against *starting* cleanup twice — it must NOT gate
+  // preventDefault(), which has to run on every 'before-quit' while cleanup
+  // is still in flight, or a second quit trigger (e.g. Cmd+Q right after
+  // clicking tray Quit) would let Electron's default quit proceed
+  // concurrently with — and possibly before — the in-progress cleanup.
+  let cleanupStarted = false
+  async function cleanupAndExit(): Promise<void> {
+    if (cleanupStarted) return
+    cleanupStarted = true
+    setQuitting()
+    stopScheduler()
+    stopAmbient()
+    try {
+      await withTimeout(disconnectAllServers(), 3_000, 'disconnectAllServers on quit')
+    } catch (err) {
+      console.error('[main] error disconnecting MCP servers during quit:', err)
+    }
+    destroyTray()
+    app.exit(0)
+  }
+
+  app.on('before-quit', (event) => {
+    event.preventDefault()
+    cleanupAndExit()
+  })
+
   // Create tray
   createTray(
     () => toggleWidget(),
     () => openOrFocusMainWindow(),
-    () => {
-      setQuitting()
-      stopScheduler()
-      stopAmbient()
-      disconnectAllServers()
-      destroyTray()
-      app.exit(0)
-    },
+    () => app.quit(),
     () => checkForUpdatesNow(),
     () => installUpdate()
   )
@@ -145,15 +168,6 @@ async function main(): Promise<void> {
   // Set initial tray state and Dock badge
   setTrayState(ambientComputeTrayState())
   updateBadgeCount()
-
-  // Prevent app from quitting when last window closes — stay in tray
-  app.on('before-quit', () => {
-    setQuitting()
-    stopScheduler()
-    stopAmbient()
-    disconnectAllServers()
-    destroyTray()
-  })
 
   win.show()
 

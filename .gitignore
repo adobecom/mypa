@@ -7,3 +7,6 @@ dist/
 *.db
 *.db-shm
 *.db-wal
+*.tsbuildinfo
+/electron.vite.config.js
+/electron.vite.config.d.ts
