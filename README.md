@@ -2,7 +2,7 @@
 
 **[🌐 Website](https://adobecom.github.io/mypa/)** · [GitHub](https://github.com/adobecom/mypa)
 
-A local-first personal assistant for developers, built as a macOS/Linux/Windows tray app. It monitors your external surfaces (GitHub, Jira, Slack), builds a knowledge graph from what it observes, proposes actions for your review, and runs scheduled routines — all powered by the Claude CLI running on your machine. Nothing leaves your device.
+A local-first personal assistant for developers, built as a macOS/Linux/Windows tray app. It monitors your external surfaces (GitHub, Jira, Slack), builds a knowledge graph from what it observes, proposes actions for your review, and runs scheduled routines — all powered by the Claude Agent SDK running locally on your machine. Nothing leaves your device.
 
 ## Features
 
@@ -12,16 +12,16 @@ A local-first personal assistant for developers, built as a macOS/Linux/Windows 
 - **Autonomy / trust tiers** — per-action trust levels that adapt based on your approve/challenge/dismiss history; fully configurable and resettable
 - **Memory graph** — a visual knowledge graph of people, work items, topics, and the assistant's own decisions, built from local embeddings; inspect and edit from the Memory page
 - **Owner identity** — set your name and per-surface handles (GitHub, Slack, Jira, Linear, Notion) so the assistant addresses you as "you" rather than by handle; auto-fills from connected MCP servers with one click
-- **Usage dashboard** — detailed token usage and estimated cost breakdown by feature, model, and time period; powered by data the Claude CLI already reports
+- **Usage dashboard** — detailed token usage and estimated cost breakdown by feature, model, and time period; powered by data the Claude Agent SDK already reports
 - **MCP integration** — connect to any MCP server (local stdio process) from a built-in catalog or custom config; auto-import from an existing Claude Code config
 - **OAuth integrations** — GitHub device flow, Notion PKCE, and Linear PKCE for enriching routines with live data
 
 ## Prerequisites
 
 - [Node.js](https://nodejs.org) 20+
-- [Claude Code CLI](https://claude.ai/code) installed and authenticated
+- A way to authenticate Claude calls — mypa bundles the `@anthropic-ai/claude-agent-sdk`, so **no separate Claude Code CLI install is required**. Authentication resolves automatically, in priority order: a stored Anthropic API key (set in Settings), the `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN` environment variables, or an existing `claude login` session.
 
-  mypa auto-detects `claude` in all common install locations — official installer (`~/.claude/local/claude`), Homebrew, nvm, npm-global, bun, volta — without requiring a manual PATH configuration.
+  If you use CLI login as your auth source, mypa auto-detects `claude` in all common install locations — official installer (`~/.claude/local/claude`), Homebrew, nvm, npm-global, bun, volta — without requiring a manual PATH configuration.
 
 ## Getting started
 
@@ -61,7 +61,7 @@ Or install the Debian package: `sudo dpkg -i dist/mypa_<version>_amd64.deb`
 
 **Windows** — run `dist\mypa Setup <version>.exe` and follow the installer.
 
-Once launched, mypa lives in your system tray. The [Claude Code CLI](https://claude.ai/code) must be installed and authenticated before the app can run AI calls.
+Once launched, mypa lives in your system tray. See [Prerequisites](#prerequisites) above for how to authenticate Claude calls before the app can run AI features.
 
 > **Quick local test (no installer):** `npm run pack` drops an unpacked app directory into `dist/` without producing an installer — useful for a fast smoke test after a local build.
 
@@ -141,11 +141,11 @@ Full developer reference in [`docs-dev/`](docs-dev/README.md):
 |---|---|
 | [Architecture](docs-dev/architecture.md) | Process map, boot sequence, data flow |
 | [IPC reference](docs-dev/ipc.md) | All API namespaces, methods, push channels |
-| [Database](docs-dev/database.md) | SQLite schema — all 14 tables |
+| [Database](docs-dev/database.md) | SQLite schema — all 19 tables |
 | [Services](docs-dev/services.md) | Main-process service modules |
 | [Knowledge graph](docs-dev/knowledge-graph.md) | 14-node-type ontology, decay, context assembly |
 | [Ambient intelligence](docs-dev/ambient-intelligence.md) | Signals → intents pipeline, trust tiers |
-| [Claude integration](docs-dev/claude-integration.md) | How the app spawns the `claude` CLI |
+| [Claude integration](docs-dev/claude-integration.md) | How the app calls Claude via the Agent SDK (in-process, no CLI subprocess) |
 | [MCP & OAuth](docs-dev/mcp-and-oauth.md) | MCP client, built-in catalog, OAuth flows |
 | [Configuration](docs-dev/configuration.md) | Config shape, secret encryption, build targets |
 | [Renderer](docs-dev/renderer.md) | UI map of both Electron windows |

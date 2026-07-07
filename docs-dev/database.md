@@ -152,6 +152,8 @@ Proposed actions derived from signal analysis.
 | `created_at` | TEXT | |
 | `resolved_at` | TEXT | Nullable |
 | `error` | TEXT | Nullable |
+| `urgency` | REAL | Default `0` — added via `ALTER TABLE` (see Changelog, 2026-06-11) |
+| `actions` | TEXT | JSON `McpActionRef[]`, default `'[]'` — added via `ALTER TABLE` (see Changelog, 2026-06-26); when non-empty, `executeActions()` uses this instead of `surface`/`verb`/`payload` |
 
 #### `intent_threads` _(deprecated)_
 
@@ -381,6 +383,8 @@ Vectors are stored as raw little-endian Float32 BLOBs and similarity search is p
 ---
 
 ## Changelog
+
+- 2026-07-07 — **Doc fix:** the `intents` table reference above was missing the `urgency` and `actions` columns, even though both were already documented below (2026-06-11 and 2026-06-26 entries). Table now matches the changelog and the actual schema.
 
 - 2026-06-26 — **`intents.actions` column:** additive `ALTER TABLE` migration adds `actions TEXT NOT NULL DEFAULT '[]'` to the `intents` table. Stores a JSON-encoded `McpActionRef[]` array — the concrete MCP tool calls proposed by agentic deep-enrichment (`inferDeepIntent`). When non-empty, `executeActions()` in `ambient.ts` uses this array instead of the legacy `surface/verb/payload` columns for execution. `dbCreateIntent` persists `obj.actions ?? []`; `deserializeIntent` parses it back into `McpActionRef[]`. New helper `dbUpdateIntentActions(id, actions)` updates the column in-place (used by `ambientApproveIntent` when the user edits the draft text).
 
