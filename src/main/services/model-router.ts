@@ -37,7 +37,11 @@ const SOURCE_TIER: Record<UsageSource, Tier> = {
   memory:          'balanced',
   chat:            'balanced',
   suggest:         'capable',
-  review:          'capable',
+  // 'review' (ambient deep-enrichment) used to be 'capable' (Opus) and ran
+  // unattended on a background heartbeat — it accounted for ~97% of Opus
+  // spend. Downgraded to 'balanced' (Sonnet); still bumps to 'capable' via
+  // the size thresholds below for genuinely large context packets.
+  review:          'balanced',
   other:           'balanced',
 }
 

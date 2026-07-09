@@ -37,6 +37,7 @@ import { streamChat, cancelStream } from './claude'
 import type { InferIntentResult } from './inference'
 import { enqueueEmbeddings, enqueueBackfill, enqueueMemoryBackfill } from './embeddings'
 import { runMemorySummarization } from './memories'
+import { isOverDailyBudget } from './budget'
 import {
   resolveTier,
   shouldAutoExecute,
@@ -229,10 +230,17 @@ export async function runAmbientCycle(
   let skippedCovered = 0
   let skippedCooldown = 0
   const dropCounts: Record<string, number> = {}
-  // Cap expensive Opus deep-enrichment runs per cycle to bound latency and cost.
+  // Cap expensive deep-enrichment runs per cycle to bound latency and cost.
   // Remaining eligible hits fall back to the lightweight single-turn inference.
-  const MAX_DEEP_PER_CYCLE = 2
+  const MAX_DEEP_PER_CYCLE = 1
   let deepEnrichmentCount = 0
+  // Checked once per cycle, not per hit — the daily spend total can't change
+  // meaningfully within a single cycle, and the check itself costs a config
+  // read + DB query.
+  const overBudget = isOverDailyBudget()
+  if (overBudget) {
+    console.log('[ambient] daily budget cap reached — deep enrichment disabled for this cycle, falling back to lightweight inference')
+  }
 
   for (const hit of hits) {
     // Skip hits whose focus nodes are already covered by a pending intent.
@@ -252,7 +260,7 @@ export async function runAmbientCycle(
     let result: InferIntentResult
     let usedDeepSlot = false
     try {
-      if (isDeepEligible(hit) && deepEnrichmentCount < MAX_DEEP_PER_CYCLE) {
+      if (!overBudget && isDeepEligible(hit) && deepEnrichmentCount < MAX_DEEP_PER_CYCLE) {
         console.log(`[ambient] deep enrichment #${deepEnrichmentCount + 1} for ${hit.relation ?? hit.kind} item`)
         try {
           result = await inferDeepIntent(hit, packet)
@@ -389,12 +397,12 @@ function runSynthesisHeartbeat(): void {
 function startSynthesisTimer(): void {
   if (synthesisIntervalId) return
   const cfg = readConfig()
-  const intervalMs = cfg.ambient?.synthesisIntervalMs ?? 30 * 60 * 1000
+  const intervalMs = cfg.ambient?.synthesisIntervalMs ?? 60 * 60 * 1000
   const initialDelayMs = cfg.ambient?.synthesisInitialDelayMs ?? 75_000
 
   // Fire an initial heartbeat tick after a short delay so items already waiting
   // on the user surface promptly after boot, instead of waiting the full interval
-  // (default 30 min). The delay (~75 s) lands after the ingestion stagger completes
+  // (default 60 min). The delay (~75 s) lands after the ingestion stagger completes
   // (github+3s, jira+23s, slack+43s) so the DB has up-to-date directed signals.
   synthesisInitialTimeoutId = setTimeout(() => {
     synthesisInitialTimeoutId = null

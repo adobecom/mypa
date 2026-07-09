@@ -45,8 +45,12 @@ Maps each `UsageSource` label to a base tier, then bumps the tier up for large p
 | source | base tier |
 |---|---|
 | `inference`, `plan_draft` | fast |
-| `routine_digest`, `routine_setup`, `routine_chat`, `plan_chat`, `checkin_chat`, `checkin_extract`, `memory`, `chat`, `other` | balanced |
+| `routine_digest`, `routine_setup`, `routine_chat`, `plan_chat`, `checkin_chat`, `checkin_extract`, `memory`, `chat`, `review`, `other` | balanced |
 | `suggest` | capable |
+
+`review` (ambient deep-enrichment, `inferDeepIntent`) was `capable` (Opus) until 2026-07-08; it accounted for ~97% of Opus spend since it runs unattended on the ambient heartbeat. Downgraded to `balanced` — see `budget.ts` and [ambient-intelligence.md](ambient-intelligence.md) for the accompanying throttle/budget-cap changes.
+
+`runAgentOnce`'s `expectJson` path retries once at the *same* tier with a stricter "JSON only" instruction before throwing the error that feeds `escalate()` — most weak-JSON failures are a formatting slip, not a capability gap, so a same-tier retry is cheaper than climbing the ladder.
 
 Size bumps (applied after the base tier):
 - prompt >= 12 000 chars → +1 tier
@@ -289,6 +293,8 @@ This clause is appended in `inferIntent` (`inference.ts`) after `buildOwnerClaus
 **ASAR path fix — `pathToClaudeCodeExecutable` must be set explicitly.** The SDK's `sdk.mjs` lives inside `app.asar`; when it resolves the platform binary relative to its own `import.meta.url` it produces a path that includes `app.asar` — which is a file, not a directory — causing `spawn ENOTDIR` on every AI call. The fix is in `agent.ts`: `resolveClaudeExecutable()` computes the real, unpacked path via `app.getAppPath().replace('app.asar', 'app.asar.unpacked')`, then all three `query()` call sites pass `pathToClaudeCodeExecutable: resolveClaudeExecutable()`. This short-circuits the SDK's broken default without affecting dev mode (where `app.getAppPath()` points to the project root and the binary exists at the direct `node_modules` path).
 
 ## Changelog
+
+- 2026-07-08 — **Cut Opus spend: downgrade `'review'` to Sonnet + same-tier JSON retry (`model-router.ts`, `agent.ts`).** `usage_events` analysis showed the `'review'` source (`inferDeepIntent`, ambient deep-enrichment) was ~97% of all Opus requests over 7 days because it ran unattended on the ambient heartbeat at base-tier `capable`. `SOURCE_TIER['review']` changed to `'balanced'` (Sonnet); still bumps to `capable` for genuinely large (>40k char) context packets via the existing size threshold. Separately, `runAgentOnce` now retries once at the same model tier — with `\n\nReturn ONLY raw JSON — no prose, no markdown code fences, no explanation.` appended to the prompt — before throwing the non-JSON error that `runAgent`'s loop catches and escalates on. This targets the ~317/7d `inference` calls that were climbing Haiku→Sonnet purely on malformed (not under-capable) output. Companion throttle/budget-cap changes (`MAX_DEEP_PER_CYCLE`, `synthesisIntervalMs`, new `budget.ts`) are in `ambient-intelligence.md` and `services.md`.
 
 - 2026-07-01 — **Tool-result error logging in both MCP-enabled agent paths (`agent.ts`).** Both `streamAgentChatOnce` (streaming chat) and `runAgentWithMcpOnce` (one-shot with MCP) now inspect `user`-type SDK messages for `tool_result` blocks with `is_error: true` and call `logError('agent', …)` via the new `logger.ts`. Previously the only record of a failing tool call was the model's narrative — which is documented (agent.ts:376-405) to confabulate ZodError/schema/session diagnoses when tools are unavailable. Real errors now appear in `~/.mypa/mypa.log`. See also the `mcp-bridge.ts` hardening in `services.md`.
 
