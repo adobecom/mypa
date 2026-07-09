@@ -43,6 +43,12 @@ const api: IpcApi = {
     setClaudeKey: (key) => ipcRenderer.invoke('config:set-claude-key', key),
     getScopeCandidates: () => ipcRenderer.invoke('config:get-scope-candidates')
   },
+  repos: {
+    getAll: () => ipcRenderer.invoke('repos:get-all'),
+    add: (localPath, jiraProjectKeys) => ipcRenderer.invoke('repos:add', localPath, jiraProjectKeys),
+    update: (id, update) => ipcRenderer.invoke('repos:update', id, update),
+    remove: (id) => ipcRenderer.invoke('repos:remove', id)
+  },
   oauth: {
     startDevice: () => ipcRenderer.invoke('oauth:start-device'),
     pollDevice: (deviceCode: string) => ipcRenderer.invoke('oauth:poll-device', deviceCode),
@@ -86,7 +92,11 @@ const api: IpcApi = {
       ipcRenderer.invoke('ambient:set-tier', actionType, tier, locked),
     resetTrust: () => ipcRenderer.invoke('ambient:reset-trust'),
     pollNow: () => ipcRenderer.invoke('ambient:poll-now'),
-    getLog: (limit?: number) => ipcRenderer.invoke('ambient:get-log', limit)
+    getLog: (limit?: number) => ipcRenderer.invoke('ambient:get-log', limit),
+    startAuthoring: (intentId: string) => ipcRenderer.invoke('ambient:start-authoring', intentId),
+    getWorkProduct: (intentId: string) => ipcRenderer.invoke('ambient:get-work-product', intentId),
+    shipWorkProduct: (intentId: string) => ipcRenderer.invoke('ambient:ship-work-product', intentId),
+    discardWorkProduct: (intentId: string) => ipcRenderer.invoke('ambient:discard-work-product', intentId)
   },
   memory: {
     getGraph: () => ipcRenderer.invoke('memory:get-graph'),

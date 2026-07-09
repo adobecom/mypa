@@ -8,8 +8,9 @@ This folder contains the full reference documentation for mypa contributors and 
 |---|---|
 | [architecture.md](architecture.md) | Process boundaries, boot sequence, data-flow, path aliases |
 | [ipc.md](ipc.md) | Full `IpcApi` reference — all namespaces, methods, and push-event channels |
-| [database.md](database.md) | SQLite schema — all 19 tables, indexes, JSON columns, migration approach |
+| [database.md](database.md) | SQLite schema — all 20 tables, indexes, JSON columns, migration approach |
 | [services.md](services.md) | All `src/main/services/` modules — key exports and responsibilities |
+| [code-authoring.md](code-authoring.md) | Repo links, isolated git worktrees, the `author_fix` intent flow, and the ship pipeline |
 | [knowledge-graph.md](knowledge-graph.md) | Memory-graph ontology: 3 layers, 14 node types, 19 edge relations, decay, context assembly |
 | [ambient-intelligence.md](ambient-intelligence.md) | Signals → intents pipeline, autonomy/trust tiers, digest cadence |
 | [claude-integration.md](claude-integration.md) | How the app calls Claude via the Agent SDK — one-shot, streaming, cancellation |
@@ -35,6 +36,7 @@ This table mirrors the rule in [CLAUDE.md](../CLAUDE.md#documentation-maintenanc
 
 ## Changelog
 
+- 2026-07-09 — added [code-authoring.md](code-authoring.md) for the new code-authoring subsystem (repos, worktrees, `author_fix` intents, work products, ship pipeline); fixed stale table count (19 → 20)
 - 2026-06-06 — initial documentation suite created
 - 2026-06-16 — added dependencies.md documenting the six transitive npm deprecation warnings
 - 2026-07-07 — fixed stale table count (13 → 19) and claude-integration.md blurb, which still described the pre-agent-SDK CLI-spawn architecture

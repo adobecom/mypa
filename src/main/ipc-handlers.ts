@@ -34,6 +34,8 @@ import {
   dbGetRecentUsage
 } from './db/index'
 import { readConfig, updateConfig, clearClaudeApiKey, resetConfig } from './services/config'
+import { getAllRepoLinks, addRepoLink, updateRepoLink, removeRepoLink } from './services/repos'
+import { startAuthoring, getWorkProductForIntent, shipWorkProduct, discardWorkProduct } from './services/authoring'
 import { reconnectServer, getServerStatus, connectAllServers, disconnectAllServers, resolveOwnerHandles, withTimeout } from './services/mcp'
 import { startDeviceFlow, pollDeviceFlow, startPkceFlow } from './services/oauth'
 import { detectClaudeMcpServers } from './services/claude-import'
@@ -71,7 +73,7 @@ import {
   startAmbient,
   stopAmbient
 } from './services/ambient'
-import { dbGetActionLog } from './db/index'
+import { dbGetActionLog, dbGetIntent } from './db/index'
 import { buildMemoryExportMarkdown } from './services/memory-export'
 import { setTrayState } from './tray'
 import { checkForUpdatesNow, installUpdate } from './services/updater'
@@ -285,6 +287,24 @@ export function registerIpcHandlers(
 
   ipcMain.handle('config:get-scope-candidates', async () => {
     return buildScopeCandidates()
+  })
+
+  // ─── Repos ─────────────────────────────────────────────────────────────────
+
+  ipcMain.handle('repos:get-all', async () => {
+    return getAllRepoLinks()
+  })
+
+  ipcMain.handle('repos:add', async (_e, localPath: string, jiraProjectKeys: string[]) => {
+    return addRepoLink(localPath, jiraProjectKeys)
+  })
+
+  ipcMain.handle('repos:update', async (_e, id: string, update: Record<string, unknown>) => {
+    return updateRepoLink(id, update)
+  })
+
+  ipcMain.handle('repos:remove', async (_e, id: string) => {
+    removeRepoLink(id)
   })
 
   // ─── OAuth ─────────────────────────────────────────────────────────────────
@@ -553,6 +573,35 @@ export function registerIpcHandlers(
 
   ipcMain.handle('ambient:get-log', async (_e, limit?: number) => {
     return dbGetActionLog(limit)
+  })
+
+  ipcMain.handle('ambient:start-authoring', async (_e, intentId: string) => {
+    const wp = await startAuthoring(intentId)
+    // The intent's status changes (pending/surfaced → approved, or → failed on error)
+    // as a side effect of starting — reflect that in both windows immediately.
+    broadcast('ambient:intent-updated', dbGetIntent(intentId))
+    refreshAmbientTray()
+    updateBadgeCount()
+    return wp
+  })
+
+  ipcMain.handle('ambient:get-work-product', async (_e, intentId: string) => {
+    return getWorkProductForIntent(intentId)
+  })
+
+  ipcMain.handle('ambient:ship-work-product', async (_e, intentId: string) => {
+    const intent = await shipWorkProduct(intentId)
+    broadcast('ambient:intent-updated', intent)
+    refreshAmbientTray()
+    updateBadgeCount()
+    return intent
+  })
+
+  ipcMain.handle('ambient:discard-work-product', async (_e, intentId: string) => {
+    await discardWorkProduct(intentId)
+    broadcast('ambient:intent-updated', dbGetIntent(intentId))
+    refreshAmbientTray()
+    updateBadgeCount()
   })
 
   // ─── Memory graph ──────────────────────────────────────────────────────────

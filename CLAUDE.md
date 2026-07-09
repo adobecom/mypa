@@ -68,6 +68,9 @@ Main Process (Node.js)
         memories.ts     — memory CRUD
         memory-graph.ts — knowledge graph construction and decay
         claude-import.ts — auto-detect MCP servers from Claude Code config
+        repos.ts        — links external repos/projects to local git checkouts
+        worktree.ts     — isolated git worktrees for code-authoring runs
+        authoring.ts    — author_fix lifecycle: worktree → diff review → ship
 
 Preload (src/preload/index.ts)
   — exposes window.electron (typed as IpcApi) via contextBridge
@@ -86,7 +89,7 @@ Shared (src/shared/)
 
 `src/shared/types.ts` is the single source of truth for the IPC API shape (`IpcApi`). Any new IPC channel must be added there, implemented in `src/main/ipc-handlers.ts`, and exposed in `src/preload/index.ts`. Renderer code calls `window.electron.<namespace>.<method>()`.
 
-IPC namespaces: `plan`, `routines`, `config`, `oauth`, `setup`, `system`, `ambient`, `memory`. Push event channels include `routine:run-*`, `plan:item-message`, `badge:updated`, `navigate:edit-routine`, `ambient:*`. Full reference: [`docs-dev/ipc.md`](docs-dev/ipc.md).
+IPC namespaces: `plan`, `routines`, `config`, `repos`, `oauth`, `setup`, `system`, `ambient`, `memory`. Push event channels include `routine:run-*`, `plan:item-message`, `badge:updated`, `navigate:edit-routine`, `ambient:*` (including `ambient:work-product-updated`). Full reference: [`docs-dev/ipc.md`](docs-dev/ipc.md).
 
 ### Claude integration
 
@@ -98,7 +101,7 @@ The model is chosen automatically per task by `src/main/services/model-router.ts
 
 ### Database
 
-SQLite via `better-sqlite3` (synchronous API). Schema is in `src/main/db/schema.ts` — 13 tables covering routines, plan items, ambient signals, knowledge graph, intents, and memories. JSON columns stored as TEXT and parsed in the query layer. Schema is applied with `CREATE TABLE IF NOT EXISTS` on startup; additive migrations use `ALTER TABLE` in a try/catch. See [`docs-dev/database.md`](docs-dev/database.md).
+SQLite via `better-sqlite3` (synchronous API). Schema is in `src/main/db/schema.ts` — 20 tables covering routines, plan items, ambient signals, knowledge graph, intents, work products, and memories. JSON columns stored as TEXT and parsed in the query layer. Schema is applied with `CREATE TABLE IF NOT EXISTS` on startup; additive migrations use `ALTER TABLE` in a try/catch. See [`docs-dev/database.md`](docs-dev/database.md).
 
 ### Knowledge graph
 

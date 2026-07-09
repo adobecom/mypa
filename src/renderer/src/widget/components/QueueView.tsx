@@ -1,6 +1,7 @@
 import React, { Fragment } from 'react'
 import { Inbox } from 'lucide-react'
 import IntentCard from './IntentCard'
+import WorkProductCard from './WorkProductCard'
 import PlanItemCard from './PlanItemCard'
 import type { Intent, PlanItem, PlanItemTiming, RoutineRun } from '@shared/types'
 
@@ -76,6 +77,16 @@ export default function QueueView({
     onIntentsChange(intents.map((i) => (i.id === updated.id ? updated : i)))
   }
 
+  // author_fix intents (mypa attempting a real code change) get a dedicated card
+  // with a diff view and Start/Ship it/Discard actions instead of the normal
+  // comment/label/message approve flow — see WorkProductCard.
+  function renderIntentCard(intent: Intent): React.ReactElement {
+    if (intent.verb === 'author_fix') {
+      return <WorkProductCard key={intent.id} intent={intent} onIntentChange={handleIntentChange} />
+    }
+    return <IntentCard key={intent.id} intent={intent} onIntentChange={handleIntentChange} entityKeyToRuns={entityKeyToRuns} />
+  }
+
   async function handleDelete(id: string): Promise<void> {
     await window.electron.plan.delete(id)
     onItemsChange(items.filter((i) => i.id !== id))
@@ -111,9 +122,7 @@ export default function QueueView({
           >
             Needs you
           </div>
-          {pendingIntents.map((intent) => (
-            <IntentCard key={intent.id} intent={intent} onIntentChange={handleIntentChange} entityKeyToRuns={entityKeyToRuns} />
-          ))}
+          {pendingIntents.map(renderIntentCard)}
         </>
       )}
 
@@ -158,9 +167,7 @@ export default function QueueView({
           <div className="section-header" style={{ color: 'var(--text-muted)' }}>
             Recently resolved
           </div>
-          {recentlyResolved.map((intent) => (
-            <IntentCard key={intent.id} intent={intent} onIntentChange={handleIntentChange} entityKeyToRuns={entityKeyToRuns} />
-          ))}
+          {recentlyResolved.map(renderIntentCard)}
         </>
       )}
     </div>

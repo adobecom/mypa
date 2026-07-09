@@ -9,6 +9,7 @@ A local-first personal assistant for developers, built as a macOS/Linux/Windows 
 - **Routines** — schedule recurring tasks that call MCP servers, run Claude prompts, and deliver digests as OS notifications; set up routines from natural language
 - **Plan** — capture and track plan items with AI-generated breakdowns, timing, and chat threads
 - **Ambient intelligence** — background polling of GitHub, Jira, and Slack; the assistant proposes intents (actions, suggestions, flags) for you to approve or dismiss
+- **Code authoring** — link a local git checkout to a GitHub repo / Jira project; when a ticket or PR is directed at you, mypa can attempt a real fix in an isolated git worktree, then present the diff for review with a one-tap "Ship it" (push + open PR + comment the ticket + notify Slack)
 - **Autonomy / trust tiers** — per-action trust levels that adapt based on your approve/challenge/dismiss history; fully configurable and resettable
 - **Memory graph** — a visual knowledge graph of people, work items, topics, and the assistant's own decisions, built from local embeddings; inspect and edit from the Memory page
 - **Owner identity** — set your name and per-surface handles (GitHub, Slack, Jira, Linear, Notion) so the assistant addresses you as "you" rather than by handle; auto-fills from connected MCP servers with one click
@@ -141,8 +142,9 @@ Full developer reference in [`docs-dev/`](docs-dev/README.md):
 |---|---|
 | [Architecture](docs-dev/architecture.md) | Process map, boot sequence, data flow |
 | [IPC reference](docs-dev/ipc.md) | All API namespaces, methods, push channels |
-| [Database](docs-dev/database.md) | SQLite schema — all 19 tables |
+| [Database](docs-dev/database.md) | SQLite schema — all 20 tables |
 | [Services](docs-dev/services.md) | Main-process service modules |
+| [Code authoring](docs-dev/code-authoring.md) | Repo links, isolated worktrees, the `author_fix` intent flow, and the ship pipeline |
 | [Knowledge graph](docs-dev/knowledge-graph.md) | 14-node-type ontology, decay, context assembly |
 | [Ambient intelligence](docs-dev/ambient-intelligence.md) | Signals → intents pipeline, trust tiers |
 | [Claude integration](docs-dev/claude-integration.md) | How the app calls Claude via the Agent SDK (in-process, no CLI subprocess) |

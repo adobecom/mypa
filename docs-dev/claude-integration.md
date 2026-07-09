@@ -46,7 +46,7 @@ Maps each `UsageSource` label to a base tier, then bumps the tier up for large p
 |---|---|
 | `inference`, `plan_draft` | fast |
 | `routine_digest`, `routine_setup`, `routine_chat`, `plan_chat`, `checkin_chat`, `checkin_extract`, `memory`, `chat`, `review`, `other` | balanced |
-| `suggest` | capable |
+| `suggest`, `authoring` | capable |
 
 `review` (ambient deep-enrichment, `inferDeepIntent`) was `capable` (Opus) until 2026-07-08; it accounted for ~97% of Opus spend since it runs unattended on the ambient heartbeat. Downgraded to `balanced` — see `budget.ts` and [ambient-intelligence.md](ambient-intelligence.md) for the accompanying throttle/budget-cap changes.
 
@@ -130,6 +130,25 @@ export function cancelAgentChat(streamId: string): boolean
 ```
 
 Calls `Query.interrupt()` on the active stream and removes it from the in-memory map. Returns `true` if a stream was found and interrupted. The renderer calls `window.electron.routines.cancelStream(runId)` or `window.electron.plan.cancelStream(itemId)`.
+
+### `runAuthoringAgent` — the one call site with real file/shell tools
+
+```ts
+export async function runAuthoringAgent(
+  worktreePath: string,
+  taskPrompt: string,
+  onProgress?: (status: string) => void,
+): Promise<{ text: string; ok: boolean; error?: string }>
+```
+
+Every other export in `agent.ts` deliberately passes `tools: []` (see Tool gating below) — this is the sole, intentional exception. It grants the built-in `Bash`, `Edit`, `Read`, `Write`, `Grep`, and `Glob` tools so Claude can actually author a code change, not just call MCP tools. Two layers keep this contained rather than an open sandbox escape:
+
+1. **`cwd` is pinned to a disposable git worktree** created by `worktree.ts` — never the user's real checkout. The worktree is on its own branch (`mypa/<slug>`), created from the linked repo's default branch, and is pruned on discard.
+2. **`canUseTool` confines the tools to that worktree**: `Edit`/`Write`/`Read` calls are denied if `file_path` resolves outside `worktreePath`; `Grep`/`Glob` are denied the same way when given an explicit out-of-worktree `path` (they default to `cwd`, i.e. the worktree, when `path` is omitted). `Bash` commands are checked against a denylist (`git push`/`fetch`/`pull`/`clone`/`remote`/`submodule`/`ls-remote`, `sudo`, `curl`, `wget`, `nc`, `ssh`, `scp`, `rsync`, `ftp`, `telnet`, `socat`, `dig`, `nslookup`, `getent hosts`, `/dev/tcp/`, `/dev/udp/`, `rm -rf /` or `~`).
+
+**`Bash` is explicitly NOT path-confined**, unlike the other four tools — a command can read/write anywhere the OS user can, limited only by the denylist above matching the literal command string (a command that writes a script to a file and executes it, or otherwise obscures its target, is not caught). The code's own comments are explicit that this is a best-effort deterrent, not a sandbox, and that the real safety property this mode relies on is the disposable worktree plus the user-initiated approve-to-start flow — not that `Bash` itself is contained. A known, deliberately undocumented-as-solved residual risk: the agent's environment (via `buildAgentEnv()`) carries a live Anthropic API key or inherits an OAuth token when configured, since the SDK needs a credential to make its own API calls — that credential is visible to any `Bash` child process this same agent spawns, and a sufficiently malicious prompt-injected task could attempt to exfiltrate it via a technique the denylist doesn't cover (see the `BASH_DENY_RE` comment in `agent.ts` for the full reasoning).
+
+A single wall-clock deadline (`AUTHORING_TIMEOUT_MS = 15 min`) bounds the whole run rather than the chat idle-timer pattern above, since an authoring run is unattended (no human watching for stalls) and may make many tool calls in a row. `maxTurns: 40`. Model tier is `'authoring'` → `capable` (Opus) unconditionally, since this is a user-initiated, approve-to-start action rather than something running unattended on a heartbeat. The agent does not commit or push — the caller (`authoring.ts`) does that only once the user reviews the diff and taps "Ship it". See [code-authoring.md](code-authoring.md) for the full flow.
 
 ---
 
@@ -284,15 +303,19 @@ This clause is appended in `inferIntent` (`inference.ts`) after `buildOwnerClaus
 
 `src/main/services/usage.ts` provides the `recordUsage(source, model, result)` function imported by `agent.ts`. It calls `dbInsertUsage()` and swallows all errors so telemetry never disrupts an AI call.
 
-`UsageSource` labels: `'plan_draft'`, `'routine_digest'`, `'routine_setup'`, `'routine_chat'`, `'plan_chat'`, `'checkin_chat'`, `'checkin_extract'`, `'inference'`, `'memory'`, `'suggest'`, `'chat'`, `'other'`.
+`UsageSource` labels: `'plan_draft'`, `'routine_digest'`, `'routine_setup'`, `'routine_chat'`, `'plan_chat'`, `'checkin_chat'`, `'checkin_extract'`, `'inference'`, `'memory'`, `'suggest'`, `'review'`, `'authoring'`, `'chat'`, `'other'`.
 
 ## Packaging
 
 `@anthropic-ai/claude-agent-sdk` platform binaries (e.g. `@anthropic-ai/claude-agent-sdk-darwin-arm64`) must be spawnable from a packaged app. The `package.json` build config includes `**/node_modules/@anthropic-ai/claude-agent-sdk-*/**` in `asarUnpack` so the native binary is extracted from the ASAR archive at install time.
 
-**ASAR path fix — `pathToClaudeCodeExecutable` must be set explicitly.** The SDK's `sdk.mjs` lives inside `app.asar`; when it resolves the platform binary relative to its own `import.meta.url` it produces a path that includes `app.asar` — which is a file, not a directory — causing `spawn ENOTDIR` on every AI call. The fix is in `agent.ts`: `resolveClaudeExecutable()` computes the real, unpacked path via `app.getAppPath().replace('app.asar', 'app.asar.unpacked')`, then all three `query()` call sites pass `pathToClaudeCodeExecutable: resolveClaudeExecutable()`. This short-circuits the SDK's broken default without affecting dev mode (where `app.getAppPath()` points to the project root and the binary exists at the direct `node_modules` path).
+**ASAR path fix — `pathToClaudeCodeExecutable` must be set explicitly.** The SDK's `sdk.mjs` lives inside `app.asar`; when it resolves the platform binary relative to its own `import.meta.url` it produces a path that includes `app.asar` — which is a file, not a directory — causing `spawn ENOTDIR` on every AI call. The fix is in `agent.ts`: `resolveClaudeExecutable()` computes the real, unpacked path via `app.getAppPath().replace('app.asar', 'app.asar.unpacked')`, then all four `query()` call sites (`runAgentOnce`, `streamAgentChatOnce`, `runAgentWithMcpOnce`, `runAuthoringAgent`) pass `pathToClaudeCodeExecutable: resolveClaudeExecutable()`. This short-circuits the SDK's broken default without affecting dev mode (where `app.getAppPath()` points to the project root and the binary exists at the direct `node_modules` path).
 
 ## Changelog
+
+- 2026-07-09 — **Security review follow-up on `runAuthoringAgent` (`agent.ts`).** `canUseTool` now also confines `Grep`/`Glob` to the worktree by path (previously unconditionally allowed — a de facto arbitrary-file-read across the whole filesystem, since neither tool's `path` argument was checked). `BASH_DENY_RE` expanded to cover `git ls-remote` and common network/DNS tools (`ftp`, `telnet`, `socat`, `dig`, `nslookup`, `getent hosts`, `/dev/tcp/`, `/dev/udp/`) with no legitimate use in a build/lint/test workflow — deliberately does not block bare interpreter invocation (`python`/`node`/`perl`/`ruby`) since the system prompt legitimately allows running local test suites through them. The file-level and inline comments were also corrected to stop overclaiming full containment for `Bash` and to honestly document the residual live-credential-in-environment risk (see the paragraph above).
+
+- 2026-07-09 — **New `runAuthoringAgent` — the one call site with real file/shell tools (`agent.ts`).** Added to support code-authoring (see [code-authoring.md](code-authoring.md)). Every other export in this file passes `tools: []`; `runAuthoringAgent` is the sole, deliberate exception, granting `Bash`/`Edit`/`Read`/`Write`/`Grep`/`Glob`. Contained by (1) `cwd` pinned to a disposable git worktree (`worktree.ts`), never the user's real checkout, and (2) a `canUseTool` gate that denies `Edit`/`Write`/`Read` calls whose `file_path` resolves outside the worktree and denies `Bash` commands matching a network/git-push/clone/remote/submodule/destructive denylist. New `'authoring'` `UsageSource` → `capable` (Opus) unconditionally in `model-router.ts` (unlike `'review'`, this is user-initiated and runs at most once per approved intent, not on an unattended heartbeat). `resolveClaudeExecutable()`/`pathToClaudeCodeExecutable` now has four call sites, not three.
 
 - 2026-07-08 — **Cut Opus spend: downgrade `'review'` to Sonnet + same-tier JSON retry (`model-router.ts`, `agent.ts`).** `usage_events` analysis showed the `'review'` source (`inferDeepIntent`, ambient deep-enrichment) was ~97% of all Opus requests over 7 days because it ran unattended on the ambient heartbeat at base-tier `capable`. `SOURCE_TIER['review']` changed to `'balanced'` (Sonnet); still bumps to `capable` for genuinely large (>40k char) context packets via the existing size threshold. Separately, `runAgentOnce` now retries once at the same model tier — with `\n\nReturn ONLY raw JSON — no prose, no markdown code fences, no explanation.` appended to the prompt — before throwing the non-JSON error that `runAgent`'s loop catches and escalates on. This targets the ~317/7d `inference` calls that were climbing Haiku→Sonnet purely on malformed (not under-capable) output. Companion throttle/budget-cap changes (`MAX_DEEP_PER_CYCLE`, `synthesisIntervalMs`, new `budget.ts`) are in `ambient-intelligence.md` and `services.md`.
 

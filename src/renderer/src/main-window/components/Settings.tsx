@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2, User, Power, ChevronDown, ChevronRight } from 'lucide-react'
-import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles, GraphNode, GraphEdge, Memory } from '@shared/types'
+import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles, GraphNode, GraphEdge, Memory, RepoLink } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import { SCOPE_SURFACES } from '@shared/scope-surfaces'
 import ServerCatalogPicker from './ServerCatalogPicker'
@@ -789,6 +789,8 @@ export default function Settings(): React.ReactElement {
         )}
       </div>
 
+      <ReposSection />
+
       {/* Preferences */}
       <div className="card">
         <div className="card__header">
@@ -1164,6 +1166,144 @@ function HealthRow({
         <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 8 }}>{detail}</span>
       </div>
       {action && <div style={{ flexShrink: 0 }}>{action}</div>}
+    </div>
+  )
+}
+
+// ─── Repos (code authoring) ───────────────────────────────────────────────────
+
+/**
+ * Registers local git checkouts mypa may attempt code fixes in. Each RepoLink
+ * maps an existing local clone to the GitHub repo / Jira project keys that
+ * should route "attempt a fix" proposals there (see repos.ts resolveRepoForSignal
+ * and the author_fix intent flow in authoring.ts). mypa never clones a repo
+ * itself — the folder must already exist locally.
+ */
+function ReposSection(): React.ReactElement {
+  const api = window.electron
+  const toast = useToast()
+  const [repos, setRepos] = useState<RepoLink[]>([])
+  const [showAdd, setShowAdd] = useState(false)
+  const [newPath, setNewPath] = useState('')
+  const [newJiraKeys, setNewJiraKeys] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [addError, setAddError] = useState<string | null>(null)
+
+  const refresh = useCallback(() => {
+    api.repos.getAll().then(setRepos).catch(console.error)
+  }, [api])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  async function handleBrowse(): Promise<void> {
+    const picked = await api.system.pickDirectory(false)
+    if (picked.length > 0) setNewPath(picked[0])
+  }
+
+  async function handleAdd(): Promise<void> {
+    if (!newPath.trim()) return
+    setAdding(true)
+    setAddError(null)
+    try {
+      const jiraKeys = newJiraKeys.split(',').map((k) => k.trim()).filter(Boolean)
+      await api.repos.add(newPath.trim(), jiraKeys)
+      setNewPath('')
+      setNewJiraKeys('')
+      setShowAdd(false)
+      refresh()
+      toast.success('Repo linked')
+    } catch (err: any) {
+      setAddError(err?.message ?? 'Could not link this repo')
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  async function handleToggleAuthoring(repo: RepoLink): Promise<void> {
+    await api.repos.update(repo.id, { authoringEnabled: !repo.authoringEnabled })
+    refresh()
+  }
+
+  async function handleRemove(id: string): Promise<void> {
+    await api.repos.remove(id)
+    refresh()
+  }
+
+  return (
+    <div className="card">
+      <div className="card__header">
+        <div>
+          <div className="card__title">Repos</div>
+          <div className="card__subtitle">Local checkouts mypa may attempt code fixes in</div>
+        </div>
+        <button className="btn btn--ghost btn--sm" onClick={() => setShowAdd(true)}>
+          + Add repo
+        </button>
+      </div>
+
+      {repos.length === 0 && !showAdd && (
+        <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '8px 0' }}>
+          No repos linked. Link a local checkout to let mypa attempt fixes for tickets in that project.
+        </div>
+      )}
+
+      {repos.map((repo) => (
+        <div key={repo.id} className="mcp-server-row">
+          <div className={`mcp-server-row__dot mcp-server-row__dot--${repo.authoringEnabled ? 'connected' : 'disabled'}`} />
+          <div className="mcp-server-row__name">{repo.githubRepo ?? repo.localPath.split('/').pop()}</div>
+          <div className="mcp-server-row__count">
+            {repo.localPath}{repo.jiraProjectKeys.length > 0 ? ` · ${repo.jiraProjectKeys.join(', ')}` : ''}
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => handleToggleAuthoring(repo)}
+              style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+            >
+              <Power size={13} />
+              {repo.authoringEnabled ? 'Disable' : 'Enable'}
+            </button>
+            <button className="btn btn--danger btn--sm" onClick={() => handleRemove(repo.id)}>
+              Remove
+            </button>
+          </div>
+        </div>
+      ))}
+
+      {showAdd && (
+        <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', padding: 12, marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="form-group">
+            <label className="form-label">Local path</label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input
+                className="form-input"
+                value={newPath}
+                onChange={(e) => setNewPath(e.target.value)}
+                placeholder="/Users/you/Code/my-repo"
+                style={{ flex: 1 }}
+              />
+              <button className="btn btn--ghost btn--sm" onClick={handleBrowse}>Browse…</button>
+            </div>
+            <div className="form-hint">Must already be a git checkout — mypa never clones a repo on its own.</div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Jira project keys (comma-separated, optional)</label>
+            <input
+              className="form-input"
+              value={newJiraKeys}
+              onChange={(e) => setNewJiraKeys(e.target.value)}
+              placeholder="PROJ, ABC"
+            />
+          </div>
+          {addError && <div className="alert alert--error">{addError}</div>}
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+            <button className="btn btn--ghost btn--sm" onClick={() => { setShowAdd(false); setAddError(null) }}>Cancel</button>
+            <button className="btn btn--primary btn--sm" onClick={handleAdd} disabled={adding || !newPath.trim()}>
+              {adding ? 'Linking…' : 'Link repo'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

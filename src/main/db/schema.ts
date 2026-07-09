@@ -181,6 +181,30 @@ export function initSchema(db: Database.Database): void {
       updated_at            TEXT NOT NULL
     );
 
+    -- ─── Code authoring (work products) ──────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS work_products (
+      id             TEXT PRIMARY KEY,
+      intent_id      TEXT NOT NULL,
+      repo_id        TEXT NOT NULL,
+      worktree_path  TEXT NOT NULL,
+      branch         TEXT NOT NULL,
+      base_branch    TEXT NOT NULL,
+      status         TEXT NOT NULL DEFAULT 'drafting',
+      summary        TEXT NOT NULL DEFAULT '',
+      diff_stat      TEXT NOT NULL DEFAULT '',
+      files_changed  TEXT NOT NULL DEFAULT '[]',
+      diff           TEXT NOT NULL DEFAULT '',
+      error          TEXT,
+      pr_url         TEXT,
+      created_at     TEXT NOT NULL,
+      shipped_at     TEXT,
+      UNIQUE (intent_id),
+      FOREIGN KEY (intent_id) REFERENCES intents(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_work_products_status ON work_products(status, created_at);
+
     CREATE TABLE IF NOT EXISTS node_signals (
       id          TEXT PRIMARY KEY,
       node_id     TEXT NOT NULL,
