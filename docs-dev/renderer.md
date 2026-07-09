@@ -52,8 +52,9 @@ Data flow: `window.electron.plan.getAll()` on mount; push event `plan:item-messa
 | `DigestView` | Renders the latest `AmbientDigest` — three sections: did / watching / decisions |
 | `QueueView` | Scrollable list of pending/surfaced action intents and active plan items |
 | `IntentCard` | Single intent — rationale, proposed action, confidence badge, Approve / Dismiss / Challenge / Chat controls; Chat opens a streaming `ChatThread` for free-form discussion; an opt-in "Update the proposal" button inside Chat calls `reviseFromChat` for active action intents |
+| `WorkProductCard` | Renders in place of `IntentCard` for `author_fix`-verb intents (`QueueView.renderIntentCard` branches on `intent.verb`). Shows the code-authoring lifecycle — no work product yet ("Attempt a fix?" + Start), `drafting` (in progress), `ready` (diff summary, file list, expandable raw diff, Ship it / Discard), `shipping`, `shipped` (PR link), `failed`. See [code-authoring.md](code-authoring.md). |
 
-Data flow: `window.electron.ambient.getIntents()` + `getDigest()` on mount; push events `ambient:intent-created`, `ambient:intent-updated`, `ambient:tray-state`, `ambient:digest-ready`, `ambient:chat-user-message`, `ambient:chat-message`.
+Data flow: `window.electron.ambient.getIntents()` + `getDigest()` on mount; push events `ambient:intent-created`, `ambient:intent-updated`, `ambient:tray-state`, `ambient:digest-ready`, `ambient:chat-user-message`, `ambient:chat-message`, `ambient:work-product-updated` (`WorkProductCard` only, filtered by `intent_id`).
 
 ### QuickAddBar
 
@@ -210,6 +211,7 @@ Data: `window.electron.usage.*` — all five calls made in parallel on mount and
 |---|---|
 | `Settings` | Tabbed settings panel |
 | — MCP tab | Add/edit/remove MCP servers; test connection; import from Claude Code config |
+| — Repos section (`ReposSection`) | Register a local git checkout (`repos.add`, with a `pickDirectory` Browse… button) with optional comma-separated Jira project keys; per-repo Enable/Disable authoring toggle and Remove. See [code-authoring.md](code-authoring.md). |
 | — OAuth tab | Connect GitHub (device flow), Notion (PKCE), Linear (PKCE); show connection status |
 | — Claude tab | Model selector; displays current model |
 | — Preferences tab | Widget always-on-top, notification sound, launch on login; persona text field |
@@ -243,6 +245,8 @@ Located in `src/renderer/src/` (shared between widget and main window):
 | `components.css` | Shared component stylesheet imported by both renderer entry points before their window-specific `index.css`. Contains `.routine-card*`, `.intent-card*`, `.intent-detail*`, `.intent-chip*`, `.plan-review-card*`, `.review-field*`, `.section-header`, `.section-subheader`, `.tabs`, `.tab*`. |
 
 ## Changelog
+
+- 2026-07-09 — **New `WorkProductCard` + Settings `ReposSection` (code authoring).** New `src/renderer/src/widget/components/WorkProductCard.tsx`, rendered by `QueueView.renderIntentCard` in place of `IntentCard` whenever `intent.verb === 'author_fix'` (both in "Needs you" and "Recently resolved"). Shows the authoring lifecycle (Start → drafting → ready-for-review diff + Ship it/Discard → shipping → shipped/failed), subscribing to the new `ambient:work-product-updated` push event filtered by `intent_id`. Reuses existing `routine-card`/`intent-chip`/`intent-detail__kv-pre` CSS — no new stylesheet. New `ReposSection` component in `Settings.tsx` (mirrors the MCP Servers card's add/list/remove pattern) lets the user register a local git checkout via `repos.add()`, using the existing `system.pickDirectory()` IPC for the folder picker. See [code-authoring.md](code-authoring.md).
 
 - 2026-06-30 — **Settings: tabbed, searchable Working Context pickers + correct MCP enablement gating (`Settings.tsx:WorkingContextSection`).** `WorkingContextSection` now renders a per-service tab strip (shared `Tabs` component) instead of a vertical stack of all enabled surfaces. Each tab label shows the surface name (GitHub orgs / Jira projects / Slack channels) with a count badge of currently-selected items. Only services whose MCP server has `enabled !== false` appear as tabs; a disabled server's tab is absent and the active tab auto-falls-back to the first enabled surface. Each tab's picker includes a `form-input` search box that client-side-filters candidates by substring match (case-insensitive), following the `ServerCatalogPicker` pattern. Three empty states: no candidates observed yet, no candidates match the query, and none selected (all pass through). The chip toggle and `config.update` write-on-change are unchanged.
 

@@ -40,7 +40,8 @@ import type {
   UsageDailyPoint,
   UsageBreakdownRow,
   CheckIn,
-  CheckInStatus
+  CheckInStatus,
+  WorkProduct
 } from '@shared/types'
 import { createHash } from 'crypto'
 
@@ -893,6 +894,76 @@ function deserializeIntent(row: any): Intent {
     context_packet: safeJsonParse<Record<string, unknown>>(row.context_packet, {}),
     challenge_reason: row.challenge_reason ?? null,
     actions: safeJsonParse<McpActionRef[]>(row.actions, [])
+  }
+}
+
+// ─── Work products ─────────────────────────────────────────────────────────────
+//
+// One row per author_fix intent (UNIQUE(intent_id)) — the durable record of a
+// code-authoring attempt: its worktree/branch, the diff produced there, and its
+// shipping lifecycle. See authoring.ts and worktree.ts.
+
+export function dbCreateWorkProduct(
+  intentId: string,
+  repoId: string,
+  worktreePath: string,
+  branch: string,
+  baseBranch: string
+): WorkProduct {
+  const id = uuidv4()
+  const created_at = new Date().toISOString()
+  getDb()
+    .prepare(
+      `INSERT INTO work_products
+        (id, intent_id, repo_id, worktree_path, branch, base_branch, status, created_at)
+       VALUES (?,?,?,?,?,?,?,?)`
+    )
+    .run(id, intentId, repoId, worktreePath, branch, baseBranch, 'drafting', created_at)
+  return dbGetWorkProduct(id)!
+}
+
+export function dbGetWorkProduct(id: string): WorkProduct | null {
+  const row = getDb().prepare('SELECT * FROM work_products WHERE id = ?').get(id) as any
+  return row ? deserializeWorkProduct(row) : null
+}
+
+export function dbGetWorkProductByIntent(intentId: string): WorkProduct | null {
+  const row = getDb().prepare('SELECT * FROM work_products WHERE intent_id = ?').get(intentId) as any
+  return row ? deserializeWorkProduct(row) : null
+}
+
+/** Returns the merged row directly — callers don't need a follow-up dbGetWorkProduct(). */
+export function dbUpdateWorkProduct(
+  id: string,
+  patch: Partial<Pick<WorkProduct, 'status' | 'summary' | 'diff_stat' | 'files_changed' | 'diff' | 'error' | 'pr_url' | 'shipped_at'>>
+): WorkProduct | null {
+  const current = dbGetWorkProduct(id)
+  if (!current) return null
+  const merged = { ...current, ...patch }
+  getDb()
+    .prepare(
+      `UPDATE work_products SET
+        status = ?, summary = ?, diff_stat = ?, files_changed = ?, diff = ?, error = ?, pr_url = ?, shipped_at = ?
+       WHERE id = ?`
+    )
+    .run(
+      merged.status,
+      merged.summary,
+      merged.diff_stat,
+      JSON.stringify(merged.files_changed),
+      merged.diff,
+      merged.error,
+      merged.pr_url,
+      merged.shipped_at,
+      id
+    )
+  return merged
+}
+
+function deserializeWorkProduct(row: any): WorkProduct {
+  return {
+    ...row,
+    files_changed: safeJsonParse<string[]>(row.files_changed, [])
   }
 }
 

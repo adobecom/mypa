@@ -42,6 +42,10 @@ const SOURCE_TIER: Record<UsageSource, Tier> = {
   // spend. Downgraded to 'balanced' (Sonnet); still bumps to 'capable' via
   // the size thresholds below for genuinely large context packets.
   review:          'balanced',
+  // Code authoring is user-initiated (approve-to-start) and runs at most once per
+  // approved intent, so unlike 'review' it does not run unattended on a heartbeat —
+  // the cost/quality tradeoff favors the strongest tier here.
+  authoring:       'capable',
   other:           'balanced',
 }
 

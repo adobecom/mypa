@@ -212,6 +212,28 @@ Per-action-type trust settings. Updated by approve/challenge/dismiss outcomes.
 | `executions` | INTEGER | Lifetime execution count |
 | `updated_at` | TEXT | |
 
+#### `work_products`
+
+One row per `author_fix` intent (`UNIQUE(intent_id)`) — the durable record of a code-authoring attempt: its worktree/branch and the diff produced there, through shipping. See [code-authoring.md](code-authoring.md) and `authoring.ts`/`worktree.ts`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | TEXT PK | |
+| `intent_id` | TEXT FK → `intents` | `UNIQUE`, CASCADE DELETE |
+| `repo_id` | TEXT | `RepoLink.id` (config-stored, not a DB FK) |
+| `worktree_path` | TEXT | Absolute path under `~/.mypa/worktrees/` |
+| `branch` | TEXT | `mypa/<slug>` |
+| `base_branch` | TEXT | Branch the worktree was created from |
+| `status` | TEXT | `WorkProductStatus`: `drafting \| ready \| shipping \| shipped \| failed \| abandoned` |
+| `summary` | TEXT | Model-written description of the change |
+| `diff_stat` | TEXT | `git diff --stat` output |
+| `files_changed` | TEXT | JSON `string[]`, default `'[]'` |
+| `diff` | TEXT | Full unified diff (cached so it's still viewable after the worktree is pruned) |
+| `error` | TEXT | Nullable |
+| `pr_url` | TEXT | Nullable — set once `create_pull_request` succeeds |
+| `created_at` | TEXT | |
+| `shipped_at` | TEXT | Nullable |
+
 ---
 
 ### Knowledge graph
@@ -326,6 +348,7 @@ All indexes use `CREATE INDEX IF NOT EXISTS`.
 | `idx_memories_node` | `memories` | `node_id` | Memories for a node |
 | `idx_usage_events_created` | `usage_events` | `created_at` | Time-range queries |
 | `idx_usage_events_source` | `usage_events` | `source, created_at` | Per-source breakdown |
+| `idx_work_products_status` | `work_products` | `status, created_at` | Filter by lifecycle status |
 
 ---
 
@@ -339,6 +362,7 @@ Several columns store JSON as TEXT and are parsed in the query layer:
 - `signals.raw` → full API payload
 - `graph_nodes.attrs`, `graph_edges.attrs` → freeform attributes
 - `intents.payload`, `intents.context_packet` → typed objects
+- `work_products.files_changed` → `string[]`
 
 ---
 
@@ -383,6 +407,8 @@ Vectors are stored as raw little-endian Float32 BLOBs and similarity search is p
 ---
 
 ## Changelog
+
+- 2026-07-09 — **New `work_products` table (20th table):** additive `CREATE TABLE IF NOT EXISTS` in `schema.ts`, `UNIQUE(intent_id)` FK → `intents` (CASCADE DELETE). Backs the code-authoring flow — see [code-authoring.md](code-authoring.md), `authoring.ts`, `worktree.ts`. New index `idx_work_products_status`. New CRUD in `db/index.ts`: `dbCreateWorkProduct`, `dbGetWorkProduct`, `dbGetWorkProductByIntent`, `dbUpdateWorkProduct`, `deserializeWorkProduct` (parses `files_changed` JSON).
 
 - 2026-07-07 — **Signals migration hardened:** the `signals` table's `UNIQUE(surface, external_id, fingerprint)` → `UNIQUE(surface, external_id)` migration in `schema.ts` (`CREATE signals_mig` / `INSERT` / `DELETE node_signals` / `DROP` / `RENAME`) now runs inside a single `db.transaction()` instead of as a bare multi-statement `db.exec()`. Previously a crash between `DROP TABLE signals` and the `RENAME` would permanently lose the table with no rollback; now the whole sequence is atomic. `foreign_keys` is still toggled OFF/ON outside the transaction (SQLite treats that pragma as a no-op inside one), but the ON restore is now in a `finally` so a migration failure can't leave FK enforcement permanently disabled.
 

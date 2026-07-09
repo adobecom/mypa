@@ -67,6 +67,17 @@ Read and write app configuration; query MCP server status.
 | `getClaudeKey` | `() → { configured: boolean; preview: string \| null }` | Returns whether a custom Anthropic API key is stored and a masked preview (e.g. `sk-ant-…AB12`); never returns the raw key |
 | `setClaudeKey` | `(key: string \| null) → void` | Store or remove the custom API key (encrypted at rest); pass `null` or empty string to clear |
 
+### `repos`
+
+Links external repos/projects (GitHub `owner/repo`, Jira project keys) to a local git checkout, for code authoring. `RepoLink[]` is stored in `AppConfig.repos`, not the DB — see `repos.ts` and [code-authoring.md](code-authoring.md).
+
+| Method | Signature | Description |
+|---|---|---|
+| `getAll` | `() → RepoLink[]` | List all registered repo links |
+| `add` | `(localPath, jiraProjectKeys) → RepoLink` | Register a local checkout. Validates it's a git repo, then reads `git remote get-url origin` and the default branch to prefill `githubRepo`/`defaultBaseBranch`. Never clones or writes to the checkout. |
+| `update` | `(id, update: Partial<RepoLink>) → RepoLink` | Patch a repo link (e.g. toggle `authoringEnabled`) |
+| `remove` | `(id) → void` | Unregister a repo link (does not touch the local checkout or any worktrees already created from it) |
+
 ### `oauth`
 
 OAuth flows for GitHub, Notion, and Linear.
@@ -127,6 +138,10 @@ Ambient intelligence — intents, digests, policy, tray state.
 | `resetTrust` | `() → void` | Reset all autonomy policies to defaults |
 | `pollNow` | `() → void` | Trigger an immediate ambient poll cycle |
 | `getLog` | `(limit?) → ActionLogEntry[]` | Recent autonomy event log |
+| `startAuthoring` | `(intentId) → WorkProduct` | Start (or resume watching) the code-authoring run for an approved `author_fix` intent — creates an isolated worktree, runs the authoring agent, and captures the resulting diff. Idempotent: returns the existing work product if one already exists. Marks the intent `approved` as a side effect. |
+| `getWorkProduct` | `(intentId) → WorkProduct \| null` | Fetch the work product backing an `author_fix` intent, if authoring has started |
+| `shipWorkProduct` | `(intentId) → Intent` | Push the branch, open the PR, comment on the originating ticket, and notify Slack if a channel was identified. Validates required fields for every planned step before any external call runs. Returns the intent with `status: 'executed'` on full success. |
+| `discardWorkProduct` | `(intentId) → void` | Abandon a work product — prunes the worktree (and local branch) and dismisses the intent |
 
 ### `chat`
 
@@ -179,6 +194,7 @@ Subscribed with `window.electron.on(channel, listener)`. Returns an unsubscribe 
 | `ambient:tray-state` | `TrayState` | Tray icon state changed | widget only |
 | `ambient:digest-ready` | `AmbientDigest` | A new digest was generated | widget only |
 | `ambient:action-executed` | `Intent` | A tier-0 intent was auto-executed (success only) | **widget + main** |
+| `ambient:work-product-updated` | `WorkProduct` | An `author_fix` work product's lifecycle status changed (drafting → ready → shipping → shipped/failed/abandoned) | widget only |
 | `ambient:chat-user-message` | `{ intentId: string; message: ChatMessage }` | User message persisted to an intent's "Chat about it" thread (fires immediately before streaming begins) | **widget + main** |
 | `ambient:chat-message` | `{ intentId: string; chunk: string; done: boolean; error?: string }` | Streaming chunk for an intent's "Chat about it" reply. `done: true` signals completion or error. | **widget + main** |
 | `chat:tool-approval-request` | `PendingToolApproval` | An agent stream reached a write tool and is paused waiting for user approval. The renderer should show an inline approval UI. Resolved by calling `window.electron.chat.resolveToolApproval(approvalId, allow, editedInput?)`. | **widget + main** |
@@ -246,6 +262,7 @@ type Tier            = 0 | 1 | 2 | 3   // 0 = fully automatic, 3 = always approv
 type TrayState       = 'idle' | 'has-something' | 'needs-you'
 type DigestSlot      = 'morning' | 'midday' | 'eod'
 type MemoryType      = 'fact' | 'pattern' | 'preference' | 'status'
+type WorkProductStatus = 'drafting' | 'ready' | 'shipping' | 'shipped' | 'failed' | 'abandoned'
 ```
 
 ### `checkin`
@@ -264,6 +281,8 @@ Manage PA check-in sessions and their chat threads.
 | `openInMainWindow` | `(checkinId?) → void` | Open main window on Check-in page, expanding the given session |
 
 ## Changelog
+
+- 2026-07-09 — **Code authoring: new `repos` namespace, `ambient` authoring methods, `work-product-updated` push channel.** New `IpcApi.repos` namespace (`getAll`, `add`, `update`, `remove`) backed by `repos.ts` — registers a local git checkout as a `RepoLink`. New `RepoLink`/`WorkProduct`/`WorkProductStatus` types and `repos?: RepoLink[]` on `AppConfig` in `src/shared/types.ts`. `IpcApi.ambient` gains `startAuthoring(intentId)`, `getWorkProduct(intentId)`, `shipWorkProduct(intentId)`, `discardWorkProduct(intentId)`, backed by the new `authoring.ts` service. New push channel `ambient:work-product-updated` (payload: `WorkProduct`). See [code-authoring.md](code-authoring.md).
 
 - 2026-06-30 — **`config:get-scope-candidates` channel + `config:update` scope editing.** New read-only `config:get-scope-candidates` IPC channel (handler in `ipc-handlers.ts`, exposed in preload as `window.electron.config.getScopeCandidates()`). Returns `Record<string, string[]>` — distinct identifiers per surface derived from the knowledge graph, unioned with any currently configured identifiers. Used by the Settings scope multi-select to populate toggle chips. `config:update` now accepts user-edited `scope.allowed` (the Settings UI writes the full map on each toggle). `ScopeConfig` doc comment updated: allowlist is now also editable via Settings, not only check-in extraction.
 

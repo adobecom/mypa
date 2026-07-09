@@ -36,6 +36,7 @@ Implements all AI calls using `@anthropic-ai/claude-agent-sdk` directly (no subp
 | `resolveToolApproval(approvalId, allow, editedInput?)` | Unblock a pending `canUseTool` write-gate; called by the `chat:resolve-tool-approval` IPC handler |
 | `resolveQuestion(questionId, answer)` | Unblock a pending `ask_user` tool invocation; called by the `chat:answer-question` IPC handler |
 | `buildAskUserServer(streamId)` | Internal: creates the in-process MCP server exposing the `ask_user` tool |
+| `runAuthoringAgent(worktreePath, taskPrompt, onProgress?)` | **The only call site in this file that grants built-in file/shell tools** (`Bash`, `Edit`, `Read`, `Write`, `Grep`, `Glob`) — every other export above deliberately runs with `tools: []`. `cwd` is pinned to an isolated git worktree (see `worktree.ts`); `canUseTool` confines file writes to that worktree and blocks network access and `git push`/`clone`/`remote`/`submodule`. Used by `authoring.ts`; does not commit or push — the caller does that once the user approves the diff. |
 
 ---
 
@@ -67,6 +68,8 @@ Stateless, pure module. No I/O; no config reads. The single source of truth for 
 |---|---|
 | `selectModel(source, promptChars)` | Returns the model id for a task. Base tier comes from the `UsageSource` label; large prompts (≥ 12 k / ≥ 40 k chars) bump the tier up toward `capable`. |
 | `escalate(modelId)` | Returns the next-stronger model in the ladder (`haiku → sonnet → opus`), or `null` at the top. Used by `runClaude` / `streamChat` to retry failed or weak-output tasks. |
+
+`authoring` (code-authoring runs) maps to `capable` (Opus) unconditionally — unlike `review` (ambient deep-enrichment), it is user-initiated (approve-to-start) and runs at most once per approved intent rather than unattended on a heartbeat, so the cost/quality tradeoff favors the strongest tier.
 
 ---
 
@@ -293,6 +296,53 @@ Takes a `ContextPacket` (assembled by `memory-graph.ts`) and produces scored `In
 | `inferRoutineIntents(name, rawOutput, maxIntents?)` | Multi-intent inference over routine MCP output; returns up to `maxIntents` (default 3) `IntentObject`s as a JSON array parsed from one Claude call |
 | `reproposeIntent(intent, thread, userMessage)` | Re-proposal with live read-only MCP: injects the original `context_packet`, the current proposal, and the full conversation history into a prompt, calls `runClaudeWithMcp`, and returns `{ message: string, intent: IntentObject }` parsed from a JSON envelope |
 | `parseIntentObject(text)` | Parse + validate a raw JSON string into an `IntentObject`; clamps unknown verbs to `'none'` |
+| `inferDeepIntent(hit, packet?)` | Agentic deep-enrichment for directed-at-me items. Before the standard write-action proposal, tries an **author-fix** path (see `tryProposeAuthorFix`, same file): if the triggering item's container resolves to a `RepoLink` (via `repos.ts` `resolveRepoForNode`) with authoring enabled, runs a read-only decision call that judges whether a coding agent could plausibly attempt the task and, if so, writes a self-contained `task_description`. On `proceed: true` this short-circuits with an `author_fix`-verb `IntentObject` instead of the usual comment/review proposal; on `proceed: false` (or no linked repo) it falls through to the existing `actions[]` proposal. |
+
+---
+
+## `repos.ts` — Repo links (code-authoring targets)
+
+Maps external work-item containers (a GitHub `owner/repo`, a Jira project key) to a local git checkout the user has registered in Settings, so mypa knows where to run code-authoring work. `RepoLink`s live in `AppConfig.repos` (`config.json`), not the DB — registration is a config mutation, not a signal-derived fact.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `getAllRepoLinks()` / `getRepoLink(id)` | Read from `config.repos` |
+| `addRepoLink(localPath, jiraProjectKeys)` | Validates `localPath` is a git repo (`.git` dir present), then shells out to `git remote get-url origin` and `git symbolic-ref .../HEAD` to prefill `githubRepo` and `defaultBaseBranch`. Never clones or writes to the checkout. |
+| `updateRepoLink(id, patch)` / `removeRepoLink(id)` | Config mutations |
+| `resolveRepoForSignal(signal)` | Matches a `Signal`'s container to a `RepoLink` with `authoringEnabled`, reusing the same owner/repo and Jira-project-key parsing as `deriveContainer` in `memory-graph.ts` |
+| `resolveRepoForNode(key, url?)` | Same match, but from a graph-node key (`surface:kind:external_id`) instead of a full `Signal` row — used by `inference.ts`, which only has focus nodes from the context packet at hand |
+
+---
+
+## `worktree.ts` — Isolated git worktrees for authoring
+
+Creates and tears down disposable git worktrees so a code-authoring run never touches the user's real checkout. All operations shell out to `git` via `execFile` — no native git library dependency.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `createWorktree(repoLink, taskKey)` | `git fetch origin <baseBranch>`, then `git worktree add -b mypa/<slug> <path> origin/<baseBranch>` at `~/.mypa/worktrees/<repo>/<slug>/`. Returns `{ worktreePath, branch, baseBranch }`. |
+| `captureDiff(worktreePath)` | `git add -A` (safe — the worktree is disposable) then reads `--stat`, `--name-only`, and the full patch from the staged diff. Does not commit. |
+| `commitAndPush(worktreePath, branch, message)` | Commits the staged changes and pushes the branch to `origin` — called only once the user taps "Ship it". |
+| `pruneWorktree(repoLocalPath, worktreePath, branch, abandon)` | `git worktree remove --force`, falling back to `git worktree prune` + filesystem cleanup if the worktree metadata is already gone; deletes the local branch too when `abandon` is true |
+
+---
+
+## `authoring.ts` — Code-authoring lifecycle
+
+Orchestrates an `author_fix` intent from approval through shipping. See [code-authoring.md](code-authoring.md) for the full design and the `work_products` data model.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `startAuthoring(intentId)` | Idempotent. Resolves the intent's `RepoLink`, creates a worktree, runs `runAuthoringAgent` (`agent.ts`), captures the diff, and creates/updates a `work_products` row (`drafting` → `ready`/`failed`). Marks the intent `approved` as a side effect of the user tapping "Start". |
+| `getWorkProductForIntent(intentId)` | Read |
+| `shipWorkProduct(intentId)` | Pushes the branch, opens the PR (`github:create_pull_request`), and comments on the originating ticket — the ticket identifiers come only from the trusted triggering signal (`inference.ts` `deriveTrustedTicketRouting`), never from the author-fix decision model's own output. Validates required fields for every planned step before any external call runs; a failing step after the PR exists is recorded on the work product (with the `pr_url` it already has) rather than lost. On full success, marks the intent `executed` and records trust via `autonomy.ts recordExecution(`${surface}:author_fix`)` — the same `${surface}:${verb}` key convention every other verb uses (not a bespoke key). There is deliberately no Slack (or other) ship-time notification — see [code-authoring.md](code-authoring.md) for why. |
+| `discardWorkProduct(intentId)` | Prunes the worktree (if one exists) and dismisses the intent via `ambient.ts ambientDismissIntent` — a one-way dependency (`ambient.ts` never imports `authoring.ts`) that keeps the existing execution paths in `ambient.ts` untouched. |
 
 ---
 
@@ -396,6 +446,10 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-07-09 — **Security review follow-up on the code-authoring slice (`inference.ts`, `authoring.ts`, `agent.ts`).** Fixed several issues a code-review + security-review pass surfaced before this shipped: (1) `inference.ts` `parseAuthorFixDecision`'s `task_description` field was being run through `sanitizeRationale` — built for a one-line field, it cuts at the first sentence and clamps to 300 chars — silently truncating the multi-sentence brief handed to the authoring agent down to one sentence; replaced with a dedicated `sanitizeTaskDescription` (whitespace collapse + 4000-char clamp only). (2) The ship-time ticket/comment destination was taken directly from the author-fix decision model's own JSON output; new `deriveTrustedTicketRouting` now derives it only from the trusted triggering graph node (mirroring `enrichPayloadForRouting` in `ambient.ts`), and the model-chosen Slack-notification step + `reviewers` field were removed entirely rather than shipped unvalidated. (3) `authoring.ts` `startAuthoring` now calls `recordApproval` and appends an `approved`/`failed` `action_log` entry on start/failure (it previously only updated intent status, silently diverging from the documented approve-flow parity); `shipWorkProduct` now records execution under the same `${surface}:${verb}` key every other verb uses instead of a hardcoded `'repo:author_fix'` string that no policy lookup ever read. (4) `shipWorkProduct`'s failure message no longer claims "failed before opening a PR" when the branch had already been pushed. (5) `agent.ts`'s `canUseTool` now confines `Grep`/`Glob` to the worktree by path (previously unconditionally allowed) and `BASH_DENY_RE` gained `git ls-remote` and common network/DNS tools; `isWithinWorktree` now fails closed on a missing `file_path` instead of allowing it through. (6) `discardWorkProduct` now refuses while an authoring run is in flight in the current process (new in-memory `inFlightAuthoring` guard), and `WorkProductCard.tsx` gained a Discard button for `drafting`/`failed` work products that previously had no recovery path (a `failed` work product also makes the intent terminal, the same convention every other verb uses, but the button was gated behind `!isTerminal` and never rendered).
+
+- 2026-07-09 — **Code-authoring: `author_fix` intent → isolated worktree → diff review → ship (`repos.ts`, `worktree.ts`, `authoring.ts` new; `agent.ts`, `inference.ts`, `model-router.ts`, `ambient.ts` touched only via a one-way import).** First slice of the "investigate → fix → ship" vision — see [code-authoring.md](code-authoring.md). New `repos.ts` maps a linked local checkout (`RepoLink`, stored in `AppConfig.repos`) to a signal's GitHub repo / Jira project. New `worktree.ts` creates a disposable git worktree + branch per attempt (`~/.mypa/worktrees/<repo>/<slug>/`) so authoring never touches the user's real checkout. `agent.ts` gains `runAuthoringAgent` — the only call site in the file that grants built-in `Bash`/`Edit`/`Read`/`Write`/`Grep`/`Glob` tools, gated by a `canUseTool` that confines writes to the worktree and blocks network/push/clone/remote. New `authoring.ts` orchestrates the lifecycle (`startAuthoring` → `shipWorkProduct`/`discardWorkProduct`) against a new `work_products` DB table (see [database.md](database.md)). `inference.ts` `inferDeepIntent` tries an author-fix decision path first (read-only) when a directed trigger's container resolves to an authoring-enabled `RepoLink`; on `proceed:true` it emits an `author_fix`-verb intent instead of the usual comment/review proposal. `author_fix` intents default to tier 2 (approve-to-start) via the existing `TYPE_DEFAULT_TIER['action']` — no `ambient.ts` tier-resolution changes were needed. `authoring.ts` imports `ambientDismissIntent` from `ambient.ts` for the discard path; `ambient.ts` itself was not modified and does not import `authoring.ts`, so the existing intent execution paths (`executeIntent`/`executeActions`) are untouched. New `'authoring'` `UsageSource` maps to `capable` (Opus) in `model-router.ts`. New widget `WorkProductCard.tsx` renders in place of `IntentCard` for `author_fix` intents (see [renderer.md](renderer.md)); new Settings "Repos" section (see `Settings.tsx` `ReposSection`).
 
 - 2026-07-08 — **Cost reduction: downgrade `'review'` to Sonnet, daily budget cap, same-tier JSON retry (`model-router.ts`, `budget.ts` new, `agent.ts`, `ambient.ts`).** New `budget.ts` service (`isOverDailyBudget()`) gates ambient deep-enrichment against `AmbientConfig.dailyBudgetUsd`. `model-router.ts` `SOURCE_TIER['review']` moved from `'capable'` to `'balanced'` — see [ambient-intelligence.md](ambient-intelligence.md) changelog for the full rationale (this one source was ~97% of Opus spend). `agent.ts` `runAgentOnce` now retries once at the same model tier with a stricter JSON-only instruction before throwing the error that triggers tier escalation, reducing unnecessary Haiku→Sonnet climbs on merely-malformed (not under-capable) responses.
 

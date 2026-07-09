@@ -273,6 +273,7 @@ export interface AppConfig {
   ambient?: AmbientConfig
   checkin?: CheckInConfig
   scope?: ScopeConfig
+  repos?: RepoLink[]
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -297,7 +298,32 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   checkin: {
     scheduleEnabled: false
-  }
+  },
+  repos: []
+}
+
+// ─── Code authoring (repo links + work products) ─────────────────────────────
+
+/**
+ * Links an external work surface (GitHub repo / Jira project) to a repo already
+ * checked out on the local machine, so mypa knows where to run code-authoring work.
+ * Registered manually in Settings — mypa never clones a repo on the user's behalf.
+ */
+export interface RepoLink {
+  id: string
+  /** Absolute path to the existing local clone. Authoring runs happen in a git
+   *  worktree derived from this path — the clone itself is never modified. */
+  localPath: string
+  /** "owner/name", derived from `git remote get-url origin` when the repo is linked. */
+  githubRepo?: string
+  /** Jira project keys (e.g. "PROJ") whose tickets map to this repo. */
+  jiraProjectKeys: string[]
+  /** Branch new worktrees are created from. Defaults to the repo's current default branch. */
+  defaultBaseBranch: string
+  /** When false, mypa may still comment/label/etc. on items in this repo but will never
+   *  propose or run authoring work against it. Defaults to true once linked. */
+  authoringEnabled: boolean
+  created_at: string
 }
 
 // ─── Ambient Intelligence ────────────────────────────────────────────────────
@@ -366,6 +392,43 @@ export interface ProposedAction {
   verb: string
   target: string
   payload: Record<string, unknown>
+}
+
+// ─── Work products (authored code, pending ship) ─────────────────────────────
+//
+// A work product is the durable record of a code-authoring attempt: an isolated
+// git worktree + branch, the diff produced there, and its shipping lifecycle.
+// One work product per intent (intent.verb === 'author_fix'). See authoring.ts
+// and worktree.ts.
+
+export type WorkProductStatus =
+  | 'drafting'   // authoring agent is running in the worktree
+  | 'ready'      // diff produced, awaiting user review / Ship it
+  | 'shipping'   // push + PR + comment + Slack chain in progress
+  | 'shipped'    // chain completed successfully
+  | 'failed'     // authoring or shipping errored
+  | 'abandoned'  // user discarded; worktree pruned
+
+export interface WorkProduct {
+  id: string
+  intent_id: string
+  repo_id: string
+  worktree_path: string
+  branch: string
+  base_branch: string
+  status: WorkProductStatus
+  /** Model-written summary of what was changed and why. */
+  summary: string
+  /** Human-readable diffstat, e.g. "3 files changed, 42 insertions(+), 7 deletions(-)". */
+  diff_stat: string
+  files_changed: string[]
+  /** Full unified diff — read on demand from the worktree, not duplicated here at rest
+   *  beyond this cached copy used for display after the worktree is pruned. */
+  diff: string
+  error: string | null
+  pr_url: string | null
+  created_at: string
+  shipped_at: string | null
 }
 
 export interface IntentObject {
@@ -586,6 +649,7 @@ export type UsageSource =
   | 'chat'
   | 'suggest'
   | 'review'
+  | 'authoring'
   | 'other'
 
 export type UsageRange = '7d' | '30d' | '90d' | 'all'
@@ -695,6 +759,14 @@ export interface IpcApi {
     /** Returns graph-derived candidate identifiers for the scope multi-select UI. */
     getScopeCandidates(): Promise<Record<string, string[]>>
   }
+  repos: {
+    getAll(): Promise<RepoLink[]>
+    /** Registers a local repo. Reads `git remote get-url origin` and the current
+     *  branch to prefill githubRepo/defaultBaseBranch when not provided. */
+    add(localPath: string, jiraProjectKeys: string[]): Promise<RepoLink>
+    update(id: string, update: Partial<Omit<RepoLink, 'id' | 'created_at'>>): Promise<RepoLink>
+    remove(id: string): Promise<void>
+  }
   oauth: {
     startDevice(): Promise<DeviceFlowStart>
     pollDevice(deviceCode: string): Promise<string>
@@ -742,6 +814,13 @@ export interface IpcApi {
     resetTrust(): Promise<void>
     pollNow(): Promise<void>
     getLog(limit?: number): Promise<ActionLogEntry[]>
+    /** Start (or resume watching) the code-authoring run for an approved author_fix intent. */
+    startAuthoring(intentId: string): Promise<WorkProduct>
+    getWorkProduct(intentId: string): Promise<WorkProduct | null>
+    /** Push the branch, open the PR, comment on the ticket, and post to Slack. */
+    shipWorkProduct(intentId: string): Promise<Intent>
+    /** Abandon a work product — prunes the worktree and marks the intent dismissed. */
+    discardWorkProduct(intentId: string): Promise<void>
   }
   memory: {
     getGraph(): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }>
@@ -799,6 +878,7 @@ export interface IpcApi {
       | 'ambient:tray-state'
       | 'ambient:digest-ready'
       | 'ambient:action-executed'
+      | 'ambient:work-product-updated'
       | 'ambient:chat-message'
       | 'ambient:chat-user-message'
       | 'checkin:started'

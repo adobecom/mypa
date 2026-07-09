@@ -826,3 +826,170 @@ async function runAgentWithMcpOnce(
   }
   return text
 }
+
+// ─── Authoring: agentic code changes in an isolated worktree ─────────────────
+//
+// This is the ONLY call site in this file that grants built-in file/shell tools
+// (Bash, Edit, Read, Write, Grep, Glob). Every other mode above deliberately sets
+// tools: [] and/or denies bare built-in tool names outright — that boundary is
+// intentional, and this function is meant to be the sole, narrow exception to it.
+// Isolation comes from: (1) `cwd` is pinned to a disposable git worktree created by
+// worktree.ts, never the user's real checkout; (2) canUseTool below confines
+// Edit/Write/Read/Grep/Glob calls to that worktree by path. Bash is NOT path-confined — a
+// command can read/write anywhere the OS user can, and the denylist below is a
+// best-effort string match on the literal command, not a real sandbox (a command
+// that writes a script to a file and then executes it, or otherwise obscures its
+// target, is not caught). The real safety property this mode relies on is that it
+// only ever runs against a disposable worktree under a user-initiated,
+// approve-to-start flow — not that Bash itself is contained.
+
+// Authoring runs are unattended for potentially many tool calls in a row (reading
+// files, editing, running local builds/tests) — a single wall-clock deadline for
+// the whole run is simpler and safer here than the chat idle-timer pattern above,
+// which assumes a human is watching for stalls.
+const AUTHORING_TIMEOUT_MS = 15 * 60_000
+
+// Best-effort command denylist — blocks the specific escape hatches that would let
+// an authoring run leave its sandbox (pushing/fetching/cloning/adding remotes,
+// reaching the network by any of the common tools/techniques with no legitimate
+// use in a build/lint/test workflow, or deleting anything at an absolute path or
+// under the user's home directory). See the file-level comment above for this
+// mechanism's real limits — it is not a sandbox. It deliberately does NOT block
+// bare interpreter invocation (python/node/perl/ruby) since the system prompt
+// tells the model it may run local linters/type-checkers/test suites, which
+// commonly shell out through exactly those interpreters — blocking them outright
+// would break the feature's stated legitimate use far more than it narrows this
+// gap, since a script-mediated or interpreter-internal HTTP call is not something
+// a command-string regex can reliably distinguish from a legitimate build step.
+//
+// KNOWN RESIDUAL RISK: this run's environment (buildAgentEnv(), passed as `env`
+// below) includes ANTHROPIC_API_KEY (if a custom key is configured) and inherits
+// CLAUDE_CODE_OAUTH_TOKEN from the parent process (if that's the active auth
+// source) — both are visible to any Bash child process this agent spawns. A
+// sufficiently malicious task (e.g. from prompt injection in external ticket/PR
+// content the upstream enrichment step read) could exfiltrate either via a
+// technique this denylist doesn't cover. Closing this fully requires either not
+// handing this agent a live credential at all (the Agent SDK needs one to make
+// its own API calls, so today there is no way to withhold it from Bash without
+// also breaking the run) or a real OS-level network sandbox — tracked as a
+// follow-up, not solved by this denylist.
+const BASH_DENY_RE = /\b(git\s+(push|fetch|pull|clone|remote|submodule|ls-remote)|sudo|curl|wget|\bnc\b|\bssh\b|\bscp\b|\brsync\b|\bftp\b|\btelnet\b|\bsocat\b|\bdig\b|\bnslookup\b|getent\s+hosts|\/dev\/(tcp|udp)\/|rm\s+-rf\s+(\/|~))/i
+
+function isDisallowedBashCommand(cmd: string): boolean {
+  return BASH_DENY_RE.test(cmd)
+}
+
+/** Fails closed: a missing/empty file_path is treated as outside the worktree,
+ *  not allowed through by default. */
+function isWithinWorktree(filePath: string | undefined, worktreePath: string): boolean {
+  if (!filePath) return false
+  const root = path.resolve(worktreePath)
+  const resolved = path.resolve(worktreePath, filePath)
+  return resolved === root || resolved.startsWith(root + path.sep)
+}
+
+export interface AuthoringResult {
+  text: string
+  ok: boolean
+  error?: string
+}
+
+/**
+ * Runs Claude with real file/shell tools (Bash/Edit/Read/Write/Grep/Glob) against
+ * an isolated worktree to author a code change. Does not commit or push — the
+ * caller (authoring.ts) reviews the diff and commits/pushes only once the user
+ * taps "Ship it" (see worktree.ts captureDiff/commitAndPush).
+ */
+export async function runAuthoringAgent(
+  worktreePath: string,
+  taskPrompt: string,
+  onProgress?: (status: string) => void,
+): Promise<AuthoringResult> {
+  const model = selectModel('authoring', taskPrompt.length)
+  const ac = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => { timedOut = true; ac.abort() }, AUTHORING_TIMEOUT_MS)
+
+  const systemPrompt = 'You are mypa\'s code-authoring agent, working in an isolated git worktree on a fresh ' +
+    'branch created for this task only. Make the minimal, correct change to address the task below, following ' +
+    'the existing code\'s style and conventions. You may read files, search the codebase, and run local commands ' +
+    '(e.g. a linter, type-checker, or test suite) to verify your change, but you have no network access and must ' +
+    'never push, fetch, add a remote, or switch branches. When the change is complete and verified as well as you ' +
+    'can, stop — do not commit; the user reviews the diff and mypa commits on their behalf afterward.'
+
+  let text = ''
+  let resultMsg: SDKResultMessage | null = null
+
+  try {
+    for await (const msg of query({
+      prompt: taskPrompt,
+      options: {
+        systemPrompt,
+        model,
+        cwd: worktreePath,
+        tools: ['Bash', 'Edit', 'Read', 'Write', 'Grep', 'Glob'],
+        maxTurns: 40,
+        permissionMode: 'default',
+        abortController: ac,
+        env: buildAgentEnv(),
+        pathToClaudeCodeExecutable: resolveClaudeExecutable(),
+        canUseTool: async (toolName: string, toolInput: unknown) => {
+          const input = (toolInput as Record<string, unknown>) ?? {}
+          if (toolName === 'Bash') {
+            const cmd = String(input.command ?? '')
+            if (isDisallowedBashCommand(cmd)) {
+              return {
+                behavior: 'deny',
+                message: 'Command blocked in the authoring sandbox — no network access, and no git push/clone/remote/submodule operations are allowed.',
+              }
+            }
+            return { behavior: 'allow', updatedInput: input }
+          }
+          if (toolName === 'Edit' || toolName === 'Write' || toolName === 'Read') {
+            const filePath = typeof input.file_path === 'string' ? input.file_path : undefined
+            if (!isWithinWorktree(filePath, worktreePath)) {
+              return { behavior: 'deny', message: 'File path is outside the authoring worktree.' }
+            }
+            return { behavior: 'allow', updatedInput: input }
+          }
+          if (toolName === 'Grep' || toolName === 'Glob') {
+            // Both tools default to `cwd` (the worktree) when path is omitted — only
+            // deny when an explicit path was given and it resolves outside the worktree.
+            // Without this, Grep in particular is a de facto arbitrary-file-read: it can
+            // return matching file content from anywhere the OS user can reach.
+            const searchPath = typeof input.path === 'string' ? input.path : undefined
+            if (searchPath && !isWithinWorktree(searchPath, worktreePath)) {
+              return { behavior: 'deny', message: 'Search path is outside the authoring worktree.' }
+            }
+            return { behavior: 'allow', updatedInput: input }
+          }
+          return { behavior: 'deny', message: 'Tool not available in the authoring sandbox' }
+        },
+      },
+    })) {
+      if (msg.type === 'assistant') {
+        for (const block of (msg.message?.content ?? []) as any[]) {  // eslint-disable-line @typescript-eslint/no-explicit-any
+          if (block.type === 'text') text += block.text
+          if (block.type === 'tool_use' && onProgress) onProgress(`Using ${block.name ?? 'a tool'}…`)
+        }
+      }
+      if (msg.type === 'result') resultMsg = msg
+    }
+  } catch (err) {
+    clearTimeout(timer)
+    if (timedOut) return { text, ok: false, error: 'Authoring run timed out' }
+    return { text, ok: false, error: (err as Error).message }
+  }
+
+  clearTimeout(timer)
+
+  if (!resultMsg) {
+    return { text, ok: false, error: 'Authoring agent completed without a result message' }
+  }
+  recordSdkUsage('authoring', model, resultMsg)
+  if (resultMsg.is_error) {
+    const errText = typeof (resultMsg as any).result === 'string' ? (resultMsg as any).result : 'Authoring agent returned an error'
+    return { text, ok: false, error: errText }
+  }
+  return { text, ok: true }
+}
