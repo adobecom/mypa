@@ -1219,6 +1219,11 @@ export function dbInsertUsage(
 
 function usageSince(range: string): string | undefined {
   if (range === 'all') return undefined
+  if (range === 'today') {
+    const startOfDay = new Date()
+    startOfDay.setHours(0, 0, 0, 0)
+    return startOfDay.toISOString()
+  }
   const days = range === '7d' ? 7 : range === '30d' ? 30 : 90
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
 }

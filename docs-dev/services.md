@@ -82,6 +82,18 @@ Thin wrapper around `dbInsertUsage` so `claude.ts` doesn't import the DB layer d
 
 ---
 
+## `budget.ts` — Daily spend guard
+
+Gates the ambient deep-enrichment path (the single largest driver of Opus spend) against a configured daily USD cap. Never gates user-initiated calls.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `isOverDailyBudget()` | Returns `true` once today's total `usage_events` cost (all sources/models, via `dbGetUsageSummary('today')`) reaches `AmbientConfig.dailyBudgetUsd` (falls back to `DEFAULT_CONFIG.ambient.dailyBudgetUsd`, `2.0`; `0` disables). Errors are swallowed → treated as under budget. Checked once per ambient cycle (not per hit) in `runAmbientCycle`. |
+
+---
+
 ## `mcp.ts` — MCP client manager
 
 Manages MCP server connections (stdio, HTTP, SSE) using `@modelcontextprotocol/sdk`. See [mcp-and-oauth.md](mcp-and-oauth.md) for details.
@@ -384,6 +396,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-07-08 — **Cost reduction: downgrade `'review'` to Sonnet, daily budget cap, same-tier JSON retry (`model-router.ts`, `budget.ts` new, `agent.ts`, `ambient.ts`).** New `budget.ts` service (`isOverDailyBudget()`) gates ambient deep-enrichment against `AmbientConfig.dailyBudgetUsd`. `model-router.ts` `SOURCE_TIER['review']` moved from `'capable'` to `'balanced'` — see [ambient-intelligence.md](ambient-intelligence.md) changelog for the full rationale (this one source was ~97% of Opus spend). `agent.ts` `runAgentOnce` now retries once at the same model tier with a stricter JSON-only instruction before throwing the error that triggers tier escalation, reducing unnecessary Haiku→Sonnet climbs on merely-malformed (not under-capable) responses.
 
 - 2026-07-07 — **Hardening pass: ambient polling backoff, secret redaction, quit-safety, MCP call typing.** `ingestion.ts` — `startIngestion`'s per-adapter poll loop switched from a fixed `setInterval` to a self-rescheduling `setTimeout` chain with geometric backoff (capped at 4x the base interval) on consecutive `runAdapterPoll` failures, resetting on the next success; an `ingestionEpoch` counter (bumped by `stopIngestion`) invalidates any in-flight reschedule so a poll that's mid-flight when ingestion is stopped can't resurrect a "zombie" timer after `intervalIds` is cleared. Also fixed a real bug: the Jira adapter read `readConfig().mcpServers` (doesn't exist — the field is `mcp_servers`), so JIRA_URL-based base-URL reconstruction always silently no-op'd. `logger.ts` — `redact()` now scrubs common secret shapes (Bearer tokens, GitHub/Slack tokens, API keys) from both the file-written line and its console mirror, since MCP tool error/response payloads are logged verbatim and could echo a token from a misconfigured server. `usage.ts` — `recordUsage()`'s catch block now calls `logError` instead of swallowing silently; a DB-write failure there previously left cost/usage under-reporting with zero trace. `config.ts` — `encryptValue()` now logs a one-time warning via `logError` when `safeStorage.isEncryptionAvailable()` is false, instead of silently falling back to plaintext secret storage. `mcp.ts` — `callTool`/`callToolRaw` factored into a shared `callToolTimed()` helper (both were duplicating an identical `withTimeout(...) as CallToolResult` cast, needed because piping the SDK's `Client.callTool()` through the generic `withTimeout<T>` wrapper collapses its inferred return type to `{}`); `withTimeout` is now exported for reuse by `index.ts`'s quit-cleanup path; `disconnectAllServers()` changed from a sequential `for` loop to `Promise.allSettled`, since a caller bounding it with an overall timeout (see below) would otherwise only reach as many servers as fit in loop order before the deadline. `index.ts`/`ipc-handlers.ts` — the tray "Quit" callback and OS-initiated `before-quit` previously each duplicated cleanup and called the async `disconnectAllServers()` without awaiting it, orphaning in-flight MCP child processes; unified into one `cleanupAndExit()` that awaits disconnect (bounded to 3s via `withTimeout`) before `app.exit(0)`, with `event.preventDefault()` called unconditionally on every `before-quit` (not gated behind the re-entry guard) so a second quit trigger arriving while cleanup is still in flight can't let Electron's default quit proceed early. The same bounded-disconnect pattern was applied to `system:factory-reset`, which had the identical unbounded-hang risk. `windows.ts` — `widgetWin` now nulls itself on `'closed'` (matching `mainWin`'s existing pattern) and both `BrowserWindow`s set `sandbox: true` explicitly.
 

@@ -291,8 +291,9 @@ export const DEFAULT_CONFIG: AppConfig = {
     confidenceFloor: 0.4,
     urgencyFloor: 0.5,
     waitingUrgencyFloor: 0.25,
-    synthesisIntervalMs: 30 * 60 * 1000,
-    synthesisInitialDelayMs: 75_000
+    synthesisIntervalMs: 60 * 60 * 1000,
+    synthesisInitialDelayMs: 75_000,
+    dailyBudgetUsd: 2.0
   },
   checkin: {
     scheduleEnabled: false
@@ -493,8 +494,13 @@ export interface AmbientConfig {
   confidenceFloor: number
   urgencyFloor?: number              // intents below this urgency are dropped for spike/dependency/time triggers (default 0.5)
   waitingUrgencyFloor?: number       // lower urgency floor for waiting/staleness triggers — real-but-not-urgent items (default 0.25)
-  synthesisIntervalMs?: number       // how often the synthesis heartbeat fires (default 30 min)
+  synthesisIntervalMs?: number       // how often the synthesis heartbeat fires (default 60 min)
   synthesisInitialDelayMs?: number   // delay before the first heartbeat tick after boot (default 75 s)
+  // Daily USD spend cap for background deep-enrichment (source 'review'). Once today's
+  // total usage cost (all sources) reaches this, deep enrichment is skipped for the rest
+  // of the day and falls back to lightweight (Haiku/Sonnet) inference. Set to 0 to disable
+  // the cap. Default 2.0.
+  dailyBudgetUsd?: number
   // Per-resolution-status cooldown (ms) during which re-surfacing the same work item is suppressed.
   // A newer signal fingerprint (new activity after resolution) breaks through the cooldown.
   // Defaults: dismissed/challenged=7d, executed=3d, failed/expired=1d.

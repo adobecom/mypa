@@ -219,7 +219,8 @@ async function runAgentOnce(
   userPrompt: string,
   source: UsageSource,
   timeoutMs: number,
-  expectJson: boolean
+  expectJson: boolean,
+  isJsonRetry = false
 ): Promise<string> {
   const ac = new AbortController()
   // Dedicated flag — avoids the race where ac.abort() fires just before clearTimeout
@@ -294,6 +295,25 @@ async function runAgentOnce(
   }
 
   if (expectJson && !text.includes('{') && !text.includes('[')) {
+    // Before climbing to a stronger (pricier) tier, give this same tier one more
+    // chance with an explicit format instruction — most weak-JSON failures are a
+    // formatting slip, not a capability gap, and a same-tier retry is far cheaper
+    // than an escalation.
+    if (!isJsonRetry) {
+      console.log(`[agent] non-JSON response from ${model} (${source}) — retrying same tier with stricter format instruction`)
+      // Capped, not the full timeoutMs — this is a quick reformat nudge, not a
+      // fresh attempt at the task, so it shouldn't double the worst-case latency
+      // a caller budgeted for.
+      return runAgentOnce(
+        model,
+        systemPrompt,
+        `${userPrompt}\n\nReturn ONLY raw JSON — no prose, no markdown code fences, no explanation.`,
+        source,
+        Math.min(timeoutMs, 30_000),
+        expectJson,
+        true
+      )
+    }
     throw new Error('Agent returned non-JSON response when JSON was expected')
   }
 

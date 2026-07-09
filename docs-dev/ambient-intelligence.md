@@ -72,8 +72,9 @@ Stored in `AppConfig.ambient` (in `~/.mypa/config.json`):
 | `confidenceFloor` | `0.4` | Minimum confidence to surface an intent |
 | `urgencyFloor` | `0.5` | Minimum urgency for `spike`/`dependency`/`time` triggers (see per-kind floor below) |
 | `waitingUrgencyFloor` | `0.25` | Minimum urgency for `waiting`/`staleness` triggers — these items are real-but-not-urgent by design |
-| `synthesisIntervalMs` | `1800000` (30 min) | How often the synthesis heartbeat repeats after the first tick |
+| `synthesisIntervalMs` | `3600000` (60 min) | How often the synthesis heartbeat repeats after the first tick |
 | `synthesisInitialDelayMs` | `75000` (75 s) | Delay before the **first** heartbeat tick after boot (lands after all three adapter stagger offsets settle) |
+| `dailyBudgetUsd` | `2.0` | Daily USD spend cap (all sources/models) above which deep-enrichment is skipped for the rest of the day, falling back to lightweight inference. `0` disables the cap. See `budget.ts`. |
 
 ---
 
@@ -148,8 +149,8 @@ The `staleness` trigger now restricts to items the owner **owns** (assigned or r
 ### Synthesis heartbeat
 
 Staleness and waiting-on-me from the heartbeat path re-evaluate the **current state of persisted signals** (`dbGetDirectedSignals`) at two intervals:
-- **Initial tick:** ~75 s after boot (`synthesisInitialDelayMs`), landing after all three adapter stagger offsets complete (+3 s github / +23 s jira / +43 s slack), so the DB is populated before the first evaluation. This surfaces items already waiting on the user immediately at startup rather than after the full 30-min interval.
-- **Recurring ticks:** every `synthesisIntervalMs` (default 30 min) thereafter.
+- **Initial tick:** ~75 s after boot (`synthesisInitialDelayMs`), landing after all three adapter stagger offsets complete (+3 s github / +23 s jira / +43 s slack), so the DB is populated before the first evaluation. This surfaces items already waiting on the user immediately at startup rather than after the full interval.
+- **Recurring ticks:** every `synthesisIntervalMs` (default 60 min) thereafter.
 
 The heartbeat uses the same `inferenceQueue` serialization as all other paths, so it never races with poll-driven cycles. It also writes one `diag` action-log row per tick (see **Observability** below), so the user can query the pipeline state via `ambient.getLog()` without grepping console output.
 
@@ -313,6 +314,8 @@ These rows appear in `ambient.getLog()` interleaved with real `emitted`/`execute
 - `totalHits: N > 0` but no `emitted` row follows ⇒ inference dropped every candidate; see the `dropped:` breakdown in the cycle console log
 
 ## Changelog
+
+- 2026-07-08 — **Cut Opus spend from ambient deep-enrichment (97% of Opus usage) (`model-router.ts`, `ambient.ts`, `agent.ts`, `budget.ts` new, `types.ts`, `db/index.ts`).** `usage_events` showed the `'review'` source (deep-enrichment, `inferDeepIntent`) accounted for ~97% of all Opus requests over 7 days, run unattended by the ambient heartbeat. Empirically, 96.6% of historical `review` prompts are small enough (<12k chars) that the downgrade below actually reaches Sonnet rather than being negated by the size-bump threshold. Changes: (1) `SOURCE_TIER['review']` downgraded from `'capable'` (Opus) to `'balanced'` (Sonnet) in `model-router.ts` — large context packets (>40k chars) still bump to Opus via the existing size threshold. (2) `MAX_DEEP_PER_CYCLE` lowered from `2` to `1` in `ambient.ts`; `synthesisIntervalMs` default raised from 30 min to 60 min, including the `startSynthesisTimer` fallback that had drifted out of sync with the `DEFAULT_CONFIG` value (see config table above). (3) New `budget.ts` — `isOverDailyBudget()` compares today's total `usage_events` cost (via `dbGetUsageSummary('today')`, a new `'today'` case added to `usageSince()` in `db/index.ts`) against `AmbientConfig.dailyBudgetUsd` (falls back to `DEFAULT_CONFIG.ambient.dailyBudgetUsd`, `0` disables). Checked once per ambient cycle in `runAmbientCycle` (not once per hit — the total can't change meaningfully mid-cycle, and the check itself costs a config read + DB query) before the deep-enrichment slot is spent, falling back to lightweight `inferIntent` (Haiku) once the cap is hit for the day — never blocks the cycle. Only gates the autonomous deep-enrichment path; user-initiated chat/plan/routine calls are unaffected by design — a global per-call budget gate at the router/agent layer was considered and deferred as a larger, separate change. Separately, `agent.ts`'s `runAgentOnce` now retries once at the *same* tier — capped at a 30 s timeout regardless of the caller's `timeoutMs`, so the retry can't double a caller's worst-case latency budget — with a stricter "return only JSON" instruction before throwing the non-JSON error that triggers tier escalation; most weak-JSON failures were a formatting slip rather than a capability gap, and a same-tier retry is cheaper than climbing Haiku→Sonnet→Opus. Known trade-off left unaddressed: `inferDeepIntent`'s MCP path (`runAgentWithMcpOnce`) has no equivalent JSON-retry, so a malformed deep-enrichment response is still dropped outright — worth monitoring post-downgrade since Sonnet is somewhat more likely than Opus to produce a malformed response on this task.
 
 - 2026-07-07 — **Polling backoff on repeated adapter failures:** `ingestion.ts`'s per-surface poll loop no longer hammers a failing adapter (expired token, rate limit, MCP server down) at full frequency forever — it now backs off geometrically (2x per consecutive failure, capped at 4x the base `pollIntervalMs`) and resets on the next success. Implementation switched from `setInterval` to a self-rescheduling `setTimeout` chain guarded by an `ingestionEpoch` counter so `stopIngestion()` can't be defeated by a poll that's already in flight. Also fixed a bug where the Jira adapter's `readConfig().mcpServers` (nonexistent field; should be `mcp_servers`) silently broke JIRA_URL-based link reconstruction.
 
