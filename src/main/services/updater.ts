@@ -1,3 +1,5 @@
+import { existsSync } from 'fs'
+import path from 'path'
 import { app, BrowserWindow } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { setUpdateReady } from '../tray'
@@ -10,9 +12,21 @@ function pushToAllWindows(channel: string, ...args: unknown[]): void {
   })
 }
 
+// electron-updater reads this from Contents/Resources in packaged builds; it's only written
+// when a build produces the mac zip/dmg (or win nsis / linux AppImage) target — a `--dir`
+// build (e.g. the `unpack` skill's `npm run pack`) never has it.
+function hasUpdateConfig(): boolean {
+  return existsSync(path.join(process.resourcesPath, 'app-update.yml'))
+}
+
 export function initUpdater(_getWindow: GetWindow): void {
   // Only run in packaged builds — electron-updater errors in dev without a feed
   if (!app.isPackaged) return
+
+  if (!hasUpdateConfig()) {
+    console.log('[updater] no app-update.yml — build cannot self-update (likely a local pack/--dir install)')
+    return
+  }
 
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = false
@@ -43,6 +57,13 @@ export function initUpdater(_getWindow: GetWindow): void {
 
 export function checkForUpdatesNow(): void {
   if (!app.isPackaged) return
+  if (!hasUpdateConfig()) {
+    pushToAllWindows(
+      'update:error',
+      "This build can't check for updates — it wasn't installed from a signed release."
+    )
+    return
+  }
   autoUpdater.checkForUpdates().catch(() => {})
 }
 
