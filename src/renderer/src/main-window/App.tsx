@@ -144,6 +144,37 @@ function AppShell(): React.ReactElement {
   // Per-page unread counts for sidebar indicators
   const [insightsBadge, setInsightsBadge] = useState(0)
   const [routinesBadge, setRoutinesBadge] = useState(0)
+  // Set by <Settings onDirtyChange> — gates navigating away from Settings with pending edits
+  const [settingsDirty, setSettingsDirty] = useState(false)
+  const [pendingNavigation, setPendingNavigation] = useState<{ page: Page; after?: () => void } | null>(null)
+
+  // All in-app navigation should go through this — it intercepts leaving Settings with
+  // unsaved edits and asks for confirmation instead of navigating immediately.
+  function requestNavigate(next: Page, after?: () => void): void {
+    if (next !== page && page === 'settings' && settingsDirty) {
+      setPendingNavigation({ page: next, after })
+      return
+    }
+    setPage(next)
+    after?.()
+  }
+
+  // requestNavigate closes over `page`/`settingsDirty` from the render it's defined in,
+  // so a listener registered in a mount-only effect ([] deps) would keep calling a stale
+  // version forever. This ref always points at the latest closure without having to
+  // re-subscribe the IPC listeners below on every render.
+  const requestNavigateRef = useRef(requestNavigate)
+  useEffect(() => {
+    requestNavigateRef.current = requestNavigate
+  })
+
+  function confirmDiscardAndLeave(): void {
+    if (!pendingNavigation) return
+    setPage(pendingNavigation.page)
+    pendingNavigation.after?.()
+    setSettingsDirty(false)
+    setPendingNavigation(null)
+  }
 
   useRunToasts(setPage, setRoutinesTab)
   useUpdateToasts()
@@ -184,23 +215,26 @@ function AppShell(): React.ReactElement {
   }, [])
 
   useEffect(() => {
+    // Routed through requestNavigateRef (not setPage directly) so a background push
+    // event arriving while Settings has unsaved edits shows the same confirm overlay
+    // instead of silently discarding them.
     const offRoutine = window.electron.on('navigate:edit-routine', (id) => {
-      setEditRoutineId(id as string)
-      setRoutinesTab('routines')
-      setPage('routines')
+      requestNavigateRef.current('routines', () => {
+        setEditRoutineId(id as string)
+        setRoutinesTab('routines')
+      })
     })
     const offPlanItem = window.electron.on('navigate:plan-item', (id) => {
-      setActivePlanItemId(id as string)
-      setPage('plan')
+      requestNavigateRef.current('plan', () => setActivePlanItemId(id as string))
     })
     const offRunChat = window.electron.on('navigate:run-chat', (id) => {
-      setNavigateRunId(id as string)
-      setRoutinesTab('logs')
-      setPage('routines')
+      requestNavigateRef.current('routines', () => {
+        setNavigateRunId(id as string)
+        setRoutinesTab('logs')
+      })
     })
     const offCheckin = window.electron.on('navigate:checkin', (id) => {
-      setActiveCheckinId((id as string | null) ?? null)
-      setPage('checkin')
+      requestNavigateRef.current('checkin', () => setActiveCheckinId((id as string | null) ?? null))
     })
     return () => {
       offRoutine()
@@ -250,8 +284,9 @@ function AppShell(): React.ReactElement {
                   key={item.id}
                   className={`nav-item${page === item.id ? ' active' : ''}`}
                   onClick={() => {
-                    setPage(item.id)
-                    if (item.id === 'routines') setRoutinesTab(routinesBadge > 0 ? 'needs' : 'routines')
+                    requestNavigate(item.id, () => {
+                      if (item.id === 'routines') setRoutinesTab(routinesBadge > 0 ? 'needs' : 'routines')
+                    })
                   }}
                 >
                   <span className="nav-item__icon">{item.icon}</span>
@@ -288,7 +323,7 @@ function AppShell(): React.ReactElement {
           )}
           {page === 'memory' && <MemoryGraph />}
           {page === 'usage' && <UsageDashboard />}
-          {page === 'settings' && <Settings />}
+          {page === 'settings' && <Settings onDirtyChange={setSettingsDirty} />}
           {page === 'insights' && <InsightsPage />}
           {page === 'checkin' && (
             <CheckInPage
@@ -304,6 +339,33 @@ function AppShell(): React.ReactElement {
           )}
         </main>
       </div>
+
+      {pendingNavigation && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 50,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(0, 0, 0, 0.5)'
+          }}
+        >
+          <div className="card" style={{ maxWidth: 360, margin: 0 }}>
+            <div className="card__header">
+              <div className="card__title">Unsaved changes</div>
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
+              You have unsaved changes in Settings. Leaving now will discard them.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn btn--ghost btn--sm" onClick={() => setPendingNavigation(null)}>
+                Cancel
+              </button>
+              <button className="btn btn--danger btn--sm" onClick={confirmDiscardAndLeave}>
+                Discard &amp; leave
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
