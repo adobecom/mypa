@@ -212,6 +212,7 @@ Data: `window.electron.usage.*` — all five calls made in parallel on mount and
 | `Settings` | Tabbed settings panel |
 | — MCP tab | Add/edit/remove MCP servers; test connection; import from Claude Code config |
 | — Repos section (`ReposSection`) | Register a local git checkout (`repos.add`, with a `pickDirectory` Browse… button) with optional comma-separated Jira project keys; per-repo Enable/Disable authoring toggle and Remove. See [code-authoring.md](code-authoring.md). |
+| — Knowledge Vault section (`VaultSection`) | Configure a local markdown vault (e.g. Obsidian) as a read-only knowledge source: vault path (`pickDirectory` Browse… button, `knowledge.listVaultFolders` to enumerate subfolders), a checkbox grid of vault-relative subfolders to ingest (unchecked folders — e.g. personal notes — are never read), and an enable toggle. Saves to `config.knowledge.vault`. See [knowledge-graph.md](knowledge-graph.md#knowledge-vault-obsidian). |
 | — OAuth tab | Connect GitHub (device flow), Notion (PKCE), Linear (PKCE); show connection status |
 | — Claude tab | Model selector; displays current model |
 | — Preferences tab | Widget always-on-top, notification sound, launch on login; persona text field |
@@ -245,6 +246,8 @@ Located in `src/renderer/src/` (shared between widget and main window):
 | `components.css` | Shared component stylesheet imported by both renderer entry points before their window-specific `index.css`. Contains `.routine-card*`, `.intent-card*`, `.intent-detail*`, `.intent-chip*`, `.plan-review-card*`, `.review-field*`, `.section-header`, `.section-subheader`, `.tabs`, `.tab*`. |
 
 ## Changelog
+
+- 2026-07-13 — **New Settings `VaultSection` (Obsidian knowledge vault).** New `VaultSection` component in `Settings.tsx` (mirrors `ReposSection`'s add/browse pattern): a vault-path field with `system.pickDirectory()` Browse…, a checkbox grid of vault-relative subfolders (populated via the new `knowledge.listVaultFolders(path)` IPC call), and an enable toggle. Saves to `config.knowledge.vault`. See [knowledge-graph.md](knowledge-graph.md#knowledge-vault-obsidian).
 
 - 2026-07-09 — **New `WorkProductCard` + Settings `ReposSection` (code authoring).** New `src/renderer/src/widget/components/WorkProductCard.tsx`, rendered by `QueueView.renderIntentCard` in place of `IntentCard` whenever `intent.verb === 'author_fix'` (both in "Needs you" and "Recently resolved"). Shows the authoring lifecycle (Start → drafting → ready-for-review diff + Ship it/Discard → shipping → shipped/failed), subscribing to the new `ambient:work-product-updated` push event filtered by `intent_id`. Reuses existing `routine-card`/`intent-chip`/`intent-detail__kv-pre` CSS — no new stylesheet. New `ReposSection` component in `Settings.tsx` (mirrors the MCP Servers card's add/list/remove pattern) lets the user register a local git checkout via `repos.add()`, using the existing `system.pickDirectory()` IPC for the folder picker. See [code-authoring.md](code-authoring.md).
 

@@ -274,6 +274,7 @@ export interface AppConfig {
   checkin?: CheckInConfig
   scope?: ScopeConfig
   repos?: RepoLink[]
+  knowledge?: KnowledgeConfig
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -299,7 +300,30 @@ export const DEFAULT_CONFIG: AppConfig = {
   checkin: {
     scheduleEnabled: false
   },
-  repos: []
+  repos: [],
+  knowledge: {
+    vault: { path: '', folders: [], enabled: false }
+  }
+}
+
+// ─── Knowledge vault (Obsidian) ──────────────────────────────────────────────
+
+/**
+ * Local markdown-vault integration (e.g. an Obsidian vault). Notes are ingested
+ * as read-only context — a semantic/graph layer alongside observed work signals —
+ * never as an actionable surface. See ingestion.ts makeObsidianAdapter and
+ * memory-graph.ts deriveWikilinkEdges.
+ */
+export interface VaultConfig {
+  /** Absolute path to the vault root, chosen via system.pickDirectory. */
+  path: string
+  /** Vault-relative subfolder paths to ingest. Empty = nothing ingested even if enabled. */
+  folders: string[]
+  enabled: boolean
+}
+
+export interface KnowledgeConfig {
+  vault?: VaultConfig
 }
 
 // ─── Code authoring (repo links + work products) ─────────────────────────────
@@ -328,7 +352,11 @@ export interface RepoLink {
 
 // ─── Ambient Intelligence ────────────────────────────────────────────────────
 
-export type IntentSurface = 'github' | 'jira' | 'slack' | 'linear'
+// 'obsidian' is a context-only surface (a local markdown vault) — it is never a valid
+// target for proposed_action/actions[] (see VALID_SURFACES in inference.ts, which
+// intentionally omits it). Signals bearing this surface exist purely to enrich the
+// knowledge graph and semantic retrieval.
+export type IntentSurface = 'github' | 'jira' | 'slack' | 'linear' | 'obsidian'
 export type IntentType = 'action' | 'suggestion' | 'flag' | 'digest'
 export type IntentStatus =
   | 'pending'
@@ -354,7 +382,7 @@ export type NodeType =
   | 'pull_request'
   | 'issue'
   | 'message'
-  | 'document'
+  | 'document' // vault notes and folder containers (surface: 'obsidian')
   // Layer 2 — Semantic
   | 'topic'
   // Layer 3 — Assistant cognition
@@ -821,6 +849,11 @@ export interface IpcApi {
     shipWorkProduct(intentId: string): Promise<Intent>
     /** Abandon a work product — prunes the worktree and marks the intent dismissed. */
     discardWorkProduct(intentId: string): Promise<void>
+  }
+  knowledge: {
+    /** Lists top-level subfolder names under an absolute vault path, for the
+     *  folder-selection checkboxes in Settings. Returns [] if the path doesn't exist. */
+    listVaultFolders(path: string): Promise<string[]>
   }
   memory: {
     getGraph(): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }>

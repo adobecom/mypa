@@ -791,6 +791,8 @@ export default function Settings(): React.ReactElement {
 
       <ReposSection />
 
+      <VaultSection />
+
       {/* Preferences */}
       <div className="card">
         <div className="card__header">
@@ -1304,6 +1306,137 @@ function ReposSection(): React.ReactElement {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Knowledge Vault (Obsidian) ───────────────────────────────────────────────
+
+/**
+ * Local markdown vault (e.g. an Obsidian vault) ingested as read-only knowledge
+ * context — notes become 'document' graph nodes and [[wikilinks]] become graph
+ * edges (see ingestSignalIntoGraph / deriveWikilinkEdges in memory-graph.ts).
+ * Folder selection keeps personal notes out of the work-focused graph when a
+ * vault mixes both — only checked folders are ever read.
+ */
+function VaultSection(): React.ReactElement {
+  const api = window.electron
+  const toast = useToast()
+  const [vaultPath, setVaultPath] = useState('')
+  const [availableFolders, setAvailableFolders] = useState<string[]>([])
+  const [selectedFolders, setSelectedFolders] = useState<string[]>([])
+  const [enabled, setEnabled] = useState(false)
+  const [loadingFolders, setLoadingFolders] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  const refreshFolders = useCallback(async (path: string) => {
+    setLoadingFolders(true)
+    try {
+      setAvailableFolders(await api.knowledge.listVaultFolders(path))
+    } finally {
+      setLoadingFolders(false)
+    }
+  }, [api])
+
+  useEffect(() => {
+    api.config.get().then((cfg) => {
+      const vault = cfg.knowledge?.vault
+      setVaultPath(vault?.path ?? '')
+      setSelectedFolders(vault?.folders ?? [])
+      setEnabled(vault?.enabled ?? false)
+      if (vault?.path) refreshFolders(vault.path)
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
+  }, [])
+
+  async function handleBrowse(): Promise<void> {
+    const picked = await api.system.pickDirectory(false)
+    if (picked.length === 0) return
+    setVaultPath(picked[0])
+    setSelectedFolders([]) // a different vault — the previous folder selection no longer applies
+    await refreshFolders(picked[0])
+  }
+
+  function toggleFolder(name: string): void {
+    setSelectedFolders((prev) => (prev.includes(name) ? prev.filter((f) => f !== name) : [...prev, name]))
+  }
+
+  async function handleSave(): Promise<void> {
+    setSaving(true)
+    try {
+      await api.config.update({
+        knowledge: { vault: { path: vaultPath, folders: selectedFolders, enabled } }
+      } as Partial<AppConfig>)
+      toast.success('Vault settings saved')
+    } catch (err: any) {
+      toast.error('Failed to save vault settings', { message: err?.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card__header">
+        <div>
+          <div className="card__title">Knowledge Vault</div>
+          <div className="card__subtitle">Ingest notes from a local markdown vault (e.g. Obsidian) as context</div>
+        </div>
+        <label className="toggle" title={enabled ? 'Vault ingestion is on' : 'Vault ingestion is off'}>
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          <span className="toggle__track" />
+        </label>
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">Vault path</label>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input
+            className="form-input"
+            value={vaultPath}
+            onChange={(e) => setVaultPath(e.target.value)}
+            onBlur={() => vaultPath && refreshFolders(vaultPath)}
+            placeholder="/Users/you/Documents/MyVault"
+            style={{ flex: 1 }}
+          />
+          <button className="btn btn--ghost btn--sm" onClick={handleBrowse}>Browse…</button>
+        </div>
+        <div className="form-hint">mypa only reads this folder — it never writes to your vault.</div>
+      </div>
+
+      {vaultPath && (
+        <div className="form-group">
+          <label className="form-label">Folders to ingest</label>
+          {loadingFolders ? (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Scanning…</div>
+          ) : availableFolders.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No subfolders found at this path.</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 6 }}>
+              {availableFolders.map((folder) => (
+                <label key={folder} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={selectedFolders.includes(folder)} onChange={() => toggleFolder(folder)} />
+                  {folder}
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="form-hint">
+            Only notes in checked folders are ingested — leave a folder unchecked to keep it (e.g. personal notes) out of the graph.
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          {vaultPath
+            ? `${selectedFolders.length} of ${availableFolders.length} folder${availableFolders.length === 1 ? '' : 's'} selected`
+            : 'No vault configured'}
+        </div>
+        <button className="btn btn--primary btn--sm" onClick={handleSave} disabled={saving}>
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
     </div>
   )
 }

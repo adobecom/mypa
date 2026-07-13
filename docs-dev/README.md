@@ -11,7 +11,7 @@ This folder contains the full reference documentation for mypa contributors and 
 | [database.md](database.md) | SQLite schema — all 20 tables, indexes, JSON columns, migration approach |
 | [services.md](services.md) | All `src/main/services/` modules — key exports and responsibilities |
 | [code-authoring.md](code-authoring.md) | Repo links, isolated git worktrees, the `author_fix` intent flow, and the ship pipeline |
-| [knowledge-graph.md](knowledge-graph.md) | Memory-graph ontology: 3 layers, 14 node types, 19 edge relations, decay, context assembly |
+| [knowledge-graph.md](knowledge-graph.md) | Memory-graph ontology: 3 layers, 14 node types, 19 edge relations, decay, context assembly, and the Obsidian vault knowledge source |
 | [ambient-intelligence.md](ambient-intelligence.md) | Signals → intents pipeline, autonomy/trust tiers, digest cadence |
 | [claude-integration.md](claude-integration.md) | How the app calls Claude via the Agent SDK — one-shot, streaming, cancellation |
 | [mcp-and-oauth.md](mcp-and-oauth.md) | MCP client manager, built-in catalog, Claude-config import, OAuth flows |
@@ -36,6 +36,7 @@ This table mirrors the rule in [CLAUDE.md](../CLAUDE.md#documentation-maintenanc
 
 ## Changelog
 
+- 2026-07-13 — expanded [knowledge-graph.md](knowledge-graph.md) with the new Obsidian vault knowledge source (local markdown ingestion, `document` nodes, `[[wikilink]]` edges)
 - 2026-07-09 — added [code-authoring.md](code-authoring.md) for the new code-authoring subsystem (repos, worktrees, `author_fix` intents, work products, ship pipeline); fixed stale table count (19 → 20)
 - 2026-06-06 — initial documentation suite created
 - 2026-06-16 — added dependencies.md documenting the six transitive npm deprecation warnings

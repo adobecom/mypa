@@ -71,6 +71,9 @@ const api: IpcApi = {
     factoryReset: () => ipcRenderer.invoke('system:factory-reset'),
     pickDirectory: (multiple?: boolean) => ipcRenderer.invoke('system:pick-directory', multiple)
   },
+  knowledge: {
+    listVaultFolders: (path: string) => ipcRenderer.invoke('knowledge:list-vault-folders', path)
+  },
   ambient: {
     getIntents: () => ipcRenderer.invoke('ambient:get-intents'),
     getAllIntents: (limit?: number) => ipcRenderer.invoke('ambient:get-all-intents', limit),
