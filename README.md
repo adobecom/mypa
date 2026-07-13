@@ -12,6 +12,7 @@ A local-first personal assistant for developers, built as a macOS/Linux/Windows 
 - **Code authoring** — link a local git checkout to a GitHub repo / Jira project; when a ticket or PR is directed at you, mypa can attempt a real fix in an isolated git worktree, then present the diff for review with a one-tap "Ship it" (push + open PR + comment the ticket + notify Slack)
 - **Autonomy / trust tiers** — per-action trust levels that adapt based on your approve/challenge/dismiss history; fully configurable and resettable
 - **Memory graph** — a visual knowledge graph of people, work items, topics, and the assistant's own decisions, built from local embeddings; inspect and edit from the Memory page
+- **Knowledge vault** — optionally ingest a local markdown vault (e.g. Obsidian), scoped to folders you choose, as read-only context; notes and `[[wikilinks]]` become graph nodes and edges alongside your observed work signals
 - **Owner identity** — set your name and per-surface handles (GitHub, Slack, Jira, Linear, Notion) so the assistant addresses you as "you" rather than by handle; auto-fills from connected MCP servers with one click
 - **Usage dashboard** — detailed token usage and estimated cost breakdown by feature, model, and time period; powered by data the Claude Agent SDK already reports
 - **MCP integration** — connect to any MCP server (local stdio process) from a built-in catalog or custom config; auto-import from an existing Claude Code config

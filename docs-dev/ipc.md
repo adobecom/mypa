@@ -114,6 +114,16 @@ OS-level and window utilities.
 | `factoryReset` | `() → void` | Wipe `~/.mypa/config.json` and `~/.mypa/data.db`, then relaunch the app into onboarding |
 | `pickDirectory` | `(multiple?) → string[]` | Open the native OS directory-picker dialog; returns an array of absolute paths or `[]` if cancelled. Pass `multiple: true` to allow multi-selection. Used by `ServerCatalogPicker` for `isPath`-type argInputs. |
 
+### `knowledge`
+
+Local knowledge-vault (Obsidian) configuration support.
+
+| Method | Signature | Description |
+|---|---|---|
+| `listVaultFolders` | `(path: string) → string[]` | Lists top-level subfolder names under an absolute path (used by the Settings vault-folder checkboxes). Returns `[]` if the path doesn't exist. |
+
+Vault ingestion itself is configured via the generic `config.get`/`config.update` on `AppConfig.knowledge.vault` (`{ path, folders, enabled }`) — see [knowledge-graph.md](knowledge-graph.md) and [services.md](services.md).
+
 ### `ambient`
 
 Ambient intelligence — intents, digests, policy, tray state.
@@ -281,6 +291,8 @@ Manage PA check-in sessions and their chat threads.
 | `openInMainWindow` | `(checkinId?) → void` | Open main window on Check-in page, expanding the given session |
 
 ## Changelog
+
+- 2026-07-13 — **Obsidian vault knowledge source: new `knowledge` namespace + `IntentSurface`/`AppConfig` additions.** New `IpcApi.knowledge.listVaultFolders(path)` channel (`knowledge:list-vault-folders`) lists top-level subfolders for the Settings vault-folder picker. `IntentSurface` gains `'obsidian'` — a context-only surface, intentionally excluded from `VALID_SURFACES` (inference.ts) so vault notes are never a proposable action target. `AppConfig` gains `knowledge?: KnowledgeConfig` (`{ vault?: { path, folders, enabled } }`), read/written via the existing `config.get`/`config.update`. See [knowledge-graph.md](knowledge-graph.md) and [services.md](services.md).
 
 - 2026-07-09 — **Code authoring: new `repos` namespace, `ambient` authoring methods, `work-product-updated` push channel.** New `IpcApi.repos` namespace (`getAll`, `add`, `update`, `remove`) backed by `repos.ts` — registers a local git checkout as a `RepoLink`. New `RepoLink`/`WorkProduct`/`WorkProductStatus` types and `repos?: RepoLink[]` on `AppConfig` in `src/shared/types.ts`. `IpcApi.ambient` gains `startAuthoring(intentId)`, `getWorkProduct(intentId)`, `shipWorkProduct(intentId)`, `discardWorkProduct(intentId)`, backed by the new `authoring.ts` service. New push channel `ambient:work-product-updated` (payload: `WorkProduct`). See [code-authoring.md](code-authoring.md).
 

@@ -44,6 +44,7 @@ export function kindToNodeType(kind: string): NodeType {
   if (kind === 'pull_request') return 'pull_request'
   if (kind === 'issue') return 'issue'
   if (kind === 'message') return 'message'
+  if (kind === 'note') return 'document'
   return 'issue'
 }
 
@@ -107,6 +108,9 @@ export function ingestSignalIntoGraph(signal: Signal): void {
 
   // Derive dependency edges from raw signal fields
   deriveEdgesFromRaw(signal, workItemNode.id)
+
+  // Derive [[wikilink]] edges (vault notes only)
+  deriveWikilinkEdges(signal, workItemNode.id)
 }
 
 type ContainerResult = {
@@ -154,6 +158,14 @@ function deriveContainer(signal: Signal): ContainerResult {
     const channel = (signal.raw as any)?.channel ?? null
     if (!channel) return { containerKey: null, containerType: null, containerLabel: null }
     return { containerKey: `slack:channel:${channel}`, containerType: 'channel', containerLabel: String(channel) }
+  }
+  if (signal.surface === 'obsidian') {
+    // Container = the selected vault subfolder the note lives under, set by the
+    // adapter in raw.folder. Modeled as 'document' (like the notes themselves) to
+    // keep all vault structure isolated from the project/repo/channel ontology.
+    const folder = String((signal.raw as any)?.folder ?? '')
+    if (!folder) return { containerKey: null, containerType: null, containerLabel: null }
+    return { containerKey: `obsidian:folder:${folder}`, containerType: 'document', containerLabel: folder }
   }
   return { containerKey: null, containerType: null, containerLabel: null }
 }
@@ -266,6 +278,34 @@ function deriveEdgesFromRaw(signal: Signal, workItemNodeId: string): void {
         }
       }
     }
+  }
+}
+
+/**
+ * Resolves [[wikilink]] targets into `references` edges. The obsidian adapter
+ * (ingestion.ts) resolves link text to vault-relative paths at poll time (against
+ * a full note-name index) and stores the resolved paths in raw.wikilinks; here we
+ * just look up the corresponding document node.
+ *
+ * Idempotent per (src, dst) pair — checks existing edges before upserting — so it
+ * is safe to call twice for the same signal. This matters because a note may link
+ * to another note ingested later in the same poll batch: onNewSignals (ambient.ts)
+ * re-runs this once after the whole batch has been ingested, by which point every
+ * note's document node exists, resolving forward references that the first pass
+ * (inline in ingestSignalIntoGraph) could not.
+ */
+export function deriveWikilinkEdges(signal: Signal, workItemNodeId: string): void {
+  if (signal.surface !== 'obsidian') return
+  const targets = ((signal.raw as any)?.wikilinks as string[] | undefined) ?? []
+  if (targets.length === 0) return
+  const alreadyLinked = new Set(
+    dbGetEdgesFrom(workItemNodeId).filter((e) => e.rel === 'references').map((e) => e.dst_id)
+  )
+  for (const targetPath of targets) {
+    const targetNode = dbGetNode('document', `obsidian:note:${targetPath}`)
+    if (!targetNode || alreadyLinked.has(targetNode.id)) continue
+    dbUpsertEdge(workItemNodeId, targetNode.id, 'references', WEIGHT_EDGE)
+    alreadyLinked.add(targetNode.id)
   }
 }
 

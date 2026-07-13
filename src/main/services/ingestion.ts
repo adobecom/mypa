@@ -1,3 +1,6 @@
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'fs'
+import { join, relative, extname, sep } from 'path'
+import { createHash } from 'crypto'
 import { getServerStatus, callTool } from './mcp'
 import { readConfig, getOwnerHandles } from './config'
 import { dbInsertSignal, computeFingerprint } from '../db/index'
@@ -635,13 +638,192 @@ function makeLinearAdapter(): SurfaceAdapter {
   return { surface, serverName, isAvailable, poll, normalize }
 }
 
+// ─── Obsidian vault adapter ───────────────────────────────────────────────────
+// Ingests a local markdown vault (e.g. an Obsidian vault) as read-only knowledge
+// context. Unlike the other adapters this reads the filesystem directly — there
+// is no MCP server involved. Notes have no actor and are never "directed" at the
+// owner, so vault signals never fire proactive triggers (see the surface filter
+// in ambient.ts onNewSignals) and are never a proposable action surface
+// (VALID_SURFACES in inference.ts intentionally omits 'obsidian').
+
+const MAX_NOTE_BODY_CHARS = 4000
+
+/** Recursively collects absolute paths of .md files under `dir`, skipping dotfiles/dirs
+ *  (.obsidian, .git, etc.) and any path that turns out not to be a plain file/dir. */
+function walkMarkdownFiles(dir: string, out: string[] = []): string[] {
+  let entries: Dirent[]
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return out
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      walkMarkdownFiles(full, out)
+    } else if (entry.isFile() && extname(entry.name).toLowerCase() === '.md') {
+      out.push(full)
+    }
+  }
+  return out
+}
+
+/** Strips a leading YAML frontmatter block and pulls out its `tags` field, if any. */
+function parseFrontmatter(content: string): { tags: string[]; body: string } {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/)
+  if (!match) return { tags: [], body: content }
+  const fm = match[1]
+  const body = content.slice(match[0].length)
+
+  let tags: string[] = []
+  const inlineMatch = fm.match(/^tags:\s*\[(.*)\]\s*$/m)
+  const scalarMatch = fm.match(/^tags:\s*(\S.*)$/m)
+  const listMatch = fm.match(/^tags:\s*\n((?:\s*-\s*.+\n?)+)/m)
+  if (inlineMatch) {
+    tags = inlineMatch[1].split(',').map((t) => t.trim().replace(/^["']|["']$/g, '')).filter(Boolean)
+  } else if (listMatch) {
+    tags = listMatch[1].split('\n').map((l) => l.replace(/^\s*-\s*/, '').trim()).filter(Boolean)
+  } else if (scalarMatch) {
+    tags = [scalarMatch[1].trim()]
+  }
+  return { tags, body }
+}
+
+/** Extracts unique [[wikilink]] target names (ignoring #heading / |alias suffixes). */
+function extractWikilinkNames(body: string): string[] {
+  const re = /\[\[([^\]#|]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g
+  const names = new Set<string>()
+  let m: RegExpExecArray | null
+  while ((m = re.exec(body)) !== null) {
+    const name = m[1].trim()
+    if (name) names.add(name)
+  }
+  return [...names]
+}
+
+/** First H1 heading, falling back to the filename (without extension). */
+function extractTitle(body: string, filename: string): string {
+  const h1 = body.match(/^#\s+(.+)$/m)
+  return h1 ? h1[1].trim() : filename.replace(/\.md$/i, '')
+}
+
+function makeObsidianAdapter(): SurfaceAdapter {
+  const surface: IntentSurface = 'obsidian'
+  const serverName = '' // no MCP server — reads the local filesystem directly
+
+  function isAvailable(): boolean {
+    const vault = readConfig().knowledge?.vault
+    if (!vault?.enabled || !vault.path || vault.folders.length === 0) return false
+    return existsSync(vault.path)
+  }
+
+  async function poll(): Promise<{ observations: RawObservation[]; complete: boolean }> {
+    const vault = readConfig().knowledge?.vault
+    if (!vault?.enabled || !vault.path || vault.folders.length === 0) {
+      return { observations: [], complete: true }
+    }
+
+    // Dedup via Set: overlapping selections (e.g. both "Work" and "Work/Sub" checked)
+    // would otherwise walk some files twice.
+    const filesRaw: string[] = []
+    for (const folder of vault.folders) {
+      const abs = join(vault.path, folder)
+      if (existsSync(abs)) walkMarkdownFiles(abs, filesRaw)
+    }
+    const files = [...new Set(filesRaw)]
+
+    // Name index for wikilink resolution: Obsidian links by note basename (no
+    // extension), case-insensitively. Two notes sharing a basename are ambiguous —
+    // first match wins. This is context enrichment, not an authoritative resolver.
+    const relPaths = new Map<string, string>() // absolute path -> vault-relative path (POSIX)
+    const nameIndex = new Map<string, string>() // lowercase basename -> vault-relative path
+    for (const abs of files) {
+      const rel = relative(vault.path, abs).split(sep).join('/')
+      relPaths.set(abs, rel)
+      const base = rel.split('/').pop()!.replace(/\.md$/i, '').toLowerCase()
+      if (!nameIndex.has(base)) nameIndex.set(base, rel)
+    }
+
+    let truncated = false
+    const obs: RawObservation[] = []
+    for (const abs of files) {
+      const rel = relPaths.get(abs)!
+      try {
+        const raw = readFileSync(abs, 'utf8')
+        const { tags, body } = parseFrontmatter(raw)
+        const title = extractTitle(body, rel.split('/').pop()!)
+        const wikilinks = extractWikilinkNames(body)
+          .map((name) => nameIndex.get(name.split('/').pop()!.replace(/\.md$/i, '').toLowerCase()))
+          .filter((p): p is string => !!p && p !== rel)
+        const stat = statSync(abs)
+        const folder = vault.folders.find((f) => rel === f || rel.startsWith(`${f}/`)) ?? vault.folders[0]
+
+        obs.push({
+          external_id: rel,
+          kind: 'note',
+          title,
+          body: body.trim().slice(0, MAX_NOTE_BODY_CHARS),
+          actor: '',
+          url: `file://${abs}`,
+          occurred_at: stat.mtime.toISOString(),
+          relation: null,
+          directed: false,
+          last_actor: null,
+          due_at: null,
+          // Fingerprint key: a content hash (so a note re-processes only when its own
+          // text changes — Obsidian rewrites mtime on every vault re-index) PLUS the
+          // resolved wikilinks list. Without the latter, a note whose [[link]] target
+          // didn't exist yet at ingest time would never re-resolve once the target
+          // note is created, since the note's own text (and therefore its hash) never
+          // changed — dbInsertSignal no-ops on an unchanged fingerprint and the freshly
+          // re-resolved `wikilinks` value is discarded. Including the resolved list
+          // means newly-resolvable (or newly-broken) links change the fingerprint,
+          // so the row updates and deriveWikilinkEdges runs again.
+          change_fields: {
+            hash: createHash('sha256').update(body).digest('hex').slice(0, 16),
+            wikilinks: [...wikilinks].sort()
+          },
+          raw: { tags, wikilinks, folder }
+        })
+      } catch (e) {
+        console.warn(`[ingestion:obsidian] failed to read ${abs}:`, e)
+        truncated = true
+      }
+    }
+    return { observations: obs, complete: !truncated }
+  }
+
+  function normalize(raw: RawObservation): SignalInput {
+    return {
+      surface,
+      kind: raw.kind,
+      external_id: raw.external_id,
+      fingerprint: computeFingerprint(surface, raw.external_id, raw.change_fields),
+      title: raw.title,
+      body: raw.body,
+      actor: raw.actor,
+      url: raw.url,
+      occurred_at: raw.occurred_at,
+      relation: null,
+      directed: false,
+      last_actor: null,
+      due_at: null,
+      raw: raw.raw
+    }
+  }
+
+  return { surface, serverName, isAvailable, poll, normalize }
+}
+
 // ─── Polling scheduler ────────────────────────────────────────────────────────
 
 export const adapters: SurfaceAdapter[] = [
   makeGithubAdapter(),
   makeJiraAdapter(),
   makeSlackAdapter(),
-  makeLinearAdapter()
+  makeLinearAdapter(),
+  makeObsidianAdapter()
 ]
 
 // ─── Freshness tracking ───────────────────────────────────────────────────────
@@ -660,7 +842,8 @@ const STAGGER_OFFSETS: Record<IntentSurface, number> = {
   github: 0,
   jira: 20_000,
   slack: 40_000,
-  linear: 60_000
+  linear: 60_000,
+  obsidian: 80_000
 }
 
 const intervalIds = new Map<IntentSurface, ReturnType<typeof setInterval>>()

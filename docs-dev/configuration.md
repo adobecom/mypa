@@ -58,6 +58,13 @@ Defined in `src/shared/types.ts`. Deep-merged with `DEFAULT_CONFIG` on every rea
     "waitingUrgencyFloor":       0.25,     // waiting/staleness triggers (lenient — real-but-not-urgent)
     "synthesisIntervalMs":       1800000,  // 30 min recurring heartbeat
     "synthesisInitialDelayMs":   75000     // 75 s delay before first heartbeat tick after boot
+  },
+  "knowledge": {
+    "vault": {
+      "path":    "/Users/you/Documents/MyVault",  // absolute path to the vault root
+      "folders": ["Work"],                        // vault-relative subfolders to ingest; others are never read
+      "enabled": true
+    }
   }
 }
 ```
@@ -70,7 +77,8 @@ Defined in `src/shared/types.ts`. Deep-merged with `DEFAULT_CONFIG` on every rea
   mcp_servers: [],
   preferences: { widget_always_on_top: false, notification_sound: true, launch_on_login: false },
   onboarding_complete: false,
-  ambient: { enabled: true, pollIntervalMs: 300000, decayHalfLifeDays: 7, confidenceFloor: 0.4, urgencyFloor: 0.5, waitingUrgencyFloor: 0.25, synthesisIntervalMs: 1800000, synthesisInitialDelayMs: 75000 }
+  ambient: { enabled: true, pollIntervalMs: 300000, decayHalfLifeDays: 7, confidenceFloor: 0.4, urgencyFloor: 0.5, waitingUrgencyFloor: 0.25, synthesisIntervalMs: 1800000, synthesisInitialDelayMs: 75000 },
+  knowledge: { vault: { path: '', folders: [], enabled: false } }
 }
 ```
 
@@ -166,5 +174,7 @@ Managed from the widget's Settings panel and persisted in `config.preferences`:
 | `launch_on_login` | `false` | Register as a login item (macOS / Windows) |
 
 ## Changelog
+
+- 2026-07-13 — **`knowledge.vault` config for the Obsidian vault knowledge source.** `AppConfig` gains `knowledge?: { vault?: { path, folders, enabled } }`. `path` is the absolute vault root (chosen via `system.pickDirectory`); `folders` are vault-relative subfolders to ingest (others are never read, even if `enabled`). See [knowledge-graph.md](knowledge-graph.md).
 
 - 2026-06-06 — initial documentation

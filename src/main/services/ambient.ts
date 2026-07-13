@@ -25,12 +25,13 @@ import {
   dbUpdateIntentChatMessageMetadata,
   dbGetPlanThread,
   dbUpdatePlanMessageMetadata,
+  dbGetNode,
 } from '../db/index'
 import { readConfig, targetIsOwner } from './config'
 import { violatesScope } from './scope'
 import { callTool, getToolInputSchema, ensureServersConnected } from './mcp'
 import { startIngestion, stopIngestion, pollOnce, getLastCompletePollAt } from './ingestion'
-import { ingestSignalIntoGraph, assembleContextPacket, startDecayTimer, stopDecayTimer, renderPacketForPrompt } from './memory-graph'
+import { ingestSignalIntoGraph, assembleContextPacket, startDecayTimer, stopDecayTimer, renderPacketForPrompt, deriveWikilinkEdges } from './memory-graph'
 import { evalEventTriggers, evalTime, coalesceHits, evalWaitingOnMeFromGraph, evalStaleAndMine, isDeepEligible } from './triggers'
 import { inferIntent, inferDeepIntent, reproposeIntent } from './inference'
 import { streamChat, cancelStream } from './claude'
@@ -80,21 +81,34 @@ const intentMissCount = new Map<string, number>()
 
 // ─── Start / stop ─────────────────────────────────────────────────────────────
 
+// Tracks whether ambient is actually running, independent of config.ambient.enabled.
+// startAmbient() is called both at boot and on every config:update (so a newly
+// added surface — first MCP server, or a newly enabled vault — takes effect
+// immediately without an app restart); this guard makes repeated calls a safe
+// no-op instead of double-scheduling timers/cron jobs (scheduleTimeTriggers in
+// particular is not itself idempotent — it would leak orphaned cron tasks).
+let ambientRunning = false
+
 export function startAmbient(getWin: () => BrowserWindow | null): void {
+  if (ambientRunning) return
+
   const cfg = readConfig()
   if (!cfg.ambient?.enabled) {
     console.log('[ambient] disabled in config, skipping start')
     return
   }
 
-  // Require at least one ingestion surface to be configured
+  // Require at least one ingestion surface to be configured — either an MCP server
+  // for the remote surfaces, or an enabled local vault (obsidian has no MCP server).
   const ambientSurfaces = ['github', 'jira', 'slack', 'linear']
   const hasSurface = cfg.mcp_servers.some((s) => ambientSurfaces.includes(s.name))
-  if (!hasSurface) {
-    console.log('[ambient] no github/jira/slack/linear server configured, skipping start')
+  const hasVault = cfg.knowledge?.vault?.enabled ?? false
+  if (!hasSurface && !hasVault) {
+    console.log('[ambient] no github/jira/slack/linear server or vault configured, skipping start')
     return
   }
 
+  ambientRunning = true
   getWidgetWin = getWin
   startDecayTimer()
   startIngestion(onNewSignals)
@@ -110,6 +124,7 @@ export function startAmbient(getWin: () => BrowserWindow | null): void {
 }
 
 export function stopAmbient(): void {
+  ambientRunning = false
   stopIngestion()
   stopDecayTimer()
   stopSynthesisTimer()
@@ -122,17 +137,44 @@ export function stopAmbient(): void {
 
 // ─── Ingestion callback ───────────────────────────────────────────────────────
 
-function onNewSignals(signals: Signal[]): void {
-  // Ingest each signal into the memory graph
+/**
+ * Ingests each signal into the memory graph, then makes a second pass over
+ * obsidian signals to resolve forward-referencing [[wikilinks]] now that every
+ * note's document node in this batch exists (a note may link to another note
+ * that was ingested later in the same poll batch). deriveWikilinkEdges is
+ * idempotent, so links already resolved during the first pass are a no-op here.
+ * Shared by onNewSignals (scheduled polling) and ambientPollNow (manual poll).
+ */
+function ingestSignalsAndResolveWikilinks(signals: Signal[]): void {
   for (const signal of signals) {
     ingestSignalIntoGraph(signal)
   }
+  for (const signal of signals) {
+    if (signal.surface !== 'obsidian') continue
+    const node = dbGetNode('document', `${signal.surface}:${signal.kind}:${signal.external_id}`)
+    if (node) deriveWikilinkEdges(signal, node.id)
+  }
+}
+
+/**
+ * Excludes vault notes before trigger evaluation. Vault notes are context-only
+ * and never proactive: they have no actor/relation, so they'd never match
+ * evalWaitingOnMe/evalDependency, but evalSpike fires on pure signal *volume*
+ * regardless of relation, and a bulk vault import (or a flurry of note edits)
+ * would otherwise look like a spike. Exclude them explicitly rather than relying
+ * on that being emergent behavior.
+ */
+function nonVaultSignals(signals: Signal[]): Signal[] {
+  return signals.filter((s) => s.surface !== 'obsidian')
+}
+
+function onNewSignals(signals: Signal[]): void {
+  ingestSignalsAndResolveWikilinks(signals)
 
   // Enqueue background embedding for new signals (fire-and-forget, never blocks poll)
   enqueueEmbeddings(signals)
 
-  // Evaluate event triggers
-  const hits = coalesceHits(evalEventTriggers(signals))
+  const hits = coalesceHits(evalEventTriggers(nonVaultSignals(signals)))
   if (hits.length === 0) {
     console.log(`[ambient] ${signals.length} new signal(s) — no trigger hits`)
     return
@@ -1624,8 +1666,8 @@ export function ambientPollNow(): Promise<void> {
   inferenceQueue = inferenceQueue
     .then(async () => {
       const signals = await pollOnce()
-      for (const signal of signals) ingestSignalIntoGraph(signal)
-      const hits = coalesceHits(evalEventTriggers(signals))
+      ingestSignalsAndResolveWikilinks(signals)
+      const hits = coalesceHits(evalEventTriggers(nonVaultSignals(signals)))
       if (hits.length > 0) await runAmbientCycle(hits)
       // Revalidate after a manual poll so any disappeared items are retired immediately.
       revalidatePendingIntents()

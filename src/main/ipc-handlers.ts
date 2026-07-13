@@ -1,5 +1,5 @@
 import { ipcMain, BrowserWindow, dialog, shell, app } from 'electron'
-import { writeFileSync, statSync } from 'fs'
+import { writeFileSync, statSync, readdirSync } from 'fs'
 import { homedir } from 'os'
 import {
   dbGetRoutines,
@@ -254,15 +254,17 @@ export function registerIpcHandlers(
     // The API key has a dedicated channel (config:set-claude-key). Never allow
     // the generic update path to overwrite or clear it — the renderer never sees it.
     if (partial?.claude && 'apiKey' in partial.claude) delete partial.claude.apiKey
-    const wasEnabled = readConfig().ambient?.enabled ?? true
     const updated = updateConfig(partial)
     // Re-connect MCP servers if changed
     await connectAllServers()
-    // Start/stop ambient intelligence on enabled transitions
-    const nowEnabled = updated.ambient?.enabled ?? true
-    if (!wasEnabled && nowEnabled) {
+    // Start/stop ambient intelligence. startAmbient() is idempotent (no-op if
+    // already running, or if still gated by "ambient disabled"/"no surface
+    // configured") so it's safe to call on every update — this is what makes a
+    // newly added surface (first MCP server, or a newly enabled vault) take
+    // effect immediately rather than requiring an app restart.
+    if (updated.ambient?.enabled ?? true) {
       startAmbient(getWidgetWin)
-    } else if (wasEnabled && !nowEnabled) {
+    } else {
       stopAmbient()
     }
     // Refresh check-in schedule if checkin config changed
@@ -465,6 +467,19 @@ export function registerIpcHandlers(
         : ['openDirectory', 'createDirectory']
     })
     return result.canceled ? [] : result.filePaths
+  })
+
+  // ─── Knowledge (vault) ───────────────────────────────────────────────────────
+
+  ipcMain.handle('knowledge:list-vault-folders', async (_e, path: string) => {
+    try {
+      return readdirSync(path, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+        .map((e) => e.name)
+        .sort((a, b) => a.localeCompare(b))
+    } catch {
+      return []
+    }
   })
 
   // ─── Ambient ───────────────────────────────────────────────────────────────
