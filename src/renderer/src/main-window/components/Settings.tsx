@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2, User, Power, ChevronDown, ChevronRight } from 'lucide-react'
-import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles, GraphNode, GraphEdge, Memory, RepoLink } from '@shared/types'
+import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles, GraphNode, GraphEdge, Memory, RepoLink, VaultConfig, CheckInConfig } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import { SCOPE_SURFACES } from '@shared/scope-surfaces'
 import ServerCatalogPicker from './ServerCatalogPicker'
@@ -11,8 +11,37 @@ import Tabs from '@renderer/components/Tabs'
 const OWNER_SURFACES = ['github', 'slack', 'jira', 'linear', 'notion'] as const
 type OwnerSurface = typeof OWNER_SURFACES[number]
 
-export default function Settings(): React.ReactElement {
+// Fields governed by the single Settings Save button — everything the page treats as a
+// pending edit rather than an instant-apply control. Ambient tiers, Working Context
+// scope, and MCP/Repos add-remove stay instant and are intentionally excluded here.
+type GovernedConfigSlice = Pick<AppConfig, 'owner' | 'persona' | 'preferences' | 'oauth_apps' | 'checkin'> & {
+  knowledge: { vault?: VaultConfig }
+}
+
+function governedSlice(config: AppConfig): GovernedConfigSlice {
+  return {
+    owner: config.owner,
+    persona: config.persona,
+    preferences: config.preferences,
+    oauth_apps: config.oauth_apps,
+    checkin: config.checkin,
+    knowledge: { vault: config.knowledge?.vault }
+  }
+}
+
+type SettingsProps = {
+  /** Reports whether there are unsaved edits, so the parent can guard navigation away. */
+  onDirtyChange?: (dirty: boolean) => void
+}
+
+export default function Settings({ onDirtyChange }: SettingsProps): React.ReactElement {
   const [config, setConfig] = useState<AppConfig | null>(null)
+  const [savedBaseline, setSavedBaseline] = useState<GovernedConfigSlice | null>(null)
+  // Bumped by handleDiscard and used as a `key` on VaultSection/CheckInScheduleCard so a
+  // Discard remounts them — otherwise their own internal state (VaultSection's scanned
+  // folder list, ScheduleBuilder's picker state) would keep showing the just-discarded
+  // values instead of resyncing to the reverted config.
+  const [discardCount, setDiscardCount] = useState(0)
   const [status, setStatus] = useState<McpServerStatus[]>([])
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -68,7 +97,10 @@ export default function Settings(): React.ReactElement {
   }, [api])
 
   useEffect(() => {
-    api.config.get().then(setConfig)
+    api.config.get().then((cfg) => {
+      setConfig(cfg)
+      setSavedBaseline(governedSlice(cfg))
+    })
     api.config.getMcpStatus().then(setStatus)
     api.config.getClaudeKey().then(setApiKeyStatus)
     api.setup.getHealth().then(setHealth)
@@ -88,12 +120,39 @@ export default function Settings(): React.ReactElement {
     [config?.mcp_servers]
   )
 
+  const isDirty = !!config && !!savedBaseline && (
+    JSON.stringify(governedSlice(config)) !== JSON.stringify(savedBaseline) ||
+    apiKeyInput.trim() !== ''
+  )
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty)
+  }, [isDirty, onDirtyChange])
+
   if (!config) return <div style={{ padding: 24, color: 'var(--text-muted)' }}>Loading…</div>
 
   const handleSave = async () => {
     setSaving(true)
     try {
-      await api.config.update(config)
+      const slice = governedSlice(config)
+      // Stamp a fresh connection timestamp for any OAuth app credential that changed —
+      // mirrors what the old per-card OAuth "Save" button used to do. Folded into the
+      // same update() call as the governed slice (rather than a second round trip) so a
+      // single write either persists everything or nothing — no window where the slice
+      // saves but the timestamp stamp fails separately, which would otherwise leave the
+      // sticky bar stuck open even though the edits were already persisted.
+      const changedOAuthProviders = (['github', 'notion', 'linear'] as OAuthProvider[]).filter(
+        (p) => JSON.stringify(config.oauth_apps?.[p]) !== JSON.stringify(savedBaseline?.oauth_apps?.[p])
+      )
+      const payload: Partial<AppConfig> = { ...slice }
+      if (changedOAuthProviders.length > 0) {
+        payload.oauth_connected_at = Object.fromEntries(changedOAuthProviders.map((p) => [p, new Date().toISOString()]))
+      }
+      await api.config.update(payload)
+      // The governed slice is now persisted — advance the baseline immediately so the
+      // sticky bar clears even if the API-key save below fails (isDirty still catches
+      // that case via the un-cleared apiKeyInput).
+      setSavedBaseline(slice)
       // Save API key if the user typed a new one
       if (apiKeyInput.trim()) {
         await api.config.setClaudeKey(apiKeyInput.trim())
@@ -109,6 +168,22 @@ export default function Settings(): React.ReactElement {
     } finally {
       setSaving(false)
     }
+  }
+
+  // Reverts every governed field (and the pending API key) back to the last saved state.
+  const handleDiscard = () => {
+    if (!savedBaseline) return
+    setConfig((prev) => prev ? {
+      ...prev,
+      owner: savedBaseline.owner,
+      persona: savedBaseline.persona,
+      preferences: savedBaseline.preferences,
+      oauth_apps: savedBaseline.oauth_apps,
+      checkin: savedBaseline.checkin,
+      knowledge: { ...(prev.knowledge ?? {}), vault: savedBaseline.knowledge.vault }
+    } : prev)
+    setApiKeyInput('')
+    setDiscardCount((n) => n + 1)
   }
 
   const handleRemoveApiKey = async () => {
@@ -301,7 +376,12 @@ export default function Settings(): React.ReactElement {
         oauth_apps: { [provider]: creds } as Partial<AppConfig>['oauth_apps'],
         oauth_connected_at: { [provider]: new Date().toISOString() } as Partial<AppConfig>['oauth_connected_at']
       } as Partial<AppConfig>)
-      setConfig({ ...config, oauth_apps: { ...config.oauth_apps, [provider]: creds } })
+      const oauth_apps = { ...config.oauth_apps, [provider]: creds }
+      setConfig({ ...config, oauth_apps })
+      // This path persists immediately (used when adding a new OAuth-based MCP server), so
+      // fold it into the baseline too — otherwise the sticky save bar would incorrectly
+      // treat it as a pending edit.
+      setSavedBaseline((prev) => (prev ? { ...prev, oauth_apps } : prev))
       await syncDisplay()
       toast.success(`${provider} credentials saved`)
     } catch (err: any) {
@@ -312,15 +392,8 @@ export default function Settings(): React.ReactElement {
   return (
     <div>
       <div className="page-header">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <div className="page-title">Settings</div>
-            <div className="page-subtitle">Configure your assistant and integrations</div>
-          </div>
-          <button className="btn btn--primary" onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving…' : saved ? 'Saved' : 'Save changes'}
-          </button>
-        </div>
+        <div className="page-title">Settings</div>
+        <div className="page-subtitle">Configure your assistant and integrations</div>
       </div>
 
       {/* Setup Health */}
@@ -538,17 +611,6 @@ export default function Settings(): React.ReactElement {
               <div className="card__title">OAuth App Credentials</div>
               <div className="card__subtitle">App credentials for connected OAuth providers.</div>
             </div>
-            <button
-              className="btn btn--ghost btn--sm"
-              onClick={async () => {
-                for (const provider of Array.from(usedProviders) as OAuthProvider[]) {
-                  const creds = config.oauth_apps?.[provider]
-                  if (creds) await handleCredentialSave(provider, creds)
-                }
-              }}
-            >
-              Save
-            </button>
           </div>
 
           {usedProviders.has('github') && (
@@ -791,7 +853,11 @@ export default function Settings(): React.ReactElement {
 
       <ReposSection />
 
-      <VaultSection />
+      <VaultSection
+        key={discardCount}
+        vault={config.knowledge?.vault}
+        onChange={(vault) => setConfig({ ...config, knowledge: { ...(config.knowledge ?? {}), vault } })}
+      />
 
       {/* Preferences */}
       <div className="card">
@@ -829,7 +895,11 @@ export default function Settings(): React.ReactElement {
       <AmbientAutonomyCard />
 
       {/* Check-in schedule */}
-      <CheckInScheduleCard />
+      <CheckInScheduleCard
+        key={discardCount}
+        checkin={config.checkin}
+        onChange={(checkin) => setConfig({ ...config, checkin })}
+      />
 
       {/* Danger Zone */}
       <DangerZoneCard />
@@ -837,6 +907,37 @@ export default function Settings(): React.ReactElement {
       <div style={{ textAlign: 'center', padding: '8px 0 4px', color: 'var(--text-muted)', fontSize: 11 }}>
         mypa v{import.meta.env.VITE_APP_VERSION} · {import.meta.env.VITE_GIT_SHA}
       </div>
+
+      {isDirty && (
+        <div
+          style={{
+            position: 'sticky',
+            bottom: 0,
+            marginTop: 14,
+            padding: '10px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            background: 'var(--bg-surface)',
+            backdropFilter: 'var(--blur-md)',
+            WebkitBackdropFilter: 'var(--blur-md)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-lg)',
+            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35)'
+          }}
+        >
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Unsaved changes</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn--ghost btn--sm" onClick={handleDiscard} disabled={saving}>
+              Discard
+            </button>
+            <button className="btn btn--primary" onClick={handleSave} disabled={saving}>
+              {saving ? 'Saving…' : saved ? 'Saved' : 'Save changes'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1319,15 +1420,19 @@ function ReposSection(): React.ReactElement {
  * Folder selection keeps personal notes out of the work-focused graph when a
  * vault mixes both — only checked folders are ever read.
  */
-function VaultSection(): React.ReactElement {
+type VaultSectionProps = {
+  vault: VaultConfig | undefined
+  onChange: (vault: VaultConfig) => void
+}
+
+function VaultSection({ vault, onChange }: VaultSectionProps): React.ReactElement {
   const api = window.electron
-  const toast = useToast()
-  const [vaultPath, setVaultPath] = useState('')
   const [availableFolders, setAvailableFolders] = useState<string[]>([])
-  const [selectedFolders, setSelectedFolders] = useState<string[]>([])
-  const [enabled, setEnabled] = useState(false)
   const [loadingFolders, setLoadingFolders] = useState(false)
-  const [saving, setSaving] = useState(false)
+
+  const vaultPath = vault?.path ?? ''
+  const selectedFolders = vault?.folders ?? []
+  const enabled = vault?.enabled ?? false
 
   const refreshFolders = useCallback(async (path: string) => {
     setLoadingFolders(true)
@@ -1339,40 +1444,23 @@ function VaultSection(): React.ReactElement {
   }, [api])
 
   useEffect(() => {
-    api.config.get().then((cfg) => {
-      const vault = cfg.knowledge?.vault
-      setVaultPath(vault?.path ?? '')
-      setSelectedFolders(vault?.folders ?? [])
-      setEnabled(vault?.enabled ?? false)
-      if (vault?.path) refreshFolders(vault.path)
-    })
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
+    if (vaultPath) refreshFolders(vaultPath)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- scan once on mount for the initial path
   }, [])
 
   async function handleBrowse(): Promise<void> {
     const picked = await api.system.pickDirectory(false)
     if (picked.length === 0) return
-    setVaultPath(picked[0])
-    setSelectedFolders([]) // a different vault — the previous folder selection no longer applies
+    // a different vault — the previous folder selection no longer applies
+    onChange({ path: picked[0], folders: [], enabled })
     await refreshFolders(picked[0])
   }
 
   function toggleFolder(name: string): void {
-    setSelectedFolders((prev) => (prev.includes(name) ? prev.filter((f) => f !== name) : [...prev, name]))
-  }
-
-  async function handleSave(): Promise<void> {
-    setSaving(true)
-    try {
-      await api.config.update({
-        knowledge: { vault: { path: vaultPath, folders: selectedFolders, enabled } }
-      } as Partial<AppConfig>)
-      toast.success('Vault settings saved')
-    } catch (err: any) {
-      toast.error('Failed to save vault settings', { message: err?.message })
-    } finally {
-      setSaving(false)
-    }
+    const next = selectedFolders.includes(name)
+      ? selectedFolders.filter((f) => f !== name)
+      : [...selectedFolders, name]
+    onChange({ path: vaultPath, folders: next, enabled })
   }
 
   return (
@@ -1383,7 +1471,11 @@ function VaultSection(): React.ReactElement {
           <div className="card__subtitle">Ingest notes from a local markdown vault (e.g. Obsidian) as context</div>
         </div>
         <label className="toggle" title={enabled ? 'Vault ingestion is on' : 'Vault ingestion is off'}>
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => onChange({ path: vaultPath, folders: selectedFolders, enabled: e.target.checked })}
+          />
           <span className="toggle__track" />
         </label>
       </div>
@@ -1394,7 +1486,7 @@ function VaultSection(): React.ReactElement {
           <input
             className="form-input"
             value={vaultPath}
-            onChange={(e) => setVaultPath(e.target.value)}
+            onChange={(e) => onChange({ path: e.target.value, folders: selectedFolders, enabled })}
             onBlur={() => vaultPath && refreshFolders(vaultPath)}
             placeholder="/Users/you/Documents/MyVault"
             style={{ flex: 1 }}
@@ -1427,15 +1519,10 @@ function VaultSection(): React.ReactElement {
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
-        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-          {vaultPath
-            ? `${selectedFolders.length} of ${availableFolders.length} folder${availableFolders.length === 1 ? '' : 's'} selected`
-            : 'No vault configured'}
-        </div>
-        <button className="btn btn--primary btn--sm" onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving…' : 'Save'}
-        </button>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+        {vaultPath
+          ? `${selectedFolders.length} of ${availableFolders.length} folder${availableFolders.length === 1 ? '' : 's'} selected`
+          : 'No vault configured'}
       </div>
     </div>
   )
@@ -1443,42 +1530,14 @@ function VaultSection(): React.ReactElement {
 
 // ─── Check-in Schedule Card ──────────────────────────────────────────────────
 
-function CheckInScheduleCard(): React.ReactElement {
-  const api = window.electron
-  const toast = useToast()
-  const [enabled, setEnabled] = useState(false)
-  const [schedule, setSchedule] = useState('')
-  const [saving, setSaving] = useState(false)
+type CheckInScheduleCardProps = {
+  checkin: CheckInConfig | undefined
+  onChange: (checkin: CheckInConfig) => void
+}
 
-  useEffect(() => {
-    api.config.get().then((cfg) => {
-      setEnabled(cfg.checkin?.scheduleEnabled ?? false)
-      setSchedule(cfg.checkin?.schedule ?? '')
-    })
-  }, [])
-
-  async function handleToggleEnabled(next: boolean): Promise<void> {
-    setEnabled(next)
-    try {
-      await api.config.update({ checkin: { scheduleEnabled: next, schedule: schedule || undefined } } as any)
-      toast.success(next ? 'Scheduled check-ins enabled' : 'Scheduled check-ins disabled')
-    } catch (err: any) {
-      setEnabled(!next)
-      toast.error('Failed to update check-in schedule', { message: err?.message })
-    }
-  }
-
-  async function handleSaveSchedule(): Promise<void> {
-    setSaving(true)
-    try {
-      await api.config.update({ checkin: { scheduleEnabled: enabled, schedule: schedule || undefined } } as any)
-      toast.success('Check-in schedule saved')
-    } catch (err: any) {
-      toast.error('Failed to save schedule', { message: err?.message })
-    } finally {
-      setSaving(false)
-    }
-  }
+function CheckInScheduleCard({ checkin, onChange }: CheckInScheduleCardProps): React.ReactElement {
+  const enabled = checkin?.scheduleEnabled ?? false
+  const schedule = checkin?.schedule ?? ''
 
   return (
     <div className="card">
@@ -1496,24 +1555,17 @@ function CheckInScheduleCard(): React.ReactElement {
             <input
               type="checkbox"
               checked={enabled}
-              onChange={(e) => handleToggleEnabled(e.target.checked)}
+              onChange={(e) => onChange({ scheduleEnabled: e.target.checked, schedule: schedule || undefined })}
             />
             <span className="toggle__track" />
           </label>
         </div>
 
         {enabled && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <ScheduleBuilder cron={schedule || '0 9 * * 1'} onChange={setSchedule} />
-            <button
-              className="btn btn--primary"
-              style={{ alignSelf: 'flex-end', fontSize: 12, padding: '5px 12px' }}
-              onClick={handleSaveSchedule}
-              disabled={saving}
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-          </div>
+          <ScheduleBuilder
+            cron={schedule || '0 9 * * 1'}
+            onChange={(next) => onChange({ scheduleEnabled: enabled, schedule: next })}
+          />
         )}
       </div>
     </div>
