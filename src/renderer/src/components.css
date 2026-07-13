@@ -408,6 +408,17 @@
   border: 1px solid var(--border-muted);
 }
 
+/* Linked-routine name pills (expanded state only) — cap width so a long routine
+   name can't stretch the chip across the whole card. */
+.intent-chip--routine {
+  max-width: 180px;
+}
+.intent-chip--routine > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ─── Intent card: collapsed layout ─────────────────────────────────────── */
 
 /* 2-line clamped title — mirrors routine-card__name weight/color/size */
