@@ -418,8 +418,9 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
     return null
   })()
 
-  // Derive the set of routine runs that cover at least one of this intent's focus nodes.
-  // Deduplicated by run id so each routine name appears at most once.
+  // Derive the set of routines that cover at least one of this intent's focus nodes.
+  // Deduplicated by routine id so each routine appears at most once, regardless of how
+  // many times it has run (a scheduled routine can produce many runs with the same name).
   const linkedRuns: RoutineRun[] = (() => {
     if (!entityKeyToRuns) return []
     const seen = new Set<string>()
@@ -428,8 +429,8 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
       if (!hasString(node, 'key')) continue
       const runs = entityKeyToRuns.get(node.key) ?? []
       for (const run of runs) {
-        if (!seen.has(run.id)) {
-          seen.add(run.id)
+        if (!seen.has(run.routine_id)) {
+          seen.add(run.routine_id)
           result.push(run)
         }
       }
@@ -500,17 +501,28 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
             {intent.reversibility === 'irreversible' && (
               <span className="intent-chip intent-chip--warning">irreversible</span>
             )}
-            {linkedRuns.map((run) => (
+            {linkedRuns.length > 0 && !expanded && (
               <span
-                key={run.id}
                 className="intent-chip intent-chip--muted"
-                title={`Also in routine run: ${run.routine_name}`}
+                title={`Also covered by:\n${linkedRuns.map((r) => r.routine_name).join('\n')}`}
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}
               >
                 <Zap size={9} strokeWidth={2} />
-                {run.routine_name}
+                {linkedRuns.length} routine{linkedRuns.length === 1 ? '' : 's'}
               </span>
-            ))}
+            )}
+            {expanded &&
+              linkedRuns.map((run) => (
+                <span
+                  key={run.routine_id}
+                  className="intent-chip intent-chip--muted intent-chip--routine"
+                  title={`Also in routine: ${run.routine_name}`}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                >
+                  <Zap size={9} strokeWidth={2} />
+                  <span>{run.routine_name}</span>
+                </span>
+              ))}
           </div>
         </div>
 
