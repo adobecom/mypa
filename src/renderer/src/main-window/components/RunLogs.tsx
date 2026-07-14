@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import ChatThread from '../../widget/components/ChatThread'
+import { useLiveRuns } from '@renderer/hooks/useLiveRuns'
 import type { RoutineRun, ChatMessage, RunStatus, PendingToolApproval, PendingQuestion } from '@shared/types'
 
 function formatTs(ts: string): string {
@@ -195,20 +196,12 @@ interface Props {
 }
 
 export default function RunLogs({ initialRunId, onInitialRunHandled, filterStatuses, emptyMessage }: Props): React.ReactElement {
-  const [runs, setRuns] = useState<RoutineRun[]>([])
+  const { runs, setRuns, loading } = useLiveRuns(50)
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
 
   const handleRunChange = (updated: RoutineRun) =>
     setRuns((prev) => prev.map((r) => (r.id === updated.id ? updated : r)))
   const expandedRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    window.electron.routines.getAllRuns(50).then((r) => {
-      setRuns(r)
-      setLoading(false)
-    })
-  }, [])
 
   const visible = filterStatuses ? runs.filter((r) => filterStatuses.includes(r.status)) : runs
 

@@ -261,7 +261,7 @@ The tray icon reflects the ambient state:
 | `has-something` | Badge / indicator | Pending intents or new digest available |
 | `needs-you` | Alert indicator | High-confidence action or irreversible intent waiting for approval |
 
-The renderer subscribes to the `ambient:tray-state` push channel to stay in sync.
+The renderer subscribes to the `ambient:tray-state` push channel to stay in sync. Broadcast to both the widget and the main window (see [services.md](services.md#ambientts--ambient-polling-loop)), though today only the widget's `TabStrip` actually holds and displays a `TrayState` value — the main window receives the event but has no UI wired to it yet.
 
 ---
 
@@ -316,6 +316,8 @@ These rows appear in `ambient.getLog()` interleaved with real `emitted`/`execute
 - `totalHits: N > 0` but no `emitted` row follows ⇒ inference dropped every candidate; see the `dropped:` breakdown in the cycle console log
 
 ## Changelog
+
+- 2026-07-14 — **`ambient:tray-state`/`ambient:digest-ready` now broadcast to both renderer windows (`ambient.ts`).** Previously sent only to the widget window; the main window never received them even when open, which was part of a wider renderer state-sync bug. See [services.md](services.md#ambientts--ambient-polling-loop).
 
 - 2026-07-09 — **`author_fix` proposal path in `inferDeepIntent` (`inference.ts`).** Before the usual actions[] write-action proposal, deep enrichment now tries an author-fix decision: if the triggering item's container resolves to a linked, authoring-enabled repo (`repos.ts` `resolveRepoForNode`), a read-only call judges whether a coding agent could plausibly attempt the task and, if so, writes a self-contained `task_description`. On `proceed:true` this emits an `author_fix`-verb `action` intent instead of the normal comment/review proposal; `ambient.ts`'s tier resolution and surfacing are unmodified (`author_fix` gets the same `TYPE_DEFAULT_TIER['action'] = 2` as any other action intent). See [code-authoring.md](code-authoring.md) for the full downstream flow (worktree authoring, diff review, ship).
 
