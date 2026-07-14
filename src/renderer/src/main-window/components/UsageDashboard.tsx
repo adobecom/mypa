@@ -39,6 +39,7 @@ function humanizeSource(s: string): string {
     routine_digest: 'Routine digest',
     routine_setup: 'Routine setup',
     routine_chat: 'Routine chat',
+    routine_run: 'Routine run',
     plan_chat: 'Plan chat',
     inference: 'Ambient inference',
     memory: 'Memory distillation',

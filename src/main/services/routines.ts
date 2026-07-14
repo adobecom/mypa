@@ -10,7 +10,7 @@ import {
 } from '../db/index'
 import { callTool } from './mcp'
 import { generateRoutineDigest, streamChat } from './claude'
-import { runRoutineAgent } from './agent'
+import { runRoutineAgent, isReadOnlyTool } from './agent'
 import { readConfig, buildOwnerClause } from './config'
 import { inferRoutineIntents } from './inference'
 import { routeIntent } from './ambient'
@@ -61,15 +61,41 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
     let failures: Array<{ server: string; tool: string; message: string; authFailure: boolean }>
 
     if (routine.prompt.trim()) {
+      // The agentic gather step below is deliberately read-only (an unattended run
+      // must never attempt an unreviewed write). But the old static loop executed
+      // ANY configured action unconditionally, including writes the user explicitly
+      // set up (e.g. "post the digest to #eng") — so any non-read-only action is
+      // still executed directly here, exactly as before, while read-style actions
+      // are passed to the agent only as a non-authoritative hint (see
+      // runRoutineAgentForRoutine).
+      const writeResults: string[] = []
+      const writeFailures: Array<{ server: string; tool: string; message: string; authFailure: boolean }> = []
+      let writeSuccessCount = 0
+      for (const action of routine.actions) {
+        if (isReadOnlyTool(action.tool)) continue
+        try {
+          const output = await callTool(action.server, action.tool, action.params)
+          writeResults.push(`[${action.server}.${action.tool}]\n${output}`)
+          writeSuccessCount++
+        } catch (err: any) {
+          const message = err?.message ?? String(err)
+          writeResults.push(`[${action.server}.${action.tool}] ERROR: ${message}`)
+          writeFailures.push({ server: action.server, tool: action.tool, message, authFailure: isAuthFailure(err) })
+        }
+      }
+
       const agentResult = await runRoutineAgentForRoutine(routine)
-      rawOutput = agentResult.rawOutput || agentResult.text
-      failures = agentResult.failures.map((f) => ({ ...f, authFailure: isAuthFailure(new Error(f.message)) }))
-      // A tool-less run that still produced narrative text (e.g. the model answered
-      // from its own knowledge with no tool calls needed) counts as one success so
-      // it isn't misclassified as allFailed below.
-      successCount = agentResult.successCount > 0
-        ? agentResult.successCount
-        : (failures.length === 0 && agentResult.text ? 1 : 0)
+      const agentFailures = agentResult.failures.map((f) => ({ ...f, authFailure: isAuthFailure(f.message) }))
+      // Interleave failure lines into rawOutput (matching the old static loop, which
+      // always wrote errors inline) so generateRoutineDigest below — which only ever
+      // sees rawOutput, not the separate failures[] array — doesn't silently lose
+      // visibility into partial failures the way a failures-only side channel would.
+      const agentFailureLines = agentResult.failures.map((f) => `[${f.server}.${f.tool}] ERROR: ${f.message}`)
+      const agentSection = agentResult.rawOutput || agentResult.text
+
+      rawOutput = [...writeResults, agentSection, ...agentFailureLines].filter(Boolean).join('\n\n---\n\n')
+      successCount = writeSuccessCount + agentResult.successCount
+      failures = [...writeFailures, ...agentFailures]
     } else {
       const results: string[] = []
       const staticFailures: Array<{ server: string; tool: string; message: string; authFailure: boolean }> = []

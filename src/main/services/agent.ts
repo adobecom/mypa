@@ -140,7 +140,7 @@ const READ_ONLY_TOOL_NAMES = new Set([
   'conversations_unreads',
 ])
 
-function isReadOnlyTool(toolName: string): boolean {
+export function isReadOnlyTool(toolName: string): boolean {
   const lower = toolName.toLowerCase()
   if (READ_ONLY_TOOL_NAMES.has(lower)) return true
   const words = lower.split('_').filter(Boolean)
@@ -761,29 +761,40 @@ export interface RoutineAgentResult {
  *
  * Read-only only: canUseTool denies every write tool, so an unattended scheduled
  * run can never block on (or silently skip) an approval prompt.
+ *
+ * MCP servers are sourced from the warm connection pool via ensureServersConnected()
+ * + buildBridgedMcpServers() — the same in-process bridge streamAgentChat uses —
+ * rather than cold-spawning a fresh stdio subprocess per run. A routine can fire
+ * many times a day; cold-spawning would pay process-start + handshake latency (and
+ * risk a second, redundant connection to a server the pool already holds open) on
+ * every tick, and would ignore each server's enabled/disabled flag (the pool
+ * already excludes disabled servers).
  */
 export async function runRoutineAgent(
   systemPrompt: string,
   userPrompt: string,
   timeoutMs = 300_000,
 ): Promise<RoutineAgentResult> {
-  const cfg = readConfig()
-  const sdkMcpServers: Record<string, { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }> = {}
-  for (const srv of cfg.mcp_servers) {
-    if (!srv.command) continue
-    const safeName = srv.name.replace(/[^a-zA-Z0-9_-]/g, '_')
-    sdkMcpServers[safeName] = {
-      type: 'stdio',
-      command: srv.command,
-      ...(srv.args?.length ? { args: srv.args } : {}),
-      ...(Object.keys(srv.env ?? {}).length ? { env: srv.env } : {}),
-    }
+  await ensureServersConnected()
+  const sdkMcpServers = buildBridgedMcpServers()
+
+  // Mirrors streamAgentChat's unavailability note (see its comment above) — tell the
+  // model plainly which configured servers are down rather than letting it silently
+  // omit or confabulate results for them.
+  let effectiveSystemPrompt = systemPrompt
+  const unavailable = getServerStatus().filter((s) => !s.connected && s.disabled !== true)
+  if (unavailable.length > 0) {
+    const detail = unavailable.map((s) => (s.error ? `${s.name} (${s.error})` : s.name)).join(', ')
+    effectiveSystemPrompt =
+      `IMPORTANT — the following MCP servers are configured but unavailable right now: ${detail}. ` +
+      `Do NOT attempt to call tools from these servers or claim to have retrieved data from them — ` +
+      `note the outage plainly in your report instead.\n\n${systemPrompt}`
   }
 
-  let model = selectModel('routine_run', systemPrompt.length + userPrompt.length)
+  let model = selectModel('routine_run', effectiveSystemPrompt.length + userPrompt.length)
   while (true) {
     try {
-      return await runRoutineAgentOnce(model, systemPrompt, userPrompt, timeoutMs, sdkMcpServers)
+      return await runRoutineAgentOnce(model, effectiveSystemPrompt, userPrompt, timeoutMs, sdkMcpServers)
     } catch (err) {
       const msg = (err as Error).message
       if (msg === 'Agent timed out') throw err
@@ -800,7 +811,13 @@ async function runRoutineAgentOnce(
   systemPrompt: string,
   userPrompt: string,
   timeoutMs: number,
-  mcpServers: Record<string, { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }>,
+  // Typed loosely (matching streamAgentChatOnce's mcpServers param) rather than as
+  // ReturnType<typeof buildBridgedMcpServers> — the bridge's { type: 'sdk', instance }
+  // shape wraps the lower-level MCP `Server` class, while the SDK's own Options type
+  // expects the higher-level `McpServer`; the bridge already works correctly with the
+  // SDK at runtime (streamAgentChat has used it this way since it was introduced), so
+  // this is a type-only mismatch, not a real incompatibility.
+  mcpServers: Record<string, unknown>,
 ): Promise<RoutineAgentResult> {
   const ac = new AbortController()
   let timedOut = false
@@ -815,6 +832,7 @@ async function runRoutineAgentOnce(
   const toolUseIndex = new Map<string, { server: string; tool: string }>()
 
   const hasMcp = Object.keys(mcpServers).length > 0
+  const allMcpServers: Record<string, any> = { ...mcpServers }  // eslint-disable-line @typescript-eslint/no-explicit-any
 
   try {
     for await (const msg of query({
@@ -826,7 +844,7 @@ async function runRoutineAgentOnce(
         tools: [],
         maxTurns: 15,
         permissionMode: 'default',
-        ...(hasMcp ? { mcpServers } : {}),
+        ...(hasMcp ? { mcpServers: allMcpServers } : {}),
         env: buildAgentEnv(),
         pathToClaudeCodeExecutable: resolveClaudeExecutable(),
         canUseTool: async (toolName: string, toolInput: unknown) => {
@@ -866,7 +884,10 @@ async function runRoutineAgentOnce(
                 .filter((c) => c.type === 'text')
                 .map((c) => String(c.text ?? ''))
                 .join('\n')
-            : JSON.stringify(b.content)
+            // JSON.stringify returns the runtime value undefined (not the string
+            // "undefined") when b.content is itself undefined — coalesce so a
+            // RoutineAgentFailure.message is never actually undefined at runtime.
+            : (JSON.stringify(b.content) ?? '')
           if (b.is_error) {
             logError('agent', `tool_result error (tool_use_id=${toolUseId}): ${contentText}`)
             failures.push({ server: ref.server, tool: ref.tool, message: contentText })
@@ -889,6 +910,20 @@ async function runRoutineAgentOnce(
   }
   recordSdkUsage('routine_run', model, resultMsg)
   if (resultMsg.is_error) {
+    // A run can legitimately end in_error after successfully gathering some data —
+    // most commonly hitting maxTurns mid-chain on a long list (the exact "list, then
+    // fetch per item" shape this whole path exists for). Discarding everything
+    // collected so far in that case would throw away real, already-fetched data over
+    // a run that was still substantively productive — return the partial result
+    // instead so routines.ts can still build a digest from what was gathered.
+    if (toolOutputs.length > 0 || failures.length > 0) {
+      return {
+        text,
+        rawOutput: toolOutputs.join('\n\n---\n\n'),
+        successCount: toolOutputs.length,
+        failures,
+      }
+    }
     throw new Error(
       typeof (resultMsg as any).result === 'string'
         ? (resultMsg as any).result
