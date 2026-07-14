@@ -1706,8 +1706,9 @@ function scheduleTimeTriggers(): void {
       inferenceQueue = inferenceQueue
         .then(() => runAmbientCycle(hits))
         .then(() => {
-          const win = getWidgetWin?.() ?? null
-          win?.webContents.send('ambient:digest-ready', slot)
+          // Broadcast to all windows (previously widget-only) so the main
+          // window can react to a fresh digest too.
+          broadcast('ambient:digest-ready', slot)
         })
         .catch((e) => console.error('[ambient] time trigger error:', e))
     })
@@ -1723,11 +1724,12 @@ function pushIntent(intent: Intent, _win: BrowserWindow | null): void {
   broadcast('ambient:intent-created', intent)
 }
 
-function refreshTray(win: BrowserWindow | null): void {
+function refreshTray(_win: BrowserWindow | null): void {
   const state = ambientComputeTrayState()
   setTrayState(state)
-  // Also notify the renderer so the tab dot updates
-  win?.webContents.send('ambient:tray-state', state)
+  // Broadcast to all windows so both the widget's tab dot and the main
+  // window's "needs you" indicator stay in sync (previously widget-only).
+  broadcast('ambient:tray-state', state)
 }
 
 function getCurrentSlot(): DigestSlot {

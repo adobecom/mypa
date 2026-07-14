@@ -5,6 +5,8 @@ import DigestView from '../../widget/components/DigestView'
 import QueueView from '../../widget/components/QueueView'
 import Tabs from '@renderer/components/Tabs'
 import type { TabItem } from '@renderer/components/Tabs'
+import { useLiveIntents } from '@renderer/hooks/useLiveIntents'
+import { useLivePlanItems } from '@renderer/hooks/useLivePlanItems'
 import type { Intent, PlanItem, ActionLogEntry } from '@shared/types'
 
 type Section = 'queue' | 'observations' | 'history' | 'activity'
@@ -14,14 +16,15 @@ const TERMINAL_STATUSES: Intent['status'][] = ['executed', 'dismissed', 'challen
 
 export default function InsightsPage(): React.ReactElement {
   const [section, setSection] = useState<Section>('queue')
-  const [intents, setIntents] = useState<Intent[]>([])
-  const [items, setItems] = useState<PlanItem[]>([])
+  const { intents, setIntents, loading: intentsLoading } = useLiveIntents('all', 200)
+  const { items, setItems, loading: itemsLoading } = useLivePlanItems()
   const [log, setLog] = useState<ActionLogEntry[]>([])
-  const [loading, setLoading] = useState(true)
+  const [logLoading, setLogLoading] = useState(true)
   const [pollState, setPollState] = useState<PollState>('idle')
   const pollDoneTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const api = window.electron
+  const loading = intentsLoading || itemsLoading || logLoading
 
   // ── Log refresh helper ────────────────────────────────────────────────────
   const refreshLog = useCallback(() => {
@@ -30,54 +33,20 @@ export default function InsightsPage(): React.ReactElement {
       .catch(console.error)
   }, [api])
 
-  // ── Initial data fetch ────────────────────────────────────────────────────
+  // ── Initial data fetch (intents/plan items come from the shared live hooks) ─
   useEffect(() => {
-    setLoading(true)
-    Promise.all([
-      api.ambient.getAllIntents(200),
-      api.plan.getAll(),
-      api.ambient.getLog(100)
-    ])
-      .then(([fetchedIntents, fetchedItems, fetchedLog]) => {
-        setIntents((prev) => {
-          const byId = new Map((fetchedIntents as Intent[]).map((i) => [i.id, i]))
-          for (const p of prev) {
-            if (!byId.has(p.id)) byId.set(p.id, p)
-          }
-          return Array.from(byId.values())
-        })
-        setItems(fetchedItems as PlanItem[])
-        setLog(fetchedLog as ActionLogEntry[])
-      })
+    setLogLoading(true)
+    api.ambient.getLog(100)
+      .then((fetchedLog) => setLog(fetchedLog as ActionLogEntry[]))
       .catch(console.error)
-      .finally(() => setLoading(false))
+      .finally(() => setLogLoading(false))
   }, [])
 
-  // ── Live updates ──────────────────────────────────────────────────────────
+  // ── Live updates not covered by the shared hooks ──────────────────────────
   useEffect(() => {
-    const offCreated = api.on('ambient:intent-created', (intent) => {
-      const i = intent as Intent
-      setIntents((prev) => [i, ...prev.filter((x) => x.id !== i.id)])
-    })
-    const offUpdated = api.on('ambient:intent-updated', (updated) => {
-      const u = updated as Partial<Intent> & { id: string }
-      setIntents((prev) => prev.map((i) => (i.id === u.id ? { ...i, ...u } : i)))
-    })
-    const offItemUpdated = api.on('plan:item-updated', (item) => {
-      const p = item as PlanItem
-      setItems((prev) => prev.map((i) => (i.id === p.id ? p : i)))
-    })
-    // Re-fetch plan items when the badge changes (e.g. new item created)
-    const offBadge = api.on('badge:updated', () => {
-      api.plan.getAll().then((list) => setItems(list as PlanItem[])).catch(console.error)
-    })
     // Refresh the action log whenever the agent executes something
     const offExecuted = api.on('ambient:action-executed', () => refreshLog())
     return () => {
-      offCreated()
-      offUpdated()
-      offItemUpdated()
-      offBadge()
       offExecuted()
     }
   }, [refreshLog])

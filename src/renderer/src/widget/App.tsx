@@ -5,25 +5,25 @@ import QueueView from './components/QueueView'
 import QuickAddBar from './components/QuickAddBar'
 import PlanReviewCard from './components/PlanReviewCard'
 import AmbientBackground from '../AmbientBackground'
+import { useLiveRuns } from '@renderer/hooks/useLiveRuns'
+import { useLiveIntents } from '@renderer/hooks/useLiveIntents'
+import { useLivePlanItems } from '@renderer/hooks/useLivePlanItems'
 import type { PlanDraft, PlanItem, RoutineRun, AppConfig, Intent, TrayState } from '@shared/types'
 
 export default function App(): React.ReactElement {
   const [tab, setTab] = useState<Tab>('queue')
-  const [planItems, setPlanItems] = useState<PlanItem[]>([])
-  const [runs, setRuns] = useState<RoutineRun[]>([])
+  const { items: planItems, setItems: setPlanItems } = useLivePlanItems()
+  const { runs, setRuns } = useLiveRuns(20)
+  const { intents, setIntents } = useLiveIntents('pending')
   const [draft, setDraft] = useState<PlanDraft | null>(null)
   const [drafting, setDrafting] = useState(false)
   const [config, setConfig] = useState<AppConfig | null>(null)
-  const [intents, setIntents] = useState<Intent[]>([])
   const [trayState, setTrayState] = useState<TrayState>('idle')
 
   const api = window.electron
 
   useEffect(() => {
     api.config.get().then(setConfig)
-    api.plan.getAll().then(setPlanItems)
-    api.routines.getAllRuns(20).then(setRuns)
-    api.ambient.getIntents().then((items) => setIntents(items as Intent[]))
     api.ambient.getTrayState().then((s) => setTrayState(s as TrayState))
   }, [])
 
@@ -34,23 +34,14 @@ export default function App(): React.ReactElement {
     return () => window.removeEventListener('focus', onFocus)
   }, [api])
 
-  // Push event listeners
+  // UI-only reactions to push events — data itself is owned by the live-data
+  // hooks above; these just decide which tab to jump to.
   useEffect(() => {
-    const unsubRunStarted = api.on('routine:run-started', (run) => {
-      setRuns((prev) => [run as RoutineRun, ...prev.slice(0, 19)])
+    const unsubRunStarted = api.on('routine:run-started', () => {
       setTab('routines')
-    })
-    const unsubRunCompleted = api.on('routine:run-completed', (run) => {
-      setRuns((prev) =>
-        prev.map((r) => ((r as RoutineRun).id === (run as RoutineRun).id ? (run as RoutineRun) : r))
-      )
-    })
-    const unsubBadge = api.on('badge:updated', () => {
-      api.plan.getAll().then(setPlanItems)
     })
     const unsubIntentCreated = api.on('ambient:intent-created', (intent) => {
       const i = intent as Intent
-      setIntents((prev) => [i, ...prev.filter((x) => x.id !== i.id)])
       // Switch to Queue for pending actionable intents so the user sees the card.
       // Terminal intents (executed/dismissed etc.) do not bounce the tab.
       const TERMINAL: Intent['status'][] = ['executed', 'dismissed', 'challenged', 'failed', 'expired']
@@ -58,20 +49,13 @@ export default function App(): React.ReactElement {
         setTab('queue')
       }
     })
-    const unsubIntentUpdated = api.on('ambient:intent-updated', (updated) => {
-      const u = updated as Partial<Intent> & { id: string }
-      setIntents((prev) => prev.map((i) => (i.id === u.id ? { ...i, ...u } : i)))
-    })
     const unsubTrayState = api.on('ambient:tray-state', (s) => {
       setTrayState(s as TrayState)
     })
 
     return () => {
       unsubRunStarted()
-      unsubRunCompleted()
-      unsubBadge()
       unsubIntentCreated()
-      unsubIntentUpdated()
       unsubTrayState()
     }
   }, [])
