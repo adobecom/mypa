@@ -221,6 +221,11 @@ export interface OAuthAppCredential {
   clientSecret?: string
 }
 
+/** Surfaces an owner can have an identity handle on. Single source of truth — import this
+ *  instead of re-declaring the list (used by mcp.ts, Settings.tsx, OnboardingWizard.tsx). */
+export const IDENTITY_SURFACES = ['github', 'slack', 'jira', 'linear', 'notion'] as const
+export type IdentitySurface = typeof IDENTITY_SURFACES[number]
+
 export interface OwnerIdentity {
   name?: string
   handles?: {
@@ -234,7 +239,7 @@ export interface OwnerIdentity {
 
 /** Return type for setup.resolveOwnerHandles — one entry per surface where a handle was found */
 export type ResolvedHandle = { value: string; needsReview: boolean }
-export type ResolvedOwnerHandles = Partial<Record<'github' | 'slack' | 'jira' | 'linear' | 'notion', ResolvedHandle>>
+export type ResolvedOwnerHandles = Partial<Record<IdentitySurface, ResolvedHandle>>
 
 /**
  * Scope config — defines which external containers mypa is allowed to surface.

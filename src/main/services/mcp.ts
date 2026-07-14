@@ -5,7 +5,8 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { readConfig, updateConfig } from './config'
-import type { McpServerConfig, McpTool, McpServerStatus, ResolvedOwnerHandles } from '@shared/types'
+import type { McpServerConfig, McpTool, McpServerStatus, ResolvedOwnerHandles, IdentitySurface } from '@shared/types'
+import { IDENTITY_SURFACES } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 
 interface ActiveServer {
@@ -398,8 +399,8 @@ export async function ensureServersConnected(): Promise<void> {
 
 // ─── Owner identity resolution ────────────────────────────────────────────────
 
-const SURFACE_NAMES = ['github', 'slack', 'jira', 'linear', 'notion'] as const
-type SurfaceName = typeof SURFACE_NAMES[number]
+const SURFACE_NAMES = IDENTITY_SURFACES
+type SurfaceName = IdentitySurface
 
 /** Tool names that are likely to return the authenticated user's identity */
 const IDENTITY_TOOL_PATTERN = /whoami|get_me|^me$|current_user|viewer|self|auth.?test|read_user_profile/i

@@ -247,6 +247,7 @@ function ConfigurePanel({
   const [inlineClientSecret, setInlineClientSecret] = useState('')
   const [manifestCopyState, setManifestCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const manifestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [saving, setSaving] = useState(false)
 
   const handleCopyManifest = async () => {
     if (!entry.appManifest) return
@@ -341,6 +342,9 @@ function ConfigurePanel({
   }
 
   const handleAdd = async () => {
+    if (saving) return
+    setSaving(true)
+    setError('')
     const resolvedArgs = (entry.argInputs ?? []).flatMap(
       (_, i) => argValues[i]?.filter((v) => v.trim()) ?? []
     )
@@ -356,8 +360,11 @@ function ConfigurePanel({
         args: [...entry.baseArgs, ...resolvedArgs],
         env: Object.keys(env).length ? env : undefined
       })
+      onBack()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to save server')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -599,9 +606,9 @@ function ConfigurePanel({
         <button
           className="btn btn--primary btn--sm"
           onClick={handleAdd}
-          disabled={!isReady()}
+          disabled={!isReady() || saving}
         >
-          Add {entry.name}
+          {saving ? <span className="spinner" /> : `Add ${entry.name}`}
         </button>
       </div>
     </div>

@@ -229,6 +229,16 @@ html, body, #root {
   -webkit-app-region: no-drag;
 }
 
+/* Draggable top strip shown before onboarding completes, when the sidebar
+   (the app's only other drag region) isn't rendered yet. A normal flex item (not
+   absolutely positioned) so it occupies real layout space and never overlaps the
+   scrollable content below it. */
+.drag-strip {
+  height: 44px;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+}
+
 .nav-item {
   display: flex;
   align-items: center;
