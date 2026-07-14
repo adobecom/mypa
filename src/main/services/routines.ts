@@ -10,6 +10,8 @@ import {
 } from '../db/index'
 import { callTool } from './mcp'
 import { generateRoutineDigest, streamChat } from './claude'
+import { runRoutineAgent, isReadOnlyTool } from './agent'
+import { readConfig, buildOwnerClause } from './config'
 import { inferRoutineIntents } from './inference'
 import { routeIntent } from './ambient'
 import { extractCoveredEntities } from './entity-link'
@@ -46,26 +48,81 @@ export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow 
   broadcast('routine:run-started', run)
 
   try {
-    // Step 1: execute MCP actions, collecting both raw text output and structured failures.
-    const results: string[] = []
-    const failures: Array<{ server: string; tool: string; message: string; authFailure: boolean }> = []
-    let successCount = 0
+    // Step 1: gather data. Routines with a natural-language prompt run agentically —
+    // Claude drives the MCP tool calls itself (e.g. list_pull_requests, then a
+    // get_pull_request_status/get_pull_request_files call per PR number it actually
+    // found), so per-item detail params are never frozen at authoring time. This
+    // replaces the old static callTool loop, which had no way to feed one action's
+    // output into a later action's params and so shipped routines with placeholder
+    // params (e.g. pull_number: 0) that always 404'd. Legacy routines with no prompt
+    // but a static actions list still run the old direct-call loop.
+    let rawOutput: string
+    let successCount: number
+    let failures: Array<{ server: string; tool: string; message: string; authFailure: boolean }>
 
-    for (const action of routine.actions) {
-      try {
-        const output = await callTool(action.server, action.tool, action.params)
-        results.push(`[${action.server}.${action.tool}]\n${output}`)
-        successCount++
-      } catch (err: any) {
-        const message = err?.message ?? String(err)
-        results.push(`[${action.server}.${action.tool}] ERROR: ${message}`)
-        failures.push({ server: action.server, tool: action.tool, message, authFailure: isAuthFailure(err) })
+    if (routine.prompt.trim()) {
+      // The agentic gather step below is deliberately read-only (an unattended run
+      // must never attempt an unreviewed write). But the old static loop executed
+      // ANY configured action unconditionally, including writes the user explicitly
+      // set up (e.g. "post the digest to #eng") — so any non-read-only action is
+      // still executed directly here, exactly as before, while read-style actions
+      // are passed to the agent only as a non-authoritative hint (see
+      // runRoutineAgentForRoutine).
+      const writeResults: string[] = []
+      const writeFailures: Array<{ server: string; tool: string; message: string; authFailure: boolean }> = []
+      let writeSuccessCount = 0
+      for (const action of routine.actions) {
+        if (isReadOnlyTool(action.tool)) continue
+        try {
+          const output = await callTool(action.server, action.tool, action.params)
+          writeResults.push(`[${action.server}.${action.tool}]\n${output}`)
+          writeSuccessCount++
+        } catch (err: any) {
+          const message = err?.message ?? String(err)
+          writeResults.push(`[${action.server}.${action.tool}] ERROR: ${message}`)
+          writeFailures.push({ server: action.server, tool: action.tool, message, authFailure: isAuthFailure(err) })
+        }
       }
+
+      const agentResult = await runRoutineAgentForRoutine(routine)
+      const agentFailures = agentResult.failures.map((f) => ({ ...f, authFailure: isAuthFailure(f.message) }))
+      // Interleave failure lines into rawOutput (matching the old static loop, which
+      // always wrote errors inline) so generateRoutineDigest below — which only ever
+      // sees rawOutput, not the separate failures[] array — doesn't silently lose
+      // visibility into partial failures the way a failures-only side channel would.
+      const agentFailureLines = agentResult.failures.map((f) => `[${f.server}.${f.tool}] ERROR: ${f.message}`)
+      const agentSection = agentResult.rawOutput || agentResult.text
+
+      rawOutput = [...writeResults, agentSection, ...agentFailureLines].filter(Boolean).join('\n\n---\n\n')
+      successCount = writeSuccessCount + agentResult.successCount
+      failures = [...writeFailures, ...agentFailures]
+    } else {
+      const results: string[] = []
+      const staticFailures: Array<{ server: string; tool: string; message: string; authFailure: boolean }> = []
+      let staticSuccessCount = 0
+
+      for (const action of routine.actions) {
+        try {
+          const output = await callTool(action.server, action.tool, action.params)
+          results.push(`[${action.server}.${action.tool}]\n${output}`)
+          staticSuccessCount++
+        } catch (err: any) {
+          const message = err?.message ?? String(err)
+          results.push(`[${action.server}.${action.tool}] ERROR: ${message}`)
+          staticFailures.push({ server: action.server, tool: action.tool, message, authFailure: isAuthFailure(err) })
+        }
+      }
+
+      rawOutput = results.join('\n\n---\n\n')
+      successCount = staticSuccessCount
+      failures = staticFailures
     }
 
-    const rawOutput = results.join('\n\n---\n\n')
-
-    const allFailed = routine.actions.length > 0 && successCount === 0 && failures.length > 0
+    // failures.length > 0 already implies at least one step was attempted (static
+    // actions loop only pushes a failure per iterated action; the agentic path only
+    // pushes one per tool call it actually made) — no need to additionally gate on
+    // routine.actions.length, which is empty-but-valid for agentic prompt-driven runs.
+    const allFailed = successCount === 0 && failures.length > 0
     const anyAuthFailure = failures.some((f) => f.authFailure)
 
     if (allFailed) {
@@ -194,6 +251,24 @@ function buildDigestMessage(digest: {
   body: string
 }): string {
   return `**${digest.summary}**\n\n${digest.body}`
+}
+
+// Drives the agentic Step-1 data-gathering run for a routine. The routine's own
+// `prompt` (natural-language instructions) is the task — Claude decides which MCP
+// tools to call and in what order, so a "list X, then fetch details per item" routine
+// can chain a list_pull_requests result into real per-PR tool calls instead of the
+// static actions list's frozen (and often invalid, e.g. pull_number: 0) params.
+async function runRoutineAgentForRoutine(routine: Routine): ReturnType<typeof runRoutineAgent> {
+  const persona = readConfig().persona?.trim() || 'a personal assistant'
+  const systemPrompt = `You are mypa, ${persona}, running an unattended scheduled routine.${buildOwnerClause()} Use the available read-only tools to gather everything the instructions below ask for — call tools as many times as needed (e.g. list items first, then fetch details for each one you actually found). This is a background run with no user present: never wait for input, never ask a question, and never assume or fabricate data you have not actually retrieved via a tool call. If a tool call fails, note the failure plainly and continue with what you can still gather.`
+
+  const hintedActions = routine.actions.length > 0
+    ? `\n\nSuggested starting tool calls (optional — use as a hint for which server/tools are relevant, not as literal calls to replay verbatim, since any per-item parameters here may be stale placeholders):\n${routine.actions.map((a) => `- ${a.server}.${a.tool}`).join('\n')}`
+    : ''
+
+  const userPrompt = `Routine: ${routine.name}\n\nInstructions: ${routine.prompt}${hintedActions}\n\nGather the underlying data (do not summarize yet — a separate step will digest what you return). Report back what you found from each tool call, grouped clearly by source.`
+
+  return runRoutineAgent(systemPrompt, userPrompt)
 }
 
 export async function handleRunMessage(

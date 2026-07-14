@@ -47,7 +47,7 @@ Maps each `UsageSource` label to a base tier, then bumps the tier up for large p
 |---|---|
 | `inference`, `plan_draft` | fast |
 | `routine_digest`, `routine_setup`, `routine_chat`, `plan_chat`, `checkin_chat`, `checkin_extract`, `memory`, `chat`, `review`, `other` | balanced |
-| `suggest`, `authoring` | capable |
+| `suggest`, `authoring`, `routine_run` | capable |
 
 `review` (ambient deep-enrichment, `inferDeepIntent`) was `capable` (Opus) until 2026-07-08; it accounted for ~97% of Opus spend since it runs unattended on the ambient heartbeat. Downgraded to `balanced` — see `budget.ts` and [ambient-intelligence.md](ambient-intelligence.md) for the accompanying throttle/budget-cap changes.
 
@@ -97,6 +97,31 @@ export async function runAgentWithMcp(
 ```
 
 One-shot call with live MCP servers wired in via `options.mcpServers`. Uses the connected server list from `mcp.ts`. Falls back to `runAgent` when no servers are connected.
+
+### `runRoutineAgent` — agentic scheduled routine run
+
+```ts
+export interface RoutineAgentResult {
+  text: string
+  rawOutput: string
+  successCount: number
+  failures: Array<{ server: string; tool: string; message: string }>
+}
+
+export async function runRoutineAgent(
+  systemPrompt: string,
+  userPrompt: string,
+  timeoutMs?: number,     // default 300 000 ms
+): Promise<RoutineAgentResult>
+```
+
+Used by `routines.ts` `executeRoutine` to drive a scheduled routine's data-gathering step. `source: 'routine_run'` → `capable` (Opus), `maxTurns: 15`, `canUseTool` allows only read-only tools (`isReadOnlyTool`, now exported for reuse — see `routines.ts` below) — an unattended run must never block on a write-tool approval prompt, so writes are denied outright rather than gated.
+
+MCP servers are sourced from the warm connection pool exactly the way `streamAgentChat` does it — `await ensureServersConnected()` then `buildBridgedMcpServers()` — rather than cold-spawned from `AppConfig.mcp_servers` the way `runAgentWithMcp` does. A routine can fire many times a day, so cold-spawning a fresh stdio subprocess (and paying its handshake latency, and risking a redundant second connection to a server the pool already holds open) on every tick would be wasteful; the bridge also automatically excludes disabled servers, which a hand-rolled `AppConfig.mcp_servers` loop would not. `getServerStatus()` is also checked and any configured-but-disconnected server is called out by name in an `IMPORTANT:` prefix on the system prompt, mirroring `streamAgentChat`'s unavailability note (see below) — so the model reports an outage instead of confabulating results for a server it can't reach.
+
+Unlike `runAgentWithMcp`, which discards everything but the final assistant text, `runRoutineAgent` reconstructs a per-tool-call record from the raw SDK message stream: each `assistant`-message `tool_use` block is indexed by its id → `{ server, tool }` (parsed from the `mcp__<server>__<tool>` name), and each subsequent `user`-message `tool_result` block is resolved back through that index and appended to either `toolOutputs` (success) or `failures` (`is_error`). `rawOutput` is `toolOutputs` joined as `"[server.tool]\n<content>"` blocks — the same shape `routines.ts` used to build directly from a static `callTool` loop — so the rest of the routine pipeline (digest generation, `extractCoveredEntities`, `inferRoutineIntents`) needed no changes downstream of Step 1. If the SDK's final result message is `is_error` (most commonly hitting `maxTurns: 15` mid-chain on a long list) but at least one tool call already succeeded or recorded a failure, that partial result is returned rather than discarded — a long "list N items, fetch each one's detail" routine that only gets partway through still produces a useful digest instead of an all-or-nothing error.
+
+This exists because the old model — a fixed `actions: RoutineAction[]` list executed independently, one `callTool` per entry with no data-flow between them — could not express "list X, then for each result fetch its detail": the authoring LLM had to freeze detail-call params (e.g. a PR number) before any list call had actually run, so those params were placeholders that always failed against the real API. Routing the whole gather step through the agent loop lets the model call the list tool, read its own real output, and issue detail calls with real IDs.
 
 ### `streamAgentChat` — streaming multi-turn chat
 
@@ -304,7 +329,7 @@ This clause is appended in `inferIntent` (`inference.ts`) after `buildOwnerClaus
 
 `src/main/services/usage.ts` provides the `recordUsage(source, model, result)` function imported by `agent.ts`. It calls `dbInsertUsage()` and swallows all errors so telemetry never disrupts an AI call.
 
-`UsageSource` labels: `'plan_draft'`, `'routine_digest'`, `'routine_setup'`, `'routine_chat'`, `'plan_chat'`, `'checkin_chat'`, `'checkin_extract'`, `'inference'`, `'memory'`, `'suggest'`, `'review'`, `'authoring'`, `'chat'`, `'other'`.
+`UsageSource` labels: `'plan_draft'`, `'routine_digest'`, `'routine_setup'`, `'routine_chat'`, `'routine_run'`, `'plan_chat'`, `'checkin_chat'`, `'checkin_extract'`, `'inference'`, `'memory'`, `'suggest'`, `'review'`, `'authoring'`, `'chat'`, `'other'`.
 
 ## Packaging
 
@@ -313,6 +338,8 @@ This clause is appended in `inferIntent` (`inference.ts`) after `buildOwnerClaus
 **ASAR path fix — `pathToClaudeCodeExecutable` must be set explicitly.** The SDK's `sdk.mjs` lives inside `app.asar`; when it resolves the platform binary relative to its own `import.meta.url` it produces a path that includes `app.asar` — which is a file, not a directory — causing `spawn ENOTDIR` on every AI call. The fix is in `agent.ts`: `resolveClaudeExecutable()` computes the real, unpacked path via `app.getAppPath().replace('app.asar', 'app.asar.unpacked')`, then all four `query()` call sites (`runAgentOnce`, `streamAgentChatOnce`, `runAgentWithMcpOnce`, `runAuthoringAgent`) pass `pathToClaudeCodeExecutable: resolveClaudeExecutable()`. This short-circuits the SDK's broken default without affecting dev mode (where `app.getAppPath()` points to the project root and the binary exists at the direct `node_modules` path).
 
 ## Changelog
+
+- 2026-07-14 — **New `runRoutineAgent` — agentic scheduled routine runs (`agent.ts`, `routines.ts`, `claude.ts`, `model-router.ts`, `types.ts`, `UsageDashboard.tsx`, `RoutineForm.tsx`).** Scheduled routines previously executed a fixed `actions: RoutineAction[]` list, one independent `callTool` per entry with no data-flow between steps — an authoring LLM (`generateRoutineSetup`) had no way to feed a "list" call's real output into a later "per-item detail" call's params, so those params were frozen placeholders (e.g. `pull_number: 0`) that always 404'd against the real API, surfacing as an opaque `MCP error -32603: Not Found` "blocker" even when the MCP connection/token were completely healthy. `runRoutineAgent(systemPrompt, userPrompt, timeoutMs?)` fixes this by running the gather step agentically: read-only-gated MCP tools (`isReadOnlyTool`, now exported), `maxTurns: 15`, new `'routine_run'` `UsageSource` → `capable` (Opus), MCP servers sourced from the warm bridge pool (`ensureServersConnected` + `buildBridgedMcpServers`, same as `streamAgentChat`) rather than cold-spawned, and a message-stream walk that reconstructs `{ text, rawOutput, successCount, failures }` by indexing `tool_use` blocks by id and resolving each subsequent `tool_result` back to `{ server, tool }` — see the `runRoutineAgent` section above. A run that ends `is_error` after collecting at least one tool result (typically `maxTurns` exhaustion mid-chain on a long list) returns that partial result instead of discarding it. `routines.ts` `executeRoutine` now calls this whenever `routine.prompt` is non-empty; any *non*-read-only entry in `routine.actions` is still executed directly via `callTool` first (exactly as the old static loop did — the agentic step is deliberately read-only, so a routine explicitly configured to perform a write would otherwise have it silently denied), and only read-style actions are passed to the agent as a non-authoritative hint. The agent's `failures` are folded back into `rawOutput` (matching the old loop's inline `"[server.tool] ERROR: message"` format) so `generateRoutineDigest` doesn't lose visibility into partial failures. Empty-prompt legacy routines still use the old static loop. `claude.ts`'s `generateRoutineSetup` prompt now explicitly forbids the authoring LLM from inventing placeholder IDs and tells it to push all per-item logic into `prompt` instead of `actions`. `UsageDashboard.tsx` and `RoutineForm.tsx` copy updated to match.
 
 - 2026-07-13 — **`resolveAuthSource()` now probes the macOS Keychain (`auth.ts`).** Onboarding's "Connect Claude" step was reporting no credentials for users logged in via `claude login` on macOS, because that flow stores its session in the Keychain, not `~/.claude/.credentials.json`. Added a `security find-generic-password -s "Claude Code-credentials"` check (guarded by `process.platform === 'darwin'`) as a fourth detection step, so Keychain-only logins now resolve to `{ ok: true, source: 'cli-login' }` instead of falling through to `'none'` and prompting for an API key that wasn't actually needed.
 

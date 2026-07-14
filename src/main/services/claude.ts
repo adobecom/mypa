@@ -169,7 +169,7 @@ Return JSON:
   "actions": [
     { "server": "<exact server name>", "tool": "<exact tool name>", "params": { ... } }
   ],
-  "prompt": "2-4 sentence digest instructions specific to this routine's purpose."
+  "prompt": "Full instructions for what this routine should gather and report, specific to this routine's purpose."
 }
 
 Cron rules:
@@ -178,7 +178,22 @@ Cron rules:
 - Multiple times: "0 9,17 * * 1-5" = 9 AM and 5 PM weekdays
 - All days: use "*" for dow; weekdays only: use "1-5"
 - Hours are 0-23 (9=9AM, 17=5PM). "twice daily" or "9 and 5" → "0 9,17 * * *"
-- Only server/tool names verbatim from above. params must be a JSON object, never null or an array.`,
+- Only server/tool names verbatim from above. params must be a JSON object, never null or an array.
+
+How actions and prompt are used at run time: a routine is executed agentically — an
+agent reads "prompt" as its task and decides which tools to call and in what order,
+including chaining a list-style call's results into later per-item detail calls. So:
+- "actions" is only an OPTIONAL hint at which server/tools are relevant to start with —
+  it is never replayed verbatim as a fixed call sequence. Prefer emitting very few
+  actions (often just the first "list"/"search" call, or none at all) rather than a
+  full step-by-step plan.
+- NEVER invent a placeholder ID, number, or key for a param whose real value can only
+  be known after an earlier call runs (e.g. a pull_number, issue key, or ticket ID) —
+  do not write "pull_number": 0 or similar. If a step depends on a prior step's
+  output, describe that dependency in "prompt" instead (e.g. "for each open PR
+  returned, fetch its CI status and changed files") and omit that action entirely.
+- "prompt" must fully spell out the multi-step task in plain language, since it is the
+  only place per-item logic can live.`,
     'routine_setup',
     120_000,
     true

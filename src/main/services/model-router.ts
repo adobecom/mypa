@@ -31,6 +31,9 @@ const SOURCE_TIER: Record<UsageSource, Tier> = {
   routine_digest:  'balanced',
   routine_setup:   'balanced',
   routine_chat:    'balanced',
+  // Scheduled routine runs chain multiple MCP tool calls agentically (list →
+  // per-item detail fetches) — same reasoning demand as 'suggest'/'authoring'.
+  routine_run:     'capable',
   plan_chat:       'balanced',
   checkin_chat:    'balanced',
   checkin_extract: 'balanced',

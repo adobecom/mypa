@@ -140,7 +140,7 @@ const READ_ONLY_TOOL_NAMES = new Set([
   'conversations_unreads',
 ])
 
-function isReadOnlyTool(toolName: string): boolean {
+export function isReadOnlyTool(toolName: string): boolean {
   const lower = toolName.toLowerCase()
   if (READ_ONLY_TOOL_NAMES.has(lower)) return true
   const words = lower.split('_').filter(Boolean)
@@ -732,6 +732,214 @@ export async function runAgentWithMcp(
       console.log(`[agent] MCP escalating ${model} → ${next} (${source}): ${msg}`)
       model = next
     }
+  }
+}
+
+// ─── Agentic scheduled routine runs ──────────────────────────────────────────
+
+export interface RoutineAgentFailure {
+  server: string
+  tool: string
+  message: string
+}
+
+export interface RoutineAgentResult {
+  text: string
+  rawOutput: string
+  successCount: number
+  failures: RoutineAgentFailure[]
+}
+
+/**
+ * Agentic MCP run for a scheduled routine. Like runAgentWithMcp, but instead of
+ * returning only the final narrative, it also captures every tool_result block
+ * (success and error) from the SDK message stream — this stands in for the old
+ * static callTool loop in executeRoutine, giving routines.ts the same
+ * rawOutput/failures shape it used to build from directly-invoked MCP calls,
+ * while letting the model chain tool calls (e.g. list_pull_requests →
+ * get_pull_request_status) with real IDs instead of frozen placeholder params.
+ *
+ * Read-only only: canUseTool denies every write tool, so an unattended scheduled
+ * run can never block on (or silently skip) an approval prompt.
+ *
+ * MCP servers are sourced from the warm connection pool via ensureServersConnected()
+ * + buildBridgedMcpServers() — the same in-process bridge streamAgentChat uses —
+ * rather than cold-spawning a fresh stdio subprocess per run. A routine can fire
+ * many times a day; cold-spawning would pay process-start + handshake latency (and
+ * risk a second, redundant connection to a server the pool already holds open) on
+ * every tick, and would ignore each server's enabled/disabled flag (the pool
+ * already excludes disabled servers).
+ */
+export async function runRoutineAgent(
+  systemPrompt: string,
+  userPrompt: string,
+  timeoutMs = 300_000,
+): Promise<RoutineAgentResult> {
+  await ensureServersConnected()
+  const sdkMcpServers = buildBridgedMcpServers()
+
+  // Mirrors streamAgentChat's unavailability note (see its comment above) — tell the
+  // model plainly which configured servers are down rather than letting it silently
+  // omit or confabulate results for them.
+  let effectiveSystemPrompt = systemPrompt
+  const unavailable = getServerStatus().filter((s) => !s.connected && s.disabled !== true)
+  if (unavailable.length > 0) {
+    const detail = unavailable.map((s) => (s.error ? `${s.name} (${s.error})` : s.name)).join(', ')
+    effectiveSystemPrompt =
+      `IMPORTANT — the following MCP servers are configured but unavailable right now: ${detail}. ` +
+      `Do NOT attempt to call tools from these servers or claim to have retrieved data from them — ` +
+      `note the outage plainly in your report instead.\n\n${systemPrompt}`
+  }
+
+  let model = selectModel('routine_run', effectiveSystemPrompt.length + userPrompt.length)
+  while (true) {
+    try {
+      return await runRoutineAgentOnce(model, effectiveSystemPrompt, userPrompt, timeoutMs, sdkMcpServers)
+    } catch (err) {
+      const msg = (err as Error).message
+      if (msg === 'Agent timed out') throw err
+      const next = escalate(model)
+      if (!next) throw err
+      console.log(`[agent] routine escalating ${model} → ${next}: ${msg}`)
+      model = next
+    }
+  }
+}
+
+async function runRoutineAgentOnce(
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  timeoutMs: number,
+  // Typed loosely (matching streamAgentChatOnce's mcpServers param) rather than as
+  // ReturnType<typeof buildBridgedMcpServers> — the bridge's { type: 'sdk', instance }
+  // shape wraps the lower-level MCP `Server` class, while the SDK's own Options type
+  // expects the higher-level `McpServer`; the bridge already works correctly with the
+  // SDK at runtime (streamAgentChat has used it this way since it was introduced), so
+  // this is a type-only mismatch, not a real incompatibility.
+  mcpServers: Record<string, unknown>,
+): Promise<RoutineAgentResult> {
+  const ac = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => { timedOut = true; ac.abort() }, timeoutMs)
+
+  let text = ''
+  let resultMsg: SDKResultMessage | null = null
+  const toolOutputs: string[] = []
+  const failures: RoutineAgentFailure[] = []
+  // Maps tool_use_id → { server, tool } so a later tool_result (success or error)
+  // can be labeled the way the old callTool loop labeled entries: "[server.tool]".
+  const toolUseIndex = new Map<string, { server: string; tool: string }>()
+
+  const hasMcp = Object.keys(mcpServers).length > 0
+  const allMcpServers: Record<string, any> = { ...mcpServers }  // eslint-disable-line @typescript-eslint/no-explicit-any
+
+  try {
+    for await (const msg of query({
+      prompt: userPrompt,
+      options: {
+        systemPrompt,
+        model,
+        // Strip built-in tools — scheduled routine runs use MCP tools only.
+        tools: [],
+        maxTurns: 15,
+        permissionMode: 'default',
+        ...(hasMcp ? { mcpServers: allMcpServers } : {}),
+        env: buildAgentEnv(),
+        pathToClaudeCodeExecutable: resolveClaudeExecutable(),
+        canUseTool: async (toolName: string, toolInput: unknown) => {
+          const parts = toolName.split('__')
+          const baseName = parts.length >= 3 ? parts.slice(2).join('__') : toolName
+          const inputRecord = (toolInput as Record<string, unknown>) ?? {}
+          if (isReadOnlyTool(baseName)) return { behavior: 'allow', updatedInput: inputRecord }
+          return { behavior: 'deny', message: 'write tools are not available in scheduled routine runs' }
+        },
+        abortController: ac,
+      },
+    })) {
+      if (msg.type === 'assistant') {
+        for (const block of msg.message?.content ?? []) {
+          const b = block as any // eslint-disable-line @typescript-eslint/no-explicit-any
+          if (b.type === 'text') text += b.text
+          if (b.type === 'tool_use') {
+            const parts = String(b.name ?? '').split('__')
+            const server = parts.length >= 2 ? parts[1] : ''
+            const tool = parts.length >= 3 ? parts.slice(2).join('__') : String(b.name ?? '')
+            if (b.id) toolUseIndex.set(String(b.id), { server, tool })
+          }
+        }
+      }
+      if (msg.type === 'result') resultMsg = msg
+      if (msg.type === 'user') {
+        const userContent: unknown[] = (msg as any).message?.content ?? [] // eslint-disable-line @typescript-eslint/no-explicit-any
+        for (const block of userContent) {
+          const b = block as Record<string, unknown>
+          if (b.type !== 'tool_result') continue
+          const toolUseId = String(b.tool_use_id ?? '')
+          const ref = toolUseIndex.get(toolUseId) ?? { server: 'unknown', tool: 'unknown' }
+          const contentText = typeof b.content === 'string'
+            ? b.content
+            : Array.isArray(b.content)
+            ? (b.content as Array<Record<string, unknown>>)
+                .filter((c) => c.type === 'text')
+                .map((c) => String(c.text ?? ''))
+                .join('\n')
+            // JSON.stringify returns the runtime value undefined (not the string
+            // "undefined") when b.content is itself undefined — coalesce so a
+            // RoutineAgentFailure.message is never actually undefined at runtime.
+            : (JSON.stringify(b.content) ?? '')
+          if (b.is_error) {
+            logError('agent', `tool_result error (tool_use_id=${toolUseId}): ${contentText}`)
+            failures.push({ server: ref.server, tool: ref.tool, message: contentText })
+          } else {
+            toolOutputs.push(`[${ref.server}.${ref.tool}]\n${contentText}`)
+          }
+        }
+      }
+    }
+  } catch (err) {
+    clearTimeout(timer)
+    if (timedOut) throw new Error('Agent timed out')
+    throw err
+  }
+
+  clearTimeout(timer)
+  if (!resultMsg) {
+    console.warn('[agent] routine SDK completed without emitting a result message — usage not recorded')
+    throw new Error('Agent returned no result message')
+  }
+  recordSdkUsage('routine_run', model, resultMsg)
+  if (resultMsg.is_error) {
+    // A run can legitimately end in_error after successfully gathering some data —
+    // most commonly hitting maxTurns mid-chain on a long list (the exact "list, then
+    // fetch per item" shape this whole path exists for). Discarding everything
+    // collected so far in that case would throw away real, already-fetched data over
+    // a run that was still substantively productive — return the partial result
+    // instead so routines.ts can still build a digest from what was gathered.
+    if (toolOutputs.length > 0 || failures.length > 0) {
+      return {
+        text,
+        rawOutput: toolOutputs.join('\n\n---\n\n'),
+        successCount: toolOutputs.length,
+        failures,
+      }
+    }
+    throw new Error(
+      typeof (resultMsg as any).result === 'string'
+        ? (resultMsg as any).result
+        : 'Agent returned an error',
+    )
+  }
+  if (!text) {
+    const r = typeof (resultMsg as any).result === 'string' ? (resultMsg as any).result as string : ''
+    if (r && !r.startsWith('{') && !r.startsWith('[')) text = r
+  }
+
+  return {
+    text,
+    rawOutput: toolOutputs.join('\n\n---\n\n'),
+    successCount: toolOutputs.length,
+    failures,
   }
 }
 

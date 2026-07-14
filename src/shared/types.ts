@@ -674,6 +674,7 @@ export type UsageSource =
   | 'routine_digest'
   | 'routine_setup'
   | 'routine_chat'
+  | 'routine_run'
   | 'plan_chat'
   | 'checkin_chat'
   | 'checkin_extract'
