@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react'
-import { Check, RefreshCw, Wand2, AlertTriangle, KeyRound } from 'lucide-react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { Check, RefreshCw, Wand2, AlertTriangle, KeyRound, Puzzle } from 'lucide-react'
 import LogoMark from '../../LogoMark'
 import ServerCatalogPicker from './ServerCatalogPicker'
 import { useToast } from '../toast/ToastProvider'
 import type { AppConfig, McpServerConfig, OAuthAppCredential, OAuthProvider, ResolvedOwnerHandles, AuthSource } from '@shared/types'
+import { IDENTITY_SURFACES } from '@shared/types'
 
 interface Props {
   onComplete: () => void
@@ -19,6 +20,8 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
   const [savingKey, setSavingKey] = useState(false)
   const [existingServers, setExistingServers] = useState<McpServerConfig[]>([])
   const [serversAdded, setServersAdded] = useState<McpServerConfig[]>([])
+  const serversAddedRef = useRef<McpServerConfig[]>([])
+  const addingServerRef = useRef(false)
   const [oauthCreds, setOauthCreds] = useState<AppConfig['oauth_apps']>({})
   const [transitioning, setTransitioning] = useState(false)
   const [ownerName, setOwnerName] = useState('')
@@ -112,12 +115,20 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
   const handleBack = () => { if (!transitioning) setStep((s) => (s - 1) as Step) }
 
   const handleAddServer = async (srv: McpServerConfig) => {
-    const allServers = [...existingServers, ...serversAdded, srv]
+    // Guard against rapid repeat clicks / concurrent adds racing on a stale
+    // serversAdded snapshot — serialize on a ref so each add sees the latest list.
+    if (addingServerRef.current) return
+    addingServerRef.current = true
     try {
+      const allServers = [...existingServers, ...serversAddedRef.current, srv]
       await api.config.update({ mcp_servers: allServers })
-      setServersAdded((prev) => [...prev, srv])
-    } catch {
+      serversAddedRef.current = [...serversAddedRef.current, srv]
+      setServersAdded(serversAddedRef.current)
+    } catch (err) {
       toast.error('Could not add tool', { message: 'Config could not be saved — try again.' })
+      throw err
+    } finally {
+      addingServerRef.current = false
     }
   }
 
@@ -145,6 +156,18 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
       setTransitioning(false)
     }
   }
+
+  // Only ask about surfaces the user actually enabled a tool for, so the identity
+  // step isn't a fixed 5-field form. A surface still shows if it already has a
+  // saved handle (e.g. set in a previous run) even if the matching tool isn't added.
+  const visibleSurfaces = useMemo(() => {
+    const enabledNames = new Set(
+      [...existingServers, ...serversAdded]
+        .filter((s) => s.enabled !== false)
+        .map((s) => s.name)
+    )
+    return IDENTITY_SURFACES.filter((s) => enabledNames.has(s) || !!ownerHandles?.[s])
+  }, [existingServers, serversAdded, ownerHandles])
 
   const handleSaveApiKey = async () => {
     if (!apiKeyInput.trim()) return
@@ -389,16 +412,18 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
                 <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                   Optional — you can fill this in later via Settings.
                 </span>
-                <button
-                  className="btn btn--ghost btn--sm"
-                  onClick={handleAutoFillOwner}
-                  disabled={autoFilling}
-                  style={{ display: 'flex', alignItems: 'center', gap: 5 }}
-                  title="Pre-fill handles from connected MCP tools"
-                >
-                  {autoFilling ? <span className="spinner" /> : <Wand2 size={12} />}
-                  {autoFilling ? 'Resolving…' : 'Auto-fill'}
-                </button>
+                {visibleSurfaces.length > 0 && (
+                  <button
+                    className="btn btn--ghost btn--sm"
+                    onClick={handleAutoFillOwner}
+                    disabled={autoFilling}
+                    style={{ display: 'flex', alignItems: 'center', gap: 5 }}
+                    title="Pre-fill handles from connected MCP tools"
+                  >
+                    {autoFilling ? <span className="spinner" /> : <Wand2 size={12} />}
+                    {autoFilling ? 'Resolving…' : 'Auto-fill'}
+                  </button>
+                )}
               </div>
 
               <div className="form-group">
@@ -412,31 +437,42 @@ export default function OnboardingWizard({ onComplete }: Props): React.ReactElem
                 />
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px' }}>
-                {(['github', 'slack', 'jira', 'linear', 'notion'] as const).map((surface) => {
-                  const status = handleStatus[surface]
-                  return (
-                    <div key={surface} className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                        <span style={{ textTransform: 'capitalize' }}>{surface}</span>
-                        {status && (
-                          status.needsReview
-                            ? <span title="Confirm — may not match your graph"><AlertTriangle size={11} color="var(--color-warning, #f59e0b)" /></span>
-                            : <span title="Auto-filled"><Check size={11} color="var(--color-success, #22c55e)" /></span>
-                        )}
-                      </label>
-                      <input
-                        className="form-input"
-                        type="text"
-                        placeholder={surface === 'jira' ? 'Display Name' : `handle, handle2`}
-                        value={ownerHandles?.[surface] ?? ''}
-                        onChange={(e) => setOwnerHandles((prev) => ({ ...(prev ?? {}), [surface]: e.target.value }))}
-                        style={status?.needsReview ? { borderColor: 'var(--color-warning, #f59e0b)' } : undefined}
-                      />
-                    </div>
-                  )
-                })}
-              </div>
+              {visibleSurfaces.length > 0 ? (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px' }}>
+                  {visibleSurfaces.map((surface) => {
+                    const status = handleStatus[surface]
+                    return (
+                      <div key={surface} className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <span style={{ textTransform: 'capitalize' }}>{surface}</span>
+                          {status && (
+                            status.needsReview
+                              ? <span title="Confirm — may not match your graph"><AlertTriangle size={11} color="var(--color-warning, #f59e0b)" /></span>
+                              : <span title="Auto-filled"><Check size={11} color="var(--color-success, #22c55e)" /></span>
+                          )}
+                        </label>
+                        <input
+                          className="form-input"
+                          type="text"
+                          placeholder={surface === 'jira' ? 'Display Name' : `handle, handle2`}
+                          value={ownerHandles?.[surface] ?? ''}
+                          onChange={(e) => setOwnerHandles((prev) => ({ ...(prev ?? {}), [surface]: e.target.value }))}
+                          style={status?.needsReview ? { borderColor: 'var(--color-warning, #f59e0b)' } : undefined}
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '10px 12px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)',
+                  fontSize: 12, color: 'var(--text-secondary)'
+                }}>
+                  <Puzzle size={14} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+                  Connect a tool like GitHub or Slack to record your handles for it — you can also add them later in Settings.
+                </div>
+              )}
             </div>
 
             <WizardNav

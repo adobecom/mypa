@@ -14,10 +14,11 @@ Credentials are resolved in priority order by `resolveAuthSource()` in `src/main
 |---|---|---|
 | Stored API key | `config.claude.apiKey` is non-empty | `'apikey'` |
 | Env var | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` in `process.env` | `'env'` |
-| Claude login | `~/.claude/.credentials.json` exists | `'cli-login'` |
+| Claude login (file) | `~/.claude/.credentials.json` exists | `'cli-login'` |
+| Claude login (Keychain, macOS only) | `security find-generic-password -s "Claude Code-credentials"` succeeds | `'cli-login'` |
 | None | None of the above | `'none'` |
 
-**Important macOS caveat:** A Keychain-stored Claude Code login token is not readable by the file-based probe in step 3. `resolveAuthSource()` may return `{ ok: false, source: 'none' }` even when valid Keychain credentials exist. The onboarding wizard and Settings health panel treat this as a soft warning, not a hard error.
+`claude login` on macOS stores its session in the Keychain rather than `~/.claude/.credentials.json`, so the file probe alone missed it — the Keychain probe (macOS only, via `execFileSync('security', ...)`) closes that gap. The Agent SDK subprocess runs as the same OS user, so it can read the same Keychain entry at call time, making this detection accurate rather than a soft-warning workaround. The probe runs with a 2s `timeout`: it's synchronous on the single-threaded main process, and if the Keychain item's ACL doesn't already authorize this process, macOS can show a native access-authorization dialog that `security` would otherwise block on indefinitely — the timeout makes an unresponded prompt fail closed (`ok: false`) instead of freezing the whole app.
 
 `buildAgentEnv()` (also in `auth.ts`) returns the `env` override to pass to `query()`:
 - When an API key is configured: `{ ...process.env, ANTHROPIC_API_KEY: key }`.  
@@ -312,6 +313,8 @@ This clause is appended in `inferIntent` (`inference.ts`) after `buildOwnerClaus
 **ASAR path fix — `pathToClaudeCodeExecutable` must be set explicitly.** The SDK's `sdk.mjs` lives inside `app.asar`; when it resolves the platform binary relative to its own `import.meta.url` it produces a path that includes `app.asar` — which is a file, not a directory — causing `spawn ENOTDIR` on every AI call. The fix is in `agent.ts`: `resolveClaudeExecutable()` computes the real, unpacked path via `app.getAppPath().replace('app.asar', 'app.asar.unpacked')`, then all four `query()` call sites (`runAgentOnce`, `streamAgentChatOnce`, `runAgentWithMcpOnce`, `runAuthoringAgent`) pass `pathToClaudeCodeExecutable: resolveClaudeExecutable()`. This short-circuits the SDK's broken default without affecting dev mode (where `app.getAppPath()` points to the project root and the binary exists at the direct `node_modules` path).
 
 ## Changelog
+
+- 2026-07-13 — **`resolveAuthSource()` now probes the macOS Keychain (`auth.ts`).** Onboarding's "Connect Claude" step was reporting no credentials for users logged in via `claude login` on macOS, because that flow stores its session in the Keychain, not `~/.claude/.credentials.json`. Added a `security find-generic-password -s "Claude Code-credentials"` check (guarded by `process.platform === 'darwin'`) as a fourth detection step, so Keychain-only logins now resolve to `{ ok: true, source: 'cli-login' }` instead of falling through to `'none'` and prompting for an API key that wasn't actually needed.
 
 - 2026-07-09 — **Security review follow-up on `runAuthoringAgent` (`agent.ts`).** `canUseTool` now also confines `Grep`/`Glob` to the worktree by path (previously unconditionally allowed — a de facto arbitrary-file-read across the whole filesystem, since neither tool's `path` argument was checked). `BASH_DENY_RE` expanded to cover `git ls-remote` and common network/DNS tools (`ftp`, `telnet`, `socat`, `dig`, `nslookup`, `getent hosts`, `/dev/tcp/`, `/dev/udp/`) with no legitimate use in a build/lint/test workflow — deliberately does not block bare interpreter invocation (`python`/`node`/`perl`/`ruby`) since the system prompt legitimately allows running local test suites through them. The file-level and inline comments were also corrected to stop overclaiming full containment for `Bash` and to honestly document the residual live-credential-in-environment risk (see the paragraph above).
 

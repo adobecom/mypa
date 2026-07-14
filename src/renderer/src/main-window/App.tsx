@@ -246,17 +246,25 @@ function AppShell(): React.ReactElement {
 
   if (!config) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: 'var(--bg-base)', color: 'var(--text-muted)', fontSize: 13 }}>
-        Loading…
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--bg-base)' }}>
+        <div className="drag-strip" />
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+          Loading…
+        </div>
       </div>
     )
   }
 
   if (!config.onboarding_complete) {
     return (
-      <div style={{ position: 'relative', height: '100vh', overflow: 'hidden', background: 'var(--bg-base)' }}>
+      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: 'var(--bg-base)' }}>
         <AmbientBackground variant="main" />
-        <div style={{ position: 'relative', zIndex: 1, overflowY: 'auto', height: '100%' }}>
+        {/* Real layout space, not overlaid on the scrollable content below — an absolutely
+            positioned strip would get scrolled-over content underneath it, making that
+            content unclickable (and drag the window instead) whenever a step's content
+            is taller than the viewport. */}
+        <div className="drag-strip" style={{ position: 'relative', zIndex: 1 }} />
+        <div style={{ position: 'relative', zIndex: 1, overflowY: 'auto', flex: 1, minHeight: 0 }}>
           <OnboardingWizard onComplete={() => window.electron.config.get().then(setConfig)} />
         </div>
       </div>

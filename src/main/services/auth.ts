@@ -1,5 +1,6 @@
 import { existsSync } from 'fs'
 import { join } from 'path'
+import { execFileSync } from 'child_process'
 import { readConfig } from './config'
 
 export type AuthSource = 'apikey' | 'env' | 'cli-login' | 'none'
@@ -29,12 +30,13 @@ export function buildAgentEnv(): Record<string, string | undefined> | undefined 
  *   1. Stored API key in config (highest — user explicitly provided it)
  *   2. ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var (process-inherited)
  *   3. ~/.claude/.credentials.json presence (Claude Code login session)
- *   4. None detected
+ *   4. macOS Keychain "Claude Code-credentials" entry (Claude Code login session)
+ *   5. None detected
  *
- * NOTE: On macOS a Keychain-stored Claude Code login token is NOT readable by
- * this file-based probe — resolveAuthSource() may return { ok: false, source: 'none' }
- * even when valid Keychain credentials exist. The onboarding wizard treats this as
- * a soft warning (not a hard block) so Keychain-auth users are not stranded.
+ * NOTE: `claude login` on macOS stores its session in the Keychain rather than
+ * ~/.claude/.credentials.json, so step 3 alone misses it — step 4 covers that case.
+ * The Agent SDK subprocess runs as the same OS user, so it can read the same
+ * Keychain entry at call time, making this detection accurate.
  */
 export function resolveAuthSource(): { ok: boolean; source: AuthSource } {
   // 1. Stored API key
@@ -52,5 +54,32 @@ export function resolveAuthSource(): { ok: boolean; source: AuthSource } {
     return { ok: true, source: 'cli-login' }
   }
 
+  // 4. macOS Keychain login session (also written by `claude login`)
+  if (process.platform === 'darwin' && hasKeychainLogin()) {
+    return { ok: true, source: 'cli-login' }
+  }
+
   return { ok: false, source: 'none' }
+}
+
+/**
+ * Checks for a macOS Keychain entry for the Claude Code CLI login session.
+ *
+ * Bounded with a timeout: if the item's ACL doesn't already authorize this process,
+ * macOS can pop a native "wants to access Keychain item" dialog and `security` blocks
+ * waiting for a response. Since this runs synchronously on Electron's single main-process
+ * thread (and is called on every onboarding/Settings health check, not just once), an
+ * unbounded call could freeze the whole app — IPC, cron, tray — until the dialog is
+ * dismissed. `timeout` kills the child and makes this fail closed instead.
+ */
+function hasKeychainLogin(): boolean {
+  try {
+    execFileSync('security', ['find-generic-password', '-s', 'Claude Code-credentials'], {
+      stdio: 'ignore',
+      timeout: 2000
+    })
+    return true
+  } catch {
+    return false
+  }
 }

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2, User, Power, ChevronDown, ChevronRight } from 'lucide-react'
-import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles, GraphNode, GraphEdge, Memory, RepoLink, VaultConfig, CheckInConfig } from '@shared/types'
+import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles, IdentitySurface, GraphNode, GraphEdge, Memory, RepoLink, VaultConfig, CheckInConfig } from '@shared/types'
+import { IDENTITY_SURFACES } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import { SCOPE_SURFACES } from '@shared/scope-surfaces'
 import ServerCatalogPicker from './ServerCatalogPicker'
@@ -8,8 +9,8 @@ import { ScheduleBuilder } from './ScheduleBuilder'
 import { useToast } from '../toast/ToastProvider'
 import Tabs from '@renderer/components/Tabs'
 
-const OWNER_SURFACES = ['github', 'slack', 'jira', 'linear', 'notion'] as const
-type OwnerSurface = typeof OWNER_SURFACES[number]
+const OWNER_SURFACES = IDENTITY_SURFACES
+type OwnerSurface = IdentitySurface
 
 // Fields governed by the single Settings Save button — everything the page treats as a
 // pending edit rather than an instant-apply control. Ambient tiers, Working Context
