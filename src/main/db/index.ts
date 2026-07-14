@@ -275,6 +275,7 @@ export function dbReproposeIntent(
     confidence?: number
     reversibility?: string
     required_approval?: boolean
+    cta_label?: string | null
   }
 ): void {
   const db = getDb()
@@ -285,6 +286,7 @@ export function dbReproposeIntent(
   if (update.confidence !== undefined) db.prepare('UPDATE intents SET confidence = ? WHERE id = ?').run(update.confidence, id)
   if (update.reversibility !== undefined) db.prepare('UPDATE intents SET reversibility = ? WHERE id = ?').run(update.reversibility, id)
   if (update.required_approval !== undefined) db.prepare('UPDATE intents SET required_approval = ? WHERE id = ?').run(update.required_approval ? 1 : 0, id)
+  if (update.cta_label !== undefined) db.prepare('UPDATE intents SET cta_label = ? WHERE id = ?').run(update.cta_label, id)
 }
 
 export function dbAddPlanMessage(
@@ -801,8 +803,8 @@ export function dbCreateIntent(
     .prepare(
       `INSERT INTO intents
         (id, type, trigger_kind, confidence, urgency, surface, verb, target, payload, rationale,
-         reversibility, required_approval, tier, status, context_packet, created_at, actions)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+         reversibility, required_approval, tier, status, context_packet, created_at, actions, cta_label)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     )
     .run(
       id,
@@ -821,7 +823,8 @@ export function dbCreateIntent(
       'pending',
       JSON.stringify(contextPacket),
       created_at,
-      JSON.stringify(obj.actions ?? [])
+      JSON.stringify(obj.actions ?? []),
+      obj.cta_label ?? null
     )
   return dbGetIntent(id)!
 }

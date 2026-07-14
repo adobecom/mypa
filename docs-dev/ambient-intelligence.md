@@ -175,6 +175,7 @@ Each intent has:
 - `reversibility` — `reversible` or `irreversible`; irreversible intents always require approval.
 - `tier` — the trust tier at the time it was created (affects whether it runs automatically).
 - `status` lifecycle: `pending → surfaced → approved / dismissed / challenged → executed / failed / expired`.
+- `cta_label` — an optional, LLM-authored short imperative button label for the proposed action (e.g. "Merge PR #482", "Post comment"), emitted alongside `proposed_action` in every `inference.ts` prompt variant. `IntentCard.tsx`'s primary approve button prefers this text over its built-in heuristic label (`buildActionCtaLabel`), which remains as the fallback for older intents or when the model omits it. `ProposedChatAction` (the in-chat action-chip type) carries the same field and `ChatThread.tsx`'s `ActionChip` Approve button is wired to prefer it too, but nothing currently constructs a *new* pending `ProposedChatAction` with a populated `cta_label` — only `dbCreateIntent`/`dbReproposeIntent` (the `Intent` path behind `IntentCard`) populate it today, so the `ActionChip` case is forward-compatible plumbing rather than active behavior.
 
 ---
 
@@ -316,6 +317,8 @@ These rows appear in `ambient.getLog()` interleaved with real `emitted`/`execute
 - `totalHits: N > 0` but no `emitted` row follows ⇒ inference dropped every candidate; see the `dropped:` breakdown in the cycle console log
 
 ## Changelog
+
+- 2026-07-14 — **LLM-authored CTA labels (`inference.ts`, `types.ts`, `db/schema.ts`, `db/index.ts`).** Every `IntentObject` JSON schema variant except the author-fix path (`SYSTEM_PROMPT`, `ROUTINE_SYSTEM_PROMPT`, `SUGGEST_SYSTEM_PROMPT`, `DEEP_SYSTEM_PROMPT`) now asks the model for an optional `cta_label` — a short imperative button label naming the concrete action (e.g. "Merge PR #482"), parsed by `parseIntentObject`/`parseDeepIntentObject` and persisted in the new `intents.cta_label` column (see [database.md](database.md#changelog)). `AUTHOR_FIX_SYSTEM_PROMPT` is intentionally excluded — `author_fix` intents render via `WorkProductCard`, not `IntentCard`'s primary button, so a `cta_label` there would never surface. `IntentCard.tsx`'s primary approve button prefers `cta_label` over its previous hardcoded/heuristic labels ("Approve", "Send", `buildActionCtaLabel`), which remain in place as a fallback. `ProposedChatAction`/`ChatThread.tsx`'s `ActionChip` also gained the field and a preference check, but no code path currently constructs a new pending `ProposedChatAction` with `cta_label` populated — that half of the change is forward-compatible plumbing, not yet active. Out of scope: `InlineToolApproval`'s mid-chat tool-approval popup, which gates raw MCP tool calls outside the `inference.ts` pipeline and keeps its static "Approve"/"Deny" text.
 
 - 2026-07-14 — **`ambient:tray-state`/`ambient:digest-ready` now broadcast to both renderer windows (`ambient.ts`).** Previously sent only to the widget window; the main window never received them even when open, which was part of a wider renderer state-sync bug. See [services.md](services.md#ambientts--ambient-polling-loop).
 

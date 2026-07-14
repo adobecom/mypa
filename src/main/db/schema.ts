@@ -323,6 +323,10 @@ export function initSchema(db: Database.Database): void {
   // Generic concrete MCP action calls on intents — emitted by agentic deep-enrichment (added 2026-06-26)
   // JSON-encoded McpActionRef[] — preferred over surface/verb/payload for execution when non-empty
   tryExec("ALTER TABLE intents ADD COLUMN actions TEXT NOT NULL DEFAULT '[]'")
+  // LLM-authored primary-button label for the intent's proposed action, e.g. "Merge PR #482"
+  // (added 2026-07-14). Nullable — older rows and non-actionable intents fall back to a
+  // renderer-side heuristic label.
+  tryExec('ALTER TABLE intents ADD COLUMN cta_label TEXT')
 
   // Data normalisation — revert pre-ceiling challenge drift (added 2026-06-18).
   // Before AUTO_ESCALATE_CEILING was introduced, repeated challenges could escalate a

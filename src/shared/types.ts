@@ -107,6 +107,11 @@ export interface ProposedChatAction {
   tier: Tier
   status: 'pending' | 'executed' | 'dismissed' | 'failed'
   resultText?: string
+  /**
+   * Short imperative button label naming the concrete action (e.g. "Merge PR #482",
+   * "Post GitHub comment"). LLM-authored; falls back to a heuristic label when absent.
+   */
+  cta_label?: string | null
 }
 
 /**
@@ -476,6 +481,12 @@ export interface IntentObject {
    *  When present and non-empty, execution uses this instead of proposed_action.
    *  proposed_action is kept as a display/policy summary derived from actions[0]. */
   actions?: McpActionRef[]
+  /**
+   * Short imperative button label naming the concrete action (e.g. "Merge PR #482",
+   * "Post GitHub comment"). LLM-authored; falls back to a heuristic label when absent
+   * (non-actionable intents, or models that omit it).
+   */
+  cta_label?: string | null
 }
 
 export interface Intent {
@@ -500,6 +511,8 @@ export interface Intent {
   challenge_reason: string | null
   /** Concrete MCP tool calls from agentic deep-enrichment (see IntentObject.actions). */
   actions?: McpActionRef[]
+  /** LLM-authored primary-button label (see IntentObject.cta_label). */
+  cta_label?: string | null
 }
 
 export interface Signal {

@@ -154,6 +154,7 @@ Proposed actions derived from signal analysis.
 | `error` | TEXT | Nullable |
 | `urgency` | REAL | Default `0` — added via `ALTER TABLE` (see Changelog, 2026-06-11) |
 | `actions` | TEXT | JSON `McpActionRef[]`, default `'[]'` — added via `ALTER TABLE` (see Changelog, 2026-06-26); when non-empty, `executeActions()` uses this instead of `surface`/`verb`/`payload` |
+| `cta_label` | TEXT | Nullable — LLM-authored primary-button label (e.g. "Merge PR #482"), added via `ALTER TABLE` (see Changelog, 2026-07-14); renderer falls back to a heuristic label when absent |
 
 #### `intent_threads` _(deprecated)_
 
@@ -407,6 +408,8 @@ Vectors are stored as raw little-endian Float32 BLOBs and similarity search is p
 ---
 
 ## Changelog
+
+- 2026-07-14 — **`intents.cta_label` column:** additive `ALTER TABLE` migration adds `cta_label TEXT` (nullable) to the `intents` table. Stores an LLM-authored, short imperative button label for the intent's proposed action (e.g. "Merge PR #482", "Post comment") — added to the `IntentObject` JSON schema across the lightweight, routine, re-propose, and deep-enrichment `inference.ts` prompt variants (not the author-fix path — those intents render via `WorkProductCard`, not `IntentCard`) and parsed by `parseIntentObject`/`parseDeepIntentObject`. `dbCreateIntent` persists `obj.cta_label ?? null`; `deserializeIntent` passes it through via its existing `...row` spread (no code change needed there). `dbReproposeIntent` accepts an optional `cta_label` update so re-proposing an intent can refresh its label. `IntentCard.tsx`'s primary action button prefers `cta_label` when present, falling back to its existing heuristic label (`buildActionCtaLabel`) for older rows or when the model omits it. `ProposedChatAction` gained the same field and `ChatThread.tsx`'s `ActionChip` Approve button checks it too, but no current code path populates `cta_label` on a newly-created pending `ProposedChatAction` — that consumer is inert until a producer exists.
 
 - 2026-07-09 — **New `work_products` table (20th table):** additive `CREATE TABLE IF NOT EXISTS` in `schema.ts`, `UNIQUE(intent_id)` FK → `intents` (CASCADE DELETE). Backs the code-authoring flow — see [code-authoring.md](code-authoring.md), `authoring.ts`, `worktree.ts`. New index `idx_work_products_status`. New CRUD in `db/index.ts`: `dbCreateWorkProduct`, `dbGetWorkProduct`, `dbGetWorkProductByIntent`, `dbUpdateWorkProduct`, `deserializeWorkProduct` (parses `files_changed` JSON).
 

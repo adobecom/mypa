@@ -248,7 +248,7 @@ function ActionChip({
             onClick={handleApprove}
             disabled={busy || (!!draftKey && !draft.trim())}
           >
-            <Check size={11} /> Approve
+            <Check size={11} /> {action.cta_label ?? 'Approve'}
           </button>
         </div>
       </div>
