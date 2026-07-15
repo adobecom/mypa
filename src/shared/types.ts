@@ -617,7 +617,7 @@ export interface AmbientConfig {
 
 // ─── Check-ins ───────────────────────────────────────────────────────────────
 
-export type CheckInStatus = 'active' | 'extracting' | 'complete' | 'error'
+export type CheckInStatus = 'active' | 'extracting' | 'complete' | 'error' | 'dismissed'
 
 export interface CheckIn {
   id: string

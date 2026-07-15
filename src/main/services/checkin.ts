@@ -88,7 +88,19 @@ export async function startCheckIn(
   win: BrowserWindow | null
 ): Promise<CheckIn> {
   const existing = dbGetActiveCheckIn()
-  if (existing) return existing
+  if (existing) {
+    // A newer check-in should replace an old one the user never engaged with (just the
+    // opening briefing, no reply yet). If they've already started talking, don't wipe the
+    // live conversation out from under them — hand back the existing session instead.
+    const engaged = dbGetCheckInThread(existing.id).some((m) => m.role === 'user')
+    if (engaged) return existing
+
+    // The old session's opening-briefing stream may still be in flight — cancel it so it
+    // can't land a stray assistant message into a row the UI now shows as superseded.
+    cancelClaudeStream(existing.id)
+    dbUpdateCheckIn(existing.id, { status: 'dismissed', completed_at: new Date().toISOString() })
+    broadcast('checkin:status-changed', dbGetCheckIn(existing.id))
+  }
 
   const checkin = dbCreateCheckIn(trigger)
   broadcast('checkin:started', checkin)

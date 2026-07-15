@@ -5,6 +5,7 @@ import {
   dbAddRunMessage,
   dbGetRunThread,
   dbGetRun,
+  dbGetRunsForRoutine,
   dbUpsertNode,
   dbBumpNodeWeight
 } from '../db/index'
@@ -28,7 +29,27 @@ function isAuthFailure(err: unknown): boolean {
 // The valid IntentSurface values. Used to guard server names that may not be valid surfaces.
 const VALID_SURFACES: ReadonlySet<IntentSurface> = new Set(['github', 'jira', 'slack', 'linear'])
 
+// A newer run of the same routine should replace any prior run the user never dealt with —
+// e.g. a 9 AM PR-review run left pending when the 5 PM run fires. Only untouched runs
+// (pending_response/error) are superseded; a run the user has already started chatting into
+// (in_progress) is left alone so a live conversation is never wiped out from under them.
+function supersedePriorRuns(routineId: string): void {
+  const prior = dbGetRunsForRoutine(routineId)
+  let dismissedAny = false
+  for (const r of prior) {
+    if (r.status === 'pending_response' || r.status === 'error') {
+      const completed_at = r.completed_at ?? new Date().toISOString()
+      dbUpdateRun(r.id, { status: 'dismissed', completed_at })
+      broadcast('routine:run-completed', { ...r, status: 'dismissed', completed_at })
+      dismissedAny = true
+    }
+  }
+  if (dismissedAny) updateBadgeCount()
+}
+
 export async function executeRoutine(routine: Routine, widgetWin: BrowserWindow | null): Promise<void> {
+  supersedePriorRuns(routine.id)
+
   // Upsert the routine as a graph node (idempotent — same key on every run)
   let routineNodeId: string | null = null
   try {
