@@ -253,7 +253,7 @@ Push channels (main → renderer):
 | `update:error` | `message: string` | Update check or download failed |
 | `checkin:started` | `CheckIn` | A new check-in session has been created |
 | `checkin:message` | `{ checkinId, chunk, done, error? }` | Streaming token from briefing or chat response |
-| `checkin:status-changed` | `CheckIn` | Session status changed (extracting → complete / error) |
+| `checkin:status-changed` | `CheckIn` | Session status changed (extracting → complete / error, or active → dismissed when superseded by a newer session) |
 | `navigate:checkin` | `string \| null` | Open main window on the Check-in page and expand the given session |
 
 ## Key types (abbreviated)
@@ -281,7 +281,7 @@ Manage PA check-in sessions and their chat threads.
 
 | Method | Signature | Description |
 |---|---|---|
-| `start` | `() → CheckIn` | Start a new check-in (returns existing active session if one is in progress) |
+| `start` | `() → CheckIn` | Start a new check-in — if an active session already exists and the user has replied to it, returns that session unchanged; otherwise supersedes it (`status: 'dismissed'`) and starts a fresh one |
 | `getActive` | `() → CheckIn \| null` | Get the current active session, if any |
 | `getAll` | `(limit?) → CheckIn[]` | List all sessions, newest first |
 | `getThread` | `(checkinId) → ChatMessage[]` | Fetch full message thread for a session |

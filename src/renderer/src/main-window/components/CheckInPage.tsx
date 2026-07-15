@@ -116,6 +116,7 @@ function CheckInDetail({ checkin, onCheckinUpdated }: CheckInDetailProps): React
   const isExtracting = current.status === 'extracting'
   const isComplete = current.status === 'complete'
   const isError = current.status === 'error'
+  const isDismissed = current.status === 'dismissed'
 
   const extractionSummary = parseExtractionSummary(current.extraction_summary)
 
@@ -170,13 +171,20 @@ function CheckInDetail({ checkin, onCheckinUpdated }: CheckInDetailProps): React
         </div>
       )}
 
+      {isDismissed && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', color: 'var(--text-muted)', fontSize: 12 }}>
+          <AlertCircle size={13} />
+          Superseded by a newer check-in — this session was never started.
+        </div>
+      )}
+
       <ChatThread
         messages={thread}
         streaming={streaming}
         streamingContent={streamContent}
         onSend={handleSend}
         onStop={handleStop}
-        sendDisabled={streaming || isExtracting || isComplete || isError}
+        sendDisabled={streaming || isExtracting || isComplete || isError || isDismissed}
         error={chatError}
         pendingToolApproval={pendingToolApproval}
         onApproveToolUse={async (editedInput) => {
@@ -236,6 +244,14 @@ export default function CheckInPage({ activeCheckinId, onCheckinHandled }: Props
       setCheckins((prev) => [ci, ...prev.filter((c) => c.id !== ci.id)])
       setExpanded(ci.id)
     })
+    return unsub
+  }, [])
+
+  // Keep the list row in sync when a check-in's status changes elsewhere — in particular,
+  // when a newer check-in supersedes an old undealt-with one that isn't currently expanded
+  // (so CheckInDetail's own listener never mounts to catch the update).
+  useEffect(() => {
+    const unsub = api.on('checkin:status-changed', (payload) => handleCheckinUpdated(payload as CheckIn))
     return unsub
   }, [])
 
@@ -306,6 +322,8 @@ export default function CheckInPage({ activeCheckinId, onCheckinHandled }: Props
                     ? 'Extracting knowledge…'
                     : ci.status === 'error'
                     ? 'Extraction failed'
+                    : ci.status === 'dismissed'
+                    ? 'Superseded by a newer check-in'
                     : ''}
                 </div>
                 <span className="run-log-row__time">{formatTs(ci.started_at)}</span>
