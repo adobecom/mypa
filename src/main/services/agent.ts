@@ -26,6 +26,26 @@ const STREAM_STARTUP_TIMEOUT_MS = 140_000
 // subprocess for the life of the app instead of eventually self-terminating.
 const HUMAN_WAIT_HARD_CAP_MS = 30 * 60_000
 
+/**
+ * Serializes async steps that each begin with something the user must see (an approval
+ * card or question chip), so a second call queued behind a first never broadcasts its
+ * own card until the first has fully resolved. Without this, the SDK yielding two
+ * tool_use blocks needing approval close together on one stream (parallel tool calls
+ * in a single turn, or rapid retries) can broadcast two 'chat:tool-approval-request'
+ * events before the first is answered — the renderer's single-slot pendingToolApproval
+ * state (and the backend's single-slot pendingApprovalCancels/pendingQuestionCancels
+ * registries, keyed by streamId) silently clobber the earlier one, whose promise then
+ * never resolves and hangs the stream until HUMAN_WAIT_HARD_CAP_MS.
+ */
+function makeSerialQueue(): <T>(fn: () => Promise<T>) => Promise<T> {
+  let tail: Promise<unknown> = Promise.resolve()
+  return function run<T>(fn: () => Promise<T>): Promise<T> {
+    const started = tail.then(fn, fn)
+    tail = started.then(() => undefined, () => undefined)
+    return started
+  }
+}
+
 // In a packaged Electron app the SDK's sdk.mjs lives inside app.asar, so it
 // resolves the platform binary to a path that includes app.asar — a file, not
 // a directory — causing `spawn ENOTDIR`.  The binary itself is asarUnpack'd
@@ -85,12 +105,21 @@ export function resolveQuestion(questionId: string, answer: string | string[]): 
 
 /**
  * Build the in-process MCP server that exposes ask_user for this stream.
- * `hooks`, when given, mark the wait for the user's answer as a human-in-the-loop
+ * `hooks.begin`/`hooks.end` mark the wait for the user's answer as a human-in-the-loop
  * wait so the caller's idle timer re-arms instead of aborting a legitimately slow reply.
+ * `hooks.serialize` queues this question behind any earlier still-unresolved question or
+ * approval on the same stream, so a broadcast never clobbers a card the user hasn't
+ * answered yet (see `makeSerialQueue`). `hooks.isStopped` short-circuits a queued question
+ * that was waiting behind one just cancelled via Stop, so it doesn't flash a stray chip.
  */
 function buildAskUserServer(
   streamId: string,
-  hooks?: { begin: () => void; end: () => void },
+  hooks: {
+    begin: () => void
+    end: () => void
+    serialize: <T>(fn: () => Promise<T>) => Promise<T>
+    isStopped: () => boolean
+  },
 ) {
   const askUserTool = tool(
     'ask_user',
@@ -100,7 +129,9 @@ function buildAskUserServer(
       options: z.array(z.string()).min(2).max(6).describe('The available choices (2–6 items)'),
       multiSelect: z.boolean().optional().describe('Allow the user to select multiple options'),
     },
-    async (args) => {
+    async (args) => hooks.serialize(async () => {
+      if (hooks.isStopped()) return { content: [{ type: 'text' as const, text: '' }] }
+
       const questionId = crypto.randomUUID()
       const question: PendingQuestion = {
         streamId,
@@ -116,18 +147,18 @@ function buildAskUserServer(
       })
       pendingQuestionCancels.set(streamId, () => cancelFn?.())
       broadcast('chat:ask-question', question)
-      hooks?.begin()
+      hooks.begin()
       let answer: string | string[]
       try {
         answer = await answerPromise
       } finally {
-        hooks?.end()
+        hooks.end()
       }
       pendingQuestions.delete(questionId)
       pendingQuestionCancels.delete(streamId)
       const text = Array.isArray(answer) ? answer.join(', ') : answer
       return { content: [{ type: 'text' as const, text }] }
-    },
+    }),
     { alwaysLoad: true },
   )
   return createSdkMcpServer({ name: 'mypa_builtin', tools: [askUserTool], alwaysLoad: true })
@@ -495,8 +526,7 @@ async function streamAgentChatOnce(
   // while it's > 0, the idle timer re-arms itself instead of aborting the stream,
   // so a slow human doesn't get mistaken for a stalled model/tool. humanWaitStartedAt
   // bounds this with an absolute cap (HUMAN_WAIT_HARD_CAP_MS) so a wait nobody ever
-  // resolves — dismissed without Stop, or a second concurrent approval that collides
-  // on the single-slot pendingApprovalCancels registry — still eventually aborts.
+  // resolves — dismissed without Stop — still eventually aborts.
   let humanWaits = 0
   let humanWaitStartedAt = 0
   const beginHumanWait = (): void => {
@@ -508,6 +538,13 @@ async function streamAgentChatOnce(
     if (humanWaits === 0) humanWaitStartedAt = 0
     if (!stopped) resetIdle()
   }
+
+  // Approvals and questions are each serialized (see makeSerialQueue) so a second
+  // one on the same stream is never broadcast until the first has fully resolved —
+  // otherwise it would silently clobber the renderer's single-slot pending state and
+  // the single-slot pendingApprovalCancels/pendingQuestionCancels registries below.
+  const runApprovalTurn = makeSerialQueue()
+  const runQuestionTurn = makeSerialQueue()
 
   const onIdleFire = (): void => {
     if (stopped) return
@@ -521,7 +558,14 @@ async function streamAgentChatOnce(
 
   // Always attach the ask_user in-process server so the model can ask questions
   const allMcpServers: Record<string, any> = { ...(mcpServers ?? {}) }  // eslint-disable-line @typescript-eslint/no-explicit-any
-  if (streamId) allMcpServers['mypa_builtin'] = buildAskUserServer(streamId, { begin: beginHumanWait, end: endHumanWait })
+  if (streamId) {
+    allMcpServers['mypa_builtin'] = buildAskUserServer(streamId, {
+      begin: beginHumanWait,
+      end: endHumanWait,
+      serialize: runQuestionTurn,
+      isStopped: () => stopped || entry.interrupted,
+    })
+  }
   const hasMcp = Object.keys(allMcpServers).length > 0
 
   // Use the extended startup budget for the first message when MCP is on, to cover
@@ -589,31 +633,39 @@ async function streamAgentChatOnce(
           return { behavior: 'deny', message: 'Write tools require an active MCP-enabled chat session' }
         }
 
-        // Gate write tools via user approval
-        const approvalId = crypto.randomUUID()
-        const approval = buildPendingToolApproval(
-          approvalId, toolName, inputRecord, streamId,
-        )
-        let cancelFn: (() => void) | undefined
-        const resultPromise = new Promise<{ allow: boolean; editedInput?: Record<string, unknown> }>(
-          (resolve) => {
-            pendingToolApprovals.set(approvalId, (a, ei) => resolve({ allow: a, editedInput: ei }))
-            cancelFn = () => { pendingToolApprovals.delete(approvalId); resolve({ allow: false }) }
-          },
-        )
-        pendingApprovalCancels.set(streamId, () => cancelFn?.())
-        broadcast('chat:tool-approval-request', approval)
-        beginHumanWait()
-        let allow: boolean, editedInput: Record<string, unknown> | undefined
-        try {
-          ({ allow, editedInput } = await resultPromise)
-        } finally {
-          endHumanWait()
-        }
-        pendingToolApprovals.delete(approvalId)
-        pendingApprovalCancels.delete(streamId)
-        if (!allow) return { behavior: 'deny', message: 'Dismissed by user' }
-        return { behavior: 'allow', updatedInput: editedInput ?? inputRecord }
+        // Gate write tools via user approval — serialized so a second write-tool
+        // call queued behind this one never broadcasts its own card until this one
+        // has fully resolved (see makeSerialQueue / runApprovalTurn above).
+        return runApprovalTurn(async () => {
+          if (stopped || entry.interrupted) {
+            return { behavior: 'deny', message: 'Stream cancelled' } as const
+          }
+
+          const approvalId = crypto.randomUUID()
+          const approval = buildPendingToolApproval(
+            approvalId, toolName, inputRecord, streamId,
+          )
+          let cancelFn: (() => void) | undefined
+          const resultPromise = new Promise<{ allow: boolean; editedInput?: Record<string, unknown> }>(
+            (resolve) => {
+              pendingToolApprovals.set(approvalId, (a, ei) => resolve({ allow: a, editedInput: ei }))
+              cancelFn = () => { pendingToolApprovals.delete(approvalId); resolve({ allow: false }) }
+            },
+          )
+          pendingApprovalCancels.set(streamId, () => cancelFn?.())
+          broadcast('chat:tool-approval-request', approval)
+          beginHumanWait()
+          let allow: boolean, editedInput: Record<string, unknown> | undefined
+          try {
+            ({ allow, editedInput } = await resultPromise)
+          } finally {
+            endHumanWait()
+          }
+          pendingToolApprovals.delete(approvalId)
+          pendingApprovalCancels.delete(streamId)
+          if (!allow) return { behavior: 'deny', message: 'Dismissed by user' }
+          return { behavior: 'allow', updatedInput: editedInput ?? inputRecord }
+        })
       },
       abortController: ac,
     },

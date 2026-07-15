@@ -362,8 +362,13 @@ function InlineToolApproval({
     if (busy || !onApprove) return
     setBusy(true)
     try {
+      // Merge into the full original input rather than replacing it — draft is
+      // pre-seeded from editableValue, so this branch also fires on an unedited
+      // Approve click. Sending just { [editableField]: draft } silently dropped
+      // every other required parameter (owner/repo/pull_number/etc.), which the
+      // MCP tool then rejected as missing/undefined.
       const edited = approval.editableField && draft.trim()
-        ? { [approval.editableField]: draft }
+        ? { ...approval.toolInput, [approval.editableField]: draft }
         : undefined
       await onApprove(edited)
     } finally { setBusy(false) }
