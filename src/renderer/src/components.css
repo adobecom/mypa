@@ -787,3 +787,90 @@ span.intent-card__title-link:hover .intent-card__title-link-icon {
 }
 
 .plan-item__thread-btn:hover { color: var(--accent-text); background: var(--accent-muted); }
+
+/* ─── Chat action chips (write-action proposals, inline tool approvals) ────── */
+/* Shared by widget/components/ChatThread.tsx, used in both the widget and the
+   main window (CheckInPage, RunLogs). */
+
+.chat-action-chip {
+  margin-top: 8px;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-action-chip--pending {
+  background: rgba(109, 106, 255, 0.10);
+  border: 1px solid rgba(109, 106, 255, 0.25);
+}
+
+.chat-action-chip--done {
+  background: rgba(72, 199, 116, 0.10);
+  border: 1px solid rgba(72, 199, 116, 0.20);
+  color: var(--text-muted);
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+}
+
+.chat-action-chip--failed {
+  background: rgba(241, 113, 113, 0.10);
+  border: 1px solid rgba(241, 113, 113, 0.20);
+  color: var(--text-muted);
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+}
+
+.chat-action-chip--dismissed {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+}
+
+.chat-action-chip__label {
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--accent);
+}
+
+.chat-action-chip__target {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.chat-action-chip__draft {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--text-primary);
+  font-family: inherit;
+  resize: none;
+  outline: none;
+}
+
+.chat-action-chip__draft:focus {
+  border-color: var(--accent);
+}
+
+.chat-action-chip__buttons {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.chat-action-chip__result {
+  font-style: italic;
+  opacity: 0.75;
+}
