@@ -1228,7 +1228,8 @@ export async function reviseIntentFromChat(
           rationale: result.intent.rationale,
           confidence: result.intent.confidence,
           reversibility: result.intent.reversibility,
-          required_approval: result.intent.required_approval
+          required_approval: result.intent.required_approval,
+          cta_label: result.intent.cta_label
         })
         // For agentic intents (actions[]), propagate any revised draft text back into
         // actions[0].params so the approve path sends the updated content, not the

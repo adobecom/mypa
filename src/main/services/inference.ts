@@ -82,7 +82,8 @@ You respond ONLY with a single valid JSON object matching this exact schema:
   },
   "rationale": <one concise PAST-TENSE sentence summarising what you found and why this action is right. Never describe what you are about to do, your process, or any rules you are following — only the conclusion>,
   "reversibility": "reversible" | "irreversible",
-  "required_approval": <boolean — true if this must not be done without user confirmation>
+  "required_approval": <boolean — true if this must not be done without user confirmation>,
+  "cta_label": <a short (2-4 word) imperative button label naming the concrete action, e.g. "Merge PR #482", "Post comment", "Send Slack reply" — write it the way a human would label the button that commits this exact action. Omit or use null for "flag"/"digest" types with no committable action>
 }
 
 Intent types:
@@ -227,6 +228,11 @@ export function parseIntentObject(text: string): IntentObject | null {
   const allowedVerbs = VALID_VERBS[surfaceKey] ?? []
   const verb = allowedVerbs.includes(rawVerb) ? rawVerb : 'none'
 
+  const ctaLabelRaw = obj.cta_label
+  const cta_label = typeof ctaLabelRaw === 'string' && ctaLabelRaw.trim()
+    ? sanitizeTarget(ctaLabelRaw)
+    : null
+
   return {
     type: type as IntentObject['type'],
     confidence,
@@ -239,7 +245,8 @@ export function parseIntentObject(text: string): IntentObject | null {
     },
     rationale: sanitizeRationale(String(obj.rationale ?? '')),
     reversibility: obj.reversibility === 'irreversible' ? 'irreversible' : 'reversible',
-    required_approval: obj.required_approval !== false
+    required_approval: obj.required_approval !== false,
+    cta_label
   }
 }
 
@@ -259,7 +266,8 @@ Respond ONLY with a valid JSON array of 0–3 objects. Each object must match th
   },
   "rationale": <one concise PAST-TENSE sentence summarising what you found and why this deserves the user's attention. Never describe your process or intentions — only the conclusion>,
   "reversibility": "reversible" | "irreversible",
-  "required_approval": <boolean>
+  "required_approval": <boolean>,
+  "cta_label": <a short (2-4 word) imperative button label naming the concrete action, e.g. "Merge PR #482", "Post comment" — omit or use null for type:"flag">
 }
 
 Confidence vs urgency:
@@ -365,7 +373,8 @@ After gathering any needed information, respond ONLY with a JSON object in this 
   "rationale": <one concise PAST-TENSE sentence summarising what you found and why this action is right. Never describe your process or intentions — only the conclusion>,
   "confidence": <number 0.0–1.0>,
   "reversibility": "reversible" | "irreversible",
-  "required_approval": <boolean>
+  "required_approval": <boolean>,
+  "cta_label": <a short (2-4 word) imperative button label naming the concrete action, e.g. "Merge PR #482", "Post comment" — reconsider it along with the rest of the proposal>
 }
 
 If you need to make tool calls first, do so. Then produce the JSON response above.
@@ -411,7 +420,8 @@ export async function reproposeIntent(
     rationale: intent.rationale,
     confidence: intent.confidence,
     reversibility: intent.reversibility,
-    required_approval: intent.required_approval
+    required_approval: intent.required_approval,
+    cta_label: intent.cta_label
   }, null, 2)
 
   const userPrompt = `<context>
@@ -456,7 +466,8 @@ Then respond with the JSON envelope described in your instructions.`
     proposed_action: obj.proposed_action ?? {},
     rationale: obj.rationale ?? intent.rationale,
     reversibility: obj.reversibility ?? intent.reversibility,
-    required_approval: obj.required_approval ?? intent.required_approval
+    required_approval: obj.required_approval ?? intent.required_approval,
+    cta_label: obj.cta_label ?? intent.cta_label
   }))
 
   if (!intentObj) {
@@ -522,7 +533,8 @@ After gathering all needed context, respond ONLY with a JSON object matching thi
   "target": <human-readable description of the work item, e.g. "PR #169 on adobecom/event-libs">,
   "rationale": <one concise PAST-TENSE sentence summarising what you found and why this action is right. Never describe what you are about to do, your process, or any rules you are following — only the conclusion>,
   "reversibility": "reversible" | "irreversible",
-  "required_approval": <boolean — always true for any write action>
+  "required_approval": <boolean — always true for any write action>,
+  "cta_label": <a short (2-4 word) imperative button label naming the concrete action in actions[0], e.g. "Approve review", "Merge PR #482", "Post comment" — write it the way a human would label the button that commits this exact action. Omit or use null if "type" is "flag">
 }
 
 Rules:
@@ -601,6 +613,11 @@ function parseDeepIntentObject(
   // Actual execution uses actions[], so the verb here is only for display/policy lookup.
   const displayVerb = (type === 'action' && actions.length > 0) ? 'comment' : 'none'
 
+  const ctaLabelRaw = raw.cta_label
+  const cta_label = typeof ctaLabelRaw === 'string' && ctaLabelRaw.trim()
+    ? sanitizeTarget(ctaLabelRaw)
+    : null
+
   return {
     type: type as IntentObject['type'],
     confidence,
@@ -614,7 +631,8 @@ function parseDeepIntentObject(
     rationale,
     reversibility,
     required_approval,
-    actions
+    actions,
+    cta_label
   }
 }
 

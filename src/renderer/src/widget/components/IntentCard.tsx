@@ -851,7 +851,9 @@ export default function IntentCard({ intent, onIntentChange, entityKeyToRuns }: 
                   disabled={loading || (!!payloadDraftKey && !draftText.trim())}
                   style={{ fontSize: 11 }}
                 >
-                  {intent.actions && intent.actions.length > 0
+                  {intent.cta_label
+                  ? intent.cta_label
+                  : intent.actions && intent.actions.length > 0
                   ? buildActionCtaLabel(intent.actions[0].server, intent.actions[0].tool)
                   : payloadDraftKey ? 'Send' : 'Approve'}
                 </button>
