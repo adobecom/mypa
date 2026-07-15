@@ -206,7 +206,6 @@ export interface DetectedMcpServer {
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 export interface ClaudeConfig {
-  model?: string
   apiKey?: string
 }
 
