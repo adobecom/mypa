@@ -19,6 +19,12 @@ const STREAM_IDLE_TIMEOUT_MS = 120_000
 // Extended timeout for the initial phase (before first SDK message) and for individual
 // MCP tool-call round-trips. Must stay below the renderer's 150s safety backstop.
 const STREAM_STARTUP_TIMEOUT_MS = 140_000
+// Absolute cap on how long a single human-in-the-loop wait (tool approval or ask_user
+// question) can hold a stream open. Without this, a card the user dismisses without
+// clicking Stop — or two concurrent write-tool approvals colliding on the single-slot
+// pendingApprovalCancels/pendingQuestionCancels registries — would leak the CLI
+// subprocess for the life of the app instead of eventually self-terminating.
+const HUMAN_WAIT_HARD_CAP_MS = 30 * 60_000
 
 // In a packaged Electron app the SDK's sdk.mjs lives inside app.asar, so it
 // resolves the platform binary to a path that includes app.asar — a file, not
@@ -77,8 +83,15 @@ export function resolveQuestion(questionId: string, answer: string | string[]): 
   }
 }
 
-/** Build the in-process MCP server that exposes ask_user for this stream. */
-function buildAskUserServer(streamId: string) {
+/**
+ * Build the in-process MCP server that exposes ask_user for this stream.
+ * `hooks`, when given, mark the wait for the user's answer as a human-in-the-loop
+ * wait so the caller's idle timer re-arms instead of aborting a legitimately slow reply.
+ */
+function buildAskUserServer(
+  streamId: string,
+  hooks?: { begin: () => void; end: () => void },
+) {
   const askUserTool = tool(
     'ask_user',
     'Ask the user to select from a list of options. Use this whenever you need the user to make a choice — never list options as bullet points and never fabricate a selection.',
@@ -103,7 +116,13 @@ function buildAskUserServer(streamId: string) {
       })
       pendingQuestionCancels.set(streamId, () => cancelFn?.())
       broadcast('chat:ask-question', question)
-      const answer = await answerPromise
+      hooks?.begin()
+      let answer: string | string[]
+      try {
+        answer = await answerPromise
+      } finally {
+        hooks?.end()
+      }
       pendingQuestions.delete(questionId)
       pendingQuestionCancels.delete(streamId)
       const text = Array.isArray(answer) ? answer.join(', ') : answer
@@ -462,22 +481,59 @@ async function streamAgentChatOnce(
   // Format conversation as a flat prompt — mirrors the CLI's -p approach.
   const prompt = messages.map((m) => `[${m.role}]: ${m.content}`).join('\n\n')
 
-  // Always attach the ask_user in-process server so the model can ask questions
-  const allMcpServers: Record<string, any> = { ...(mcpServers ?? {}) }  // eslint-disable-line @typescript-eslint/no-explicit-any
-  if (streamId) allMcpServers['mypa_builtin'] = buildAskUserServer(streamId)
-  const hasMcp = Object.keys(allMcpServers).length > 0
-
   const ac = new AbortController()
   let timedOut = false
+  // Set once this call's loop has exited (success or error) so any human-wait
+  // `finally` that resolves afterward (e.g. a cancelFn drained during teardown,
+  // whose continuation runs as a later microtask) can't re-arm a timer that
+  // nothing will ever clear again.
+  let stopped = false
+
+  // A write-tool approval (canUseTool) or an ask_user question blocks on a human
+  // response, during which the SDK yields no messages — so nothing would otherwise
+  // reset the idle timer. humanWaits counts outstanding human-in-the-loop waits;
+  // while it's > 0, the idle timer re-arms itself instead of aborting the stream,
+  // so a slow human doesn't get mistaken for a stalled model/tool. humanWaitStartedAt
+  // bounds this with an absolute cap (HUMAN_WAIT_HARD_CAP_MS) so a wait nobody ever
+  // resolves — dismissed without Stop, or a second concurrent approval that collides
+  // on the single-slot pendingApprovalCancels registry — still eventually aborts.
+  let humanWaits = 0
+  let humanWaitStartedAt = 0
+  const beginHumanWait = (): void => {
+    if (humanWaits === 0) humanWaitStartedAt = Date.now()
+    humanWaits++
+  }
+  const endHumanWait = (): void => {
+    humanWaits = Math.max(0, humanWaits - 1)
+    if (humanWaits === 0) humanWaitStartedAt = 0
+    if (!stopped) resetIdle()
+  }
+
+  const onIdleFire = (): void => {
+    if (stopped) return
+    if (humanWaits > 0 && Date.now() - humanWaitStartedAt < HUMAN_WAIT_HARD_CAP_MS) {
+      idleTimer = setTimeout(onIdleFire, STREAM_STARTUP_TIMEOUT_MS)
+      return
+    }
+    timedOut = true
+    ac.abort()
+  }
+
+  // Always attach the ask_user in-process server so the model can ask questions
+  const allMcpServers: Record<string, any> = { ...(mcpServers ?? {}) }  // eslint-disable-line @typescript-eslint/no-explicit-any
+  if (streamId) allMcpServers['mypa_builtin'] = buildAskUserServer(streamId, { begin: beginHumanWait, end: endHumanWait })
+  const hasMcp = Object.keys(allMcpServers).length > 0
+
   // Use the extended startup budget for the first message when MCP is on, to cover
   // in-process bridge setup and any initial tool calls. Once a message lands,
   // resetIdle() re-arms at the tighter inter-chunk value.
   const firstTimeout = hasMcp ? STREAM_STARTUP_TIMEOUT_MS : STREAM_IDLE_TIMEOUT_MS
-  let idleTimer = setTimeout(() => { timedOut = true; ac.abort() }, firstTimeout)
+  let idleTimer = setTimeout(onIdleFire, firstTimeout)
 
   const resetIdle = (ms = STREAM_IDLE_TIMEOUT_MS): void => {
     clearTimeout(idleTimer)
-    idleTimer = setTimeout(() => { timedOut = true; ac.abort() }, ms)
+    if (stopped) return
+    idleTimer = setTimeout(onIdleFire, ms)
   }
 
   // Phase tracking and heartbeat: emit onStatus immediately on the initial phase, then
@@ -547,7 +603,13 @@ async function streamAgentChatOnce(
         )
         pendingApprovalCancels.set(streamId, () => cancelFn?.())
         broadcast('chat:tool-approval-request', approval)
-        const { allow, editedInput } = await resultPromise
+        beginHumanWait()
+        let allow: boolean, editedInput: Record<string, unknown> | undefined
+        try {
+          ({ allow, editedInput } = await resultPromise)
+        } finally {
+          endHumanWait()
+        }
         pendingToolApprovals.delete(approvalId)
         pendingApprovalCancels.delete(streamId)
         if (!allow) return { behavior: 'deny', message: 'Dismissed by user' }
@@ -639,6 +701,7 @@ async function streamAgentChatOnce(
       }
     }
   } catch (err) {
+    stopped = true
     clearTimeout(idleTimer)
     if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null }
     if (streamId) activeAgentChats.delete(streamId)
@@ -662,6 +725,7 @@ async function streamAgentChatOnce(
     throw err
   }
 
+  stopped = true
   clearTimeout(idleTimer)
   if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null }
   if (streamId) activeAgentChats.delete(streamId)
