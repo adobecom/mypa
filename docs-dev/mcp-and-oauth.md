@@ -236,6 +236,8 @@ Applied for both paths:
 
 The in-process `ask_user` MCP server (created by `buildAskUserServer`) is registered under server key `mypa_builtin` and is always allowed by `canUseTool`.
 
+This blocking wait (and the equivalent one in `ask_user`) is covered by a human-wait latch in `streamAgentChatOnce` that keeps the idle timer from mistaking a slow human for a stalled model/tool — see [claude-integration.md](claude-integration.md#streamagentchat--streaming-multi-turn-chat) for the full mechanism and its 30-minute absolute cap.
+
 ## Changelog
 
 - 2026-06-27 — **Persist last connection error per server; surface unavailable servers to model (`mcp.ts`, `agent.ts`):** `mcp.ts` adds a module-level `serverErrors: Map<string, string>` that records the first line of the last connection error per server name. Cleared on any successful connect/reconnect/probe path in `connectAllServers` and `reconnectServer`; set on every failure path. `getServerStatus()` now includes `error` from the Map for disconnected (non-disabled) servers so the UI and callers have the failure reason without a separate reconnect attempt. In `agent.ts`, `streamAgentChat` calls `getServerStatus()` after building `sdkMcpServers` and appends an `IMPORTANT:` clause to `effectiveSystemPrompt` listing any configured-but-unavailable servers with their last error. This stops the model from confabulating tool results (e.g. inventing a ZodError/permission-gate narrative) when a server silently fails to connect.
