@@ -189,7 +189,7 @@ Rules (applied in order):
 1. Server key `mypa_builtin` — always allowed (covers the in-process `ask_user` tool).
 2. Read-only prefix auto-allow: tool names starting with `get`, `list`, `search`, `read`, `fetch`, `find`, `describe`, `view`, `show`, `check`, `query`, `lookup` are allowed immediately — **unless** a subsequent name component is a write verb (`create`, `update`, `delete`, etc.), which would indicate a tool like `fetch_and_update`. That secondary check prevents prefix-spoofing by ambiguously named tools.
 3. Non-MCP names (bare built-in tool names that do not carry the `mcp__server__tool` triple-part structure) — cleanly **denied**. Built-in tools should never appear here (both `streamAgentChatOnce` and `runAgentWithMcpOnce` now pass `tools: []`), but this guard prevents an indefinite approval-await hang if a built-in name somehow slips through.
-4. All other (write) MCP tools — `canUseTool` broadcasts `chat:tool-approval-request` to the renderer with a `PendingToolApproval` object and then **awaits** resolution. The stream genuinely blocks until `resolveToolApproval()` is called. This await is wrapped in `beginHumanWait()`/`endHumanWait()` (see the human-wait latch above) so a slow approval doesn't get aborted by the idle timer.
+4. All other (write) MCP tools — `canUseTool` broadcasts `chat:tool-approval-request` to the renderer with a `PendingToolApproval` object and then **awaits** resolution. The stream genuinely blocks until `resolveToolApproval()` is called. This await is wrapped in `beginHumanWait()`/`endHumanWait()` (see the human-wait latch above) so a slow approval doesn't get aborted by the idle timer, and the whole branch runs through a per-stream `runApprovalTurn` serial queue (`makeSerialQueue()`) so a second write-tool call doesn't broadcast its own card until this one has fully resolved — see "Serializing concurrent human-in-the-loop waits" below.
 
 ### `resolveToolApproval(approvalId, allow, editedInput?)`
 
@@ -207,15 +207,16 @@ Resolves a pending approval: unblocks `canUseTool` with either allowed (passing 
 
 ## `ask_user` tool — blocking user questions
 
-When the model needs a clarifying answer, it calls the in-process `ask_user` MCP tool (registered via `buildAskUserServer(streamId, hooks)`, where `hooks` is the caller's `{ begin, end }` pair from the human-wait latch above).
+When the model needs a clarifying answer, it calls the in-process `ask_user` MCP tool (registered via `buildAskUserServer(streamId, hooks)`, where `hooks` is a required `{ begin, end, serialize, isStopped }` bundle from the caller).
 
 **Tool input:** `{ prompt: string, options: string[], multiSelect?: boolean }`
 
 **Flow:**
-1. `ask_user` handler broadcasts `chat:ask-question` to the renderer with a `PendingQuestion` object.
-2. The renderer shows clickable option chips.
-3. The stream genuinely blocks until `resolveQuestion(questionId, answer)` is called — wrapped in `hooks.begin()`/`hooks.end()` so the idle timer re-arms instead of aborting while the user is deciding.
-4. Calling `window.electron.chat.answerQuestion(questionId, answer)` from the renderer unblocks the stream.
+1. The whole handler runs through `hooks.serialize(...)` — a per-stream `runQuestionTurn` queue (see "Serializing concurrent human-in-the-loop waits" below) — and starts by checking `hooks.isStopped()`, returning an empty result without broadcasting if the stream was already cancelled while this question was queued behind an earlier one.
+2. `ask_user` handler broadcasts `chat:ask-question` to the renderer with a `PendingQuestion` object.
+3. The renderer shows clickable option chips.
+4. The stream genuinely blocks until `resolveQuestion(questionId, answer)` is called — wrapped in `hooks.begin()`/`hooks.end()` so the idle timer re-arms instead of aborting while the user is deciding.
+5. Calling `window.electron.chat.answerQuestion(questionId, answer)` from the renderer unblocks the stream.
 
 This prevents the "No answer selected" bug — the turn truly blocks rather than continuing with a missing answer.
 
@@ -226,6 +227,35 @@ export function resolveQuestion(questionId: string, answer: string): void
 ```
 
 Unblocks a pending `ask_user` invocation with the user's chosen answer. Called by the `chat:answer-question` IPC handler.
+
+---
+
+## Serializing concurrent human-in-the-loop waits
+
+The SDK can yield more than one `tool_use` block needing approval close together on the
+same stream — most plausibly parallel tool calls in a single assistant turn, but also just
+rapid same-tool retries after a failure. Both the renderer's `pendingToolApproval`/
+`pendingQuestion` state (a single object, not a list, in every container that renders a
+chat: `RoutineCard`, `PlanItemCard`, `PlanItemDetail`, `RunLogs`, `IntentCard`, `CheckInPage`)
+and the backend's `pendingApprovalCancels`/`pendingQuestionCancels` maps (keyed by `streamId`,
+one slot per stream) are single-slot. A second broadcast before the first is resolved
+**silently overwrites and hides the first card** — it can never be clicked, its promise
+never resolves, `endHumanWait()` never runs, and the stream hangs (no error, no visible card)
+until `HUMAN_WAIT_HARD_CAP_MS`.
+
+Rather than converting every one of those renderer components' state into a queue/array (a
+much larger change), `streamAgentChatOnce` serializes the human-facing side instead:
+`makeSerialQueue()` returns a `run(fn)` that chains calls onto a private promise tail, so a
+second call queued behind a first doesn't start (and doesn't broadcast) until the first has
+settled. Two per-call instances — `runApprovalTurn` and `runQuestionTurn` — wrap the
+`canUseTool` write-tool branch and the `ask_user` handler respectively, so approvals and
+questions each queue within their own category (they can still coexist, since they occupy
+different renderer state/UI). This makes the existing single-slot registries correct again
+by construction: they never hold two live entries for one stream at once.
+
+A queued call checks `stopped || entry.interrupted` before doing anything — a card that was
+waiting in the queue behind one just cancelled via Stop is discarded rather than flashing an
+approval prompt to the user after they've already ended the conversation.
 
 ---
 
@@ -339,6 +369,8 @@ This clause is appended in `inferIntent` (`inference.ts`) after `buildOwnerClaus
 **ASAR path fix — `pathToClaudeCodeExecutable` must be set explicitly.** The SDK's `sdk.mjs` lives inside `app.asar`; when it resolves the platform binary relative to its own `import.meta.url` it produces a path that includes `app.asar` — which is a file, not a directory — causing `spawn ENOTDIR` on every AI call. The fix is in `agent.ts`: `resolveClaudeExecutable()` computes the real, unpacked path via `app.getAppPath().replace('app.asar', 'app.asar.unpacked')`, then all four `query()` call sites (`runAgentOnce`, `streamAgentChatOnce`, `runAgentWithMcpOnce`, `runAuthoringAgent`) pass `pathToClaudeCodeExecutable: resolveClaudeExecutable()`. This short-circuits the SDK's broken default without affecting dev mode (where `app.getAppPath()` points to the project root and the binary exists at the direct `node_modules` path).
 
 ## Changelog
+
+- 2026-07-15 — **Fix truncated write-tool approvals and the resulting stuck-forever hang (`agent.ts`, `ChatThread.tsx`).** Found while verifying the fix below: asking mypa to submit a GitHub PR review, the model called `create_pull_request_review` three times, each rejected with every parameter but `body` reported `undefined`, then the chat's thinking indicator hung indefinitely with no card and no error. Two distinct bugs. **Bug A:** `InlineToolApproval.handleApprove` (`ChatThread.tsx`) built the edited payload as `{ [approval.editableField]: draft }` — a full replacement, not a merge — and did so on *any* Approve click (not just an edited one) because `draft` is pre-seeded from `approval.editableValue`, so `draft.trim()` is truthy unedited. This dropped every parameter but the editable one; `canUseTool`'s `updatedInput: editedInput ?? inputRecord` fallback can't rescue it since `??` only falls back on `null`/`undefined`, not an incomplete object. Fixed to spread `approval.toolInput` first. The "asked 3 times" symptom was a consequence, not a separate bug: a failed `tool_result` never throws, so the model just retries within the same `maxTurns: 10` budget, each retry needing a fresh approval — fixing Bug A removes the repetition too. **Bug B**, the actual hang: confirmed as the "pre-existing" collision flagged in the entry below — a fallback tool call (the model's own retry-avoidance attempt) broadcast a second `chat:tool-approval-request` on the same stream while the first was still unresolved, silently clobbering the renderer's single-slot `pendingToolApproval` state and the single-slot `pendingApprovalCancels` map entry; the first approval's promise then never resolved, so `endHumanWait()` never ran and `humanWaits` stuck `> 0` until `HUMAN_WAIT_HARD_CAP_MS`. Fixed with a `makeSerialQueue()` helper and two per-call instances (`runApprovalTurn`, `runQuestionTurn`) wrapping the `canUseTool` write-branch and `buildAskUserServer` respectively, so a second human-facing wait on one stream is never broadcast until the first has fully resolved — see "Serializing concurrent human-in-the-loop waits" above for the full design. No renderer state/type changes were needed; serialization keeps the existing single-slot registries correct by construction.
 
 - 2026-07-15 — **Fix "stopped mid-response" on write-tool approvals and `ask_user` questions (`agent.ts`).** Responding in a chat that follows a routine run (or any chat with MCP write tools enabled) could reliably time out ~140 s into waiting for a human to approve a write-tool call or answer an `ask_user` question, surfacing `'The assistant stopped mid-response. Please try again.'` and, in `~/.mypa/mypa.log`, `Tool permission request failed: Error: Tool permission stream closed before response received`. Root cause: `canUseTool`'s write-tool approval await (`agent.ts`) and `buildAskUserServer`'s answer await both block on a human response, during which the SDK yields no messages — so nothing called `resetIdle()`, and the idle timer (armed to `STREAM_STARTUP_TIMEOUT_MS` by the preceding `mcp_tool_use` message) fired and called `ac.abort()`, which closes the SDK subprocess's stdin and causes the CLI to reject the still-pending permission request with that exact message. Fixed by adding a `humanWaits` counter (`beginHumanWait`/`endHumanWait`) in `streamAgentChatOnce`: the idle timer's fire handler (`onIdleFire`) now re-arms itself instead of aborting while `humanWaits > 0`. Both the `canUseTool` write-approval branch and `buildAskUserServer` (now takes an optional `hooks: { begin, end }` param, threaded from the call site) wrap their blocking awaits in `beginHumanWait()`/`endHumanWait()`. Cancellation is unaffected — the Stop button and stream-teardown paths still resolve pending approvals/questions immediately via `pendingApprovalCancels`/`pendingQuestionCancels`. Ruled out during investigation: the "supersede stale runs" feature (never touches active streams) and the "LLM CTA labels" feature (confined to the ambient IntentCard path, doesn't touch `agent.ts`); `buildPendingToolApproval` remains synchronous and correctly unawaited.
 
