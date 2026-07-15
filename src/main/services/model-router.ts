@@ -4,7 +4,7 @@ import type { UsageSource } from '@shared/types'
 
 const TIERS: readonly string[] = [
   'claude-haiku-4-5-20251001',
-  'claude-sonnet-4-6',
+  'claude-sonnet-5',
   'claude-opus-4-8',
 ]
 
@@ -12,7 +12,7 @@ type Tier = 'fast' | 'balanced' | 'capable'
 
 const TIER_MODEL: Record<Tier, string> = {
   fast:     'claude-haiku-4-5-20251001',
-  balanced: 'claude-sonnet-4-6',
+  balanced: 'claude-sonnet-5',
   capable:  'claude-opus-4-8',
 }
 

@@ -19,9 +19,7 @@ Defined in `src/shared/types.ts`. Deep-merged with `DEFAULT_CONFIG` on every rea
 
 ```jsonc
 {
-  "claude": {
-    "model": "claude-opus-4-8"     // Claude model ID; empty = CLI default
-  },
+  "claude": {},   // apiKey only; model is chosen automatically, see claude-integration.md
   "mcp_servers": [
     {
       "name":    "github",
@@ -73,7 +71,7 @@ Defined in `src/shared/types.ts`. Deep-merged with `DEFAULT_CONFIG` on every rea
 
 ```ts
 {
-  claude:      { model: 'claude-opus-4-8' },
+  claude:      {},
   mcp_servers: [],
   preferences: { widget_always_on_top: false, notification_sound: true, launch_on_login: false },
   onboarding_complete: false,
@@ -174,6 +172,8 @@ Managed from the widget's Settings panel and persisted in `config.preferences`:
 | `launch_on_login` | `false` | Register as a login item (macOS / Windows) |
 
 ## Changelog
+
+- 2026-07-14 — **Removed dead `ClaudeConfig.model` field.** It was never read for model selection (that's entirely driven by `model-router.ts`); `claude` config now holds only `apiKey`.
 
 - 2026-07-13 — **`knowledge.vault` config for the Obsidian vault knowledge source.** `AppConfig` gains `knowledge?: { vault?: { path, folders, enabled } }`. `path` is the absolute vault root (chosen via `system.pickDirectory`); `folders` are vault-relative subfolders to ingest (others are never read, even if `enabled`). See [knowledge-graph.md](knowledge-graph.md).
 
