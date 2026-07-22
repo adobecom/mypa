@@ -50,10 +50,12 @@ export default function ChatThread({
   const inputRef = useAutoGrowTextarea(input)
 
   // Scroll the inner chat container to bottom; never touches the window scroll.
+  // Also re-fires when a tool-approval/question prompt appears so it's revealed
+  // immediately instead of sitting below the fold behind the "thinking" dots.
   useEffect(() => {
     const el = threadRef.current
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-  }, [messages, streamingContent])
+  }, [messages, streamingContent, pendingToolApproval, pendingQuestion])
 
   // Focus the input when this component mounts (panel/pod just opened).
   useEffect(() => {

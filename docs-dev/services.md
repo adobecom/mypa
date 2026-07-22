@@ -229,15 +229,13 @@ Encryption uses Electron `safeStorage`; encrypted values are stored with an `enc
 
 ## `oauth.ts` — OAuth flows
 
-Handles authentication with GitHub, Notion, and Linear. See [mcp-and-oauth.md](mcp-and-oauth.md) for details.
+Handles authentication with Notion and Linear via PKCE. GitHub is not handled here — it's a plain PAT/`api_key` catalog entry (see [mcp-and-oauth.md](mcp-and-oauth.md#github--personal-access-token)). See [mcp-and-oauth.md](mcp-and-oauth.md) for details.
 
 **Key exports:**
 
 | Export | Description |
 |---|---|
 | `handleOAuthCallback(url)` | Called on `mypa://oauth/callback` — validates `state` nonce, exchanges code for token |
-| `startDeviceFlow()` | Begin GitHub device flow; returns `DeviceFlowStart` |
-| `pollDeviceFlow(deviceCode)` | Poll until token issued; returns access token |
 | `startPkceFlow(provider)` | Generate PKCE verifier + challenge, return authorization URL |
 
 ---
@@ -459,6 +457,8 @@ Manages structured 1:1 check-in sessions between the user and the agent. Generat
 **Config:** `AppConfig.checkin.scheduleEnabled` + `AppConfig.checkin.schedule` (cron). Scheduling is wired through `cron.ts` (`refreshCheckinSchedule`).
 
 ## Changelog
+
+- 2026-07-22 — **GitHub moved off OAuth device flow, onto PAT-only setup (`oauth.ts`, `mcp-catalog.ts`).** GitHub organizations can enforce OAuth-app access-control policies that block a device-flow connection, so the GitHub catalog entry switched to `authType: 'api_key'` with detailed PAT instructions (mirroring the Slack entry). `startDeviceFlow()`/`pollDeviceFlow(deviceCode)` removed from `oauth.ts` along with the now-unused `DeviceFlowStart` interface and `sleep()` helper — `oauth.ts` now only implements the Notion/Linear PKCE flow. See [mcp-and-oauth.md](mcp-and-oauth.md#github--personal-access-token) and [ipc.md](ipc.md#changelog).
 
 - 2026-07-15 — **Fix truncated write-tool approvals and the resulting stuck-forever hang (`agent.ts`, `ChatThread.tsx`).** Found while verifying the fix below. Bug A: `InlineToolApproval.handleApprove` in `ChatThread.tsx` replaced the whole tool input with `{ [editableField]: draft }` instead of merging into it, and fired on any Approve click (not just an edited one) since `draft` is pre-seeded — so a multi-parameter write tool (e.g. a PR-review tool with `owner`/`repo`/`pull_number`/`event`/`body`) lost every field but the edited one, and the model retried the identically-failing call repeatedly. Fixed by spreading `approval.toolInput` before the override. Bug B, the actual hang: the model's own retry-avoidance fallback call broadcast a second `chat:tool-approval-request` on the same stream before the first was resolved, clobbering the renderer's single-slot pending-approval state and the backend's single-slot `pendingApprovalCancels` map entry — the first approval's promise then never resolved, leaving `humanWaits` (from the fix below) stuck `> 0` with no visible card and no error. Fixed in `agent.ts` with a `makeSerialQueue()` helper: two per-call queues (`runApprovalTurn`, `runQuestionTurn`) wrap the `canUseTool` write-branch and `buildAskUserServer` so a second human-facing wait on one stream is never broadcast until the first has fully resolved, keeping the existing single-slot registries correct by construction — no renderer state or type changes needed. Full trace in [claude-integration.md](claude-integration.md#changelog).
 

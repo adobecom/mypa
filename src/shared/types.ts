@@ -153,14 +153,7 @@ export interface ChatMessage {
 
 // ─── OAuth ───────────────────────────────────────────────────────────────────
 
-export type OAuthProvider = 'github' | 'notion' | 'linear'
-
-export interface DeviceFlowStart {
-  userCode: string
-  verificationUri: string
-  deviceCode: string
-  interval: number
-}
+export type OAuthProvider = 'notion' | 'linear'
 
 // ─── MCP ─────────────────────────────────────────────────────────────────────
 
@@ -269,13 +262,11 @@ export interface AppConfig {
   persona?: string
   owner?: OwnerIdentity
   oauth_apps?: {
-    github?: OAuthAppCredential
     notion?: OAuthAppCredential
     linear?: OAuthAppCredential
   }
   onboarding_complete?: boolean
   oauth_connected_at?: {
-    github?: string
     notion?: string
     linear?: string
   }
@@ -814,8 +805,6 @@ export interface IpcApi {
     remove(id: string): Promise<void>
   }
   oauth: {
-    startDevice(): Promise<DeviceFlowStart>
-    pollDevice(deviceCode: string): Promise<string>
     startPkce(provider: 'notion' | 'linear'): Promise<string>
   }
   setup: {

@@ -31,63 +31,6 @@ export function handleOAuthCallback(url: string): void {
   }
 }
 
-// ─── GitHub Device Flow ───────────────────────────────────────────────────────
-
-export interface DeviceFlowStart {
-  userCode: string
-  verificationUri: string
-  deviceCode: string
-  interval: number
-}
-
-export async function startDeviceFlow(): Promise<DeviceFlowStart> {
-  const clientId = readConfig().oauth_apps?.github?.clientId ?? ''
-  if (!clientId) throw new Error('GitHub OAuth app not configured — add your Client ID in Settings.')
-
-  const res = await fetch('https://github.com/login/device/code', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ client_id: clientId, scope: 'repo read:user' })
-  })
-  if (!res.ok) throw new Error(`GitHub device code request failed: ${res.status}`)
-  const data = (await res.json()) as {
-    device_code: string
-    user_code: string
-    verification_uri: string
-    interval: number
-  }
-  shell.openExternal(data.verification_uri)
-  return {
-    deviceCode: data.device_code,
-    userCode: data.user_code,
-    verificationUri: data.verification_uri,
-    interval: data.interval ?? 5
-  }
-}
-
-export async function pollDeviceFlow(deviceCode: string): Promise<string> {
-  const clientId = readConfig().oauth_apps?.github?.clientId ?? ''
-  const maxAttempts = 120  // up to 10 min at 5s intervals
-  for (let i = 0; i < maxAttempts; i++) {
-    await sleep(5000)
-    const res = await fetch('https://github.com/login/oauth/access_token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({
-        client_id: clientId,
-        device_code: deviceCode,
-        grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
-      })
-    })
-    const data = (await res.json()) as Record<string, string>
-    if (data.access_token) return data.access_token
-    if (data.error === 'access_denied') throw new Error('Access denied')
-    if (data.error === 'expired_token') throw new Error('Code expired — please try again')
-    // 'authorization_pending' or 'slow_down' → keep polling
-  }
-  throw new Error('Authorization timed out')
-}
-
 // ─── PKCE / Redirect Flow (Notion, Linear) ───────────────────────────────────
 
 const REDIRECT_URI = 'mypa://oauth/callback'
@@ -189,8 +132,4 @@ async function exchangeCode(
   const data = (await res.json()) as Record<string, string>
   if (!data.access_token) throw new Error(data.error_description ?? 'Token exchange failed')
   return data.access_token
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms))
 }

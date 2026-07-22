@@ -50,8 +50,6 @@ const api: IpcApi = {
     remove: (id) => ipcRenderer.invoke('repos:remove', id)
   },
   oauth: {
-    startDevice: () => ipcRenderer.invoke('oauth:start-device'),
-    pollDevice: (deviceCode: string) => ipcRenderer.invoke('oauth:poll-device', deviceCode),
     startPkce: (provider: 'notion' | 'linear') => ipcRenderer.invoke('oauth:start-pkce', provider)
   },
   setup: {

@@ -55,7 +55,7 @@ Maintains a `Map<string, Client>` of active connections keyed by server name.
 **Stderr capture:** `connectServer` passes `stderr: 'pipe'` to the `StdioClientTransport`. A `data` listener re-emits each line to `process.stderr` with a `[mcp:<name>]` prefix (matching the visibility that `'inherit'` previously provided) and keeps a bounded 30-line ring buffer. When a `connect` or `listTools` timeout fires, the last 5 buffered lines are appended to the error message so the user sees what the server was doing before it stalled.
 
 **Backward compat:**
-- GitHub: if a server's env contains `GITHUB_TOKEN` but not `GITHUB_PERSONAL_ACCESS_TOKEN`, the value is copied under the new key automatically.
+- GitHub: if a server's env contains `GITHUB_TOKEN` but not `GITHUB_PERSONAL_ACCESS_TOKEN`, the value is copied under the new key automatically. (GitHub is now a plain PAT/`api_key` catalog entry — see below — but this migration still applies to any server whose env still uses the old `GITHUB_TOKEN` key.)
 - Slack: if a stored slack server's `args` do not include `--transport`, `connectAllServers` rewrites the entry to `['-y', 'slack-mcp-server@latest', '--transport', 'stdio']`, preserves `SLACK_MCP_XOXP_TOKEN` if present, and injects `SLACK_MCP_ADD_MESSAGE_TOOL=true`. This auto-migrates entries created before the `--transport stdio` requirement was added without requiring a manual re-add.
 
 ---
@@ -103,6 +103,18 @@ Failures are reported in `SetupHealthServer.invalidArgs` and surfaced in the Set
 
 ---
 
+#### GitHub — personal access token
+
+The `github` catalog entry (`id: 'github'`, `@modelcontextprotocol/server-github`) is `authType: 'api_key'`, not OAuth — GitHub organizations can enforce OAuth-app access-control policies that block a device-flow/OAuth-app connection outright, so a PAT is the only setup path that reliably works across org policies. It requires one `requiredEnv` field:
+
+| Key | Label | Hint |
+|---|---|---|
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | Personal access token | Recommends a fine-grained token (Contents/Metadata/Issues/Pull requests, read-only, scoped to selected repos) first, with a classic token (`repo`, `read:user` scopes) as the fallback; calls out that org SSO/OAuth policies may require admin approval (fine-grained) or per-token SSO authorization (classic). |
+
+This mirrors the Slack entry's pattern of a `requiredEnv` field with a detailed `hint` instead of an OAuth "Connect" button (see the Slack entry in `mcp-catalog.ts`). The `ServerCatalogPicker` renders it via the generic API-key field path (one password input per `requiredEnv` entry) — no GitHub-specific UI exists. `GITHUB_PERSONAL_ACCESS_TOKEN` is unchanged from the prior OAuth-era env key, so existing configured tokens keep working after this change.
+
+---
+
 ### Claude Code config import (`claude-import.ts`)
 
 `detectClaudeMcp()` (called from `setup.detectClaudeMcp()` IPC) looks for an existing Claude Code configuration file at known paths and returns `DetectedMcpServer[]` that can be imported into mypa with one click:
@@ -124,12 +136,11 @@ Only `supported: true` servers (stdio) can be imported.
 
 ## OAuth
 
-mypa supports OAuth authentication for GitHub, Notion, and Linear to enrich routines with live data from those services.
+mypa supports OAuth authentication for Notion and Linear to enrich routines with live data from those services. GitHub is **not** an OAuth entry — see [GitHub — personal access token](#github--personal-access-token) below.
 
 **Source files:**
 - `src/main/services/oauth.ts` — flow implementations
-- `src/shared/oauth-config.ts` — provider configurations
-- `src/shared/types.ts` — `OAuthProvider`, `DeviceFlowStart`, `OAuthAppCredential`
+- `src/shared/types.ts` — `OAuthProvider`, `OAuthAppCredential`
 
 OAuth tokens are stored in `AppConfig.oauth_connected_at` (timestamp) and passed as env vars to the relevant MCP server. Client secrets are encrypted at rest with Electron `safeStorage`.
 
@@ -147,24 +158,6 @@ This scheme is registered in `package.json → build.protocols` and handled in t
 1. Parses the `code` and `state` query parameters.
 2. **Validates the `state` nonce** against the one generated at flow start to prevent authorization code injection attacks.
 3. Exchanges the code for an access token using the PKCE code verifier.
-
----
-
-### GitHub — device flow
-
-Used when the user doesn't want to register a GitHub OAuth app (no redirect URI required).
-
-```
-startDevice() → { userCode, verificationUri, deviceCode, interval }
-```
-
-The user visits `verificationUri` and enters `userCode`. The caller polls:
-
-```
-pollDevice(deviceCode) → accessToken
-```
-
-Polling uses `interval` (seconds) returned by GitHub's device authorization endpoint. Returns the access token when the user completes authorization.
 
 ---
 
@@ -239,6 +232,8 @@ The in-process `ask_user` MCP server (created by `buildAskUserServer`) is regist
 This blocking wait (and the equivalent one in `ask_user`) is covered by a human-wait latch in `streamAgentChatOnce` that keeps the idle timer from mistaking a slow human for a stalled model/tool — see [claude-integration.md](claude-integration.md#streamagentchat--streaming-multi-turn-chat) for the full mechanism and its 30-minute absolute cap.
 
 ## Changelog
+
+- 2026-07-22 — **GitHub switched from OAuth device flow to PAT-only (`mcp-catalog.ts`, `oauth.ts`, `ServerCatalogPicker.tsx`, `Settings.tsx`, `ipc-handlers.ts`, `preload/index.ts`, `types.ts`):** GitHub organizations can enforce OAuth-app access-control policies that block the device flow, so the GitHub catalog entry is now `authType: 'api_key'` with a single `requiredEnv` field (`GITHUB_PERSONAL_ACCESS_TOKEN`) carrying a detailed hint — fine-grained token first (org-admin-approved, repo-scoped, read-only), classic token as fallback (with an SSO-authorization callout) — mirroring the Slack entry's PAT-instructions pattern. The env key is unchanged, so previously configured tokens keep working. Removed the now-dead GitHub device-flow code: `startDeviceFlow`/`pollDeviceFlow` in `oauth.ts`, the `oauth:start-device`/`oauth:poll-device` IPC handlers and preload bindings, the `DeviceFlowSection` component and its state in `ServerCatalogPicker.tsx`, and the GitHub reconnect button + "OAuth App Credentials" GitHub Client ID card in `Settings.tsx` (that per-row reconnect button was gated on the generic `authType === 'oauth'` check but always called the GitHub-only device-flow API, so it was already non-functional for Notion/Linear). `OAuthProvider` narrowed to `'notion' | 'linear'` in both `types.ts` and `mcp-catalog.ts`; `AppConfig.oauth_apps`/`oauth_connected_at` drop their `github` keys. Notion/Linear's PKCE flow is untouched.
 
 - 2026-06-27 — **Persist last connection error per server; surface unavailable servers to model (`mcp.ts`, `agent.ts`):** `mcp.ts` adds a module-level `serverErrors: Map<string, string>` that records the first line of the last connection error per server name. Cleared on any successful connect/reconnect/probe path in `connectAllServers` and `reconnectServer`; set on every failure path. `getServerStatus()` now includes `error` from the Map for disconnected (non-disabled) servers so the UI and callers have the failure reason without a separate reconnect attempt. In `agent.ts`, `streamAgentChat` calls `getServerStatus()` after building `sdkMcpServers` and appends an `IMPORTANT:` clause to `effectiveSystemPrompt` listing any configured-but-unavailable servers with their last error. This stops the model from confabulating tool results (e.g. inventing a ZodError/permission-gate narrative) when a server silently fails to connect.
 

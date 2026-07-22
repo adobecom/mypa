@@ -90,7 +90,7 @@ Two separate HTML entry points, each a React 18 SPA sharing the same preload:
 |---|---|
 | `types.ts` | **Single source of truth** for all shared TypeScript types, the `IpcApi` interface, and `DEFAULT_CONFIG` |
 | `mcp-catalog.ts` | Built-in MCP server catalog entries |
-| `oauth-config.ts` | OAuth provider configurations (GitHub, Notion, Linear) |
+| `oauth-config.ts` | OAuth provider configurations (Notion, Linear) — GitHub is a plain PAT/`api_key` catalog entry, not OAuth |
 
 ## Path aliases
 

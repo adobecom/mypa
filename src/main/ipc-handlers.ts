@@ -37,7 +37,7 @@ import { readConfig, updateConfig, clearClaudeApiKey, resetConfig } from './serv
 import { getAllRepoLinks, addRepoLink, updateRepoLink, removeRepoLink } from './services/repos'
 import { startAuthoring, getWorkProductForIntent, shipWorkProduct, discardWorkProduct } from './services/authoring'
 import { reconnectServer, getServerStatus, connectAllServers, disconnectAllServers, resolveOwnerHandles, withTimeout } from './services/mcp'
-import { startDeviceFlow, pollDeviceFlow, startPkceFlow } from './services/oauth'
+import { startPkceFlow } from './services/oauth'
 import { detectClaudeMcpServers } from './services/claude-import'
 import { executeRoutine, handleRunMessage } from './services/routines'
 import { createPlanDraft, confirmPlanDraft, updatePlanItemStatus, deletePlanItem, handlePlanMessage, approvePlanAction, dismissPlanAction } from './services/plan'
@@ -311,14 +311,6 @@ export function registerIpcHandlers(
 
   // ─── OAuth ─────────────────────────────────────────────────────────────────
 
-  ipcMain.handle('oauth:start-device', async () => {
-    return startDeviceFlow()
-  })
-
-  ipcMain.handle('oauth:poll-device', async (_e, deviceCode: string) => {
-    return pollDeviceFlow(deviceCode)
-  })
-
   ipcMain.handle('oauth:start-pkce', async (_e, provider: 'notion' | 'linear') => {
     return startPkceFlow(provider)
   })
@@ -393,7 +385,7 @@ export function registerIpcHandlers(
 
       const provider = entry?.oauthProvider as string | undefined
       const oauthConnectedAt = provider
-        ? config.oauth_connected_at?.[provider as 'github' | 'notion' | 'linear']
+        ? config.oauth_connected_at?.[provider as 'notion' | 'linear']
         : undefined
       const oauthStaleDays =
         oauthConnectedAt
