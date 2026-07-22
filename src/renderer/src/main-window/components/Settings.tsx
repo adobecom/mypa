@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2, User, Power, ChevronDown, ChevronRight } from 'lucide-react'
-import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, DeviceFlowStart, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles, IdentitySurface, GraphNode, GraphEdge, Memory, RepoLink, VaultConfig, CheckInConfig } from '@shared/types'
+import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles, IdentitySurface, GraphNode, GraphEdge, Memory, RepoLink, VaultConfig, CheckInConfig } from '@shared/types'
 import { IDENTITY_SURFACES } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
 import { SCOPE_SURFACES } from '@shared/scope-surfaces'
@@ -51,12 +51,6 @@ export default function Settings({ onDirtyChange }: SettingsProps): React.ReactE
   const [rowError, setRowError] = useState<Record<string, string>>({})
   const [health, setHealth] = useState<SetupHealth | null>(null)
   const [healthLoading, setHealthLoading] = useState(false)
-  const [oauthState, setOauthState] = useState<{
-    serverName: string
-    deviceFlow: DeviceFlowStart | null
-    polling: boolean
-    error: string
-  } | null>(null)
   const [autoFilling, setAutoFilling] = useState(false)
   const [handleStatus, setHandleStatus] = useState<ResolvedOwnerHandles>({})
   const [apiKeyInput, setApiKeyInput] = useState('')
@@ -142,7 +136,7 @@ export default function Settings({ onDirtyChange }: SettingsProps): React.ReactE
       // single write either persists everything or nothing — no window where the slice
       // saves but the timestamp stamp fails separately, which would otherwise leave the
       // sticky bar stuck open even though the edits were already persisted.
-      const changedOAuthProviders = (['github', 'notion', 'linear'] as OAuthProvider[]).filter(
+      const changedOAuthProviders = (['notion', 'linear'] as OAuthProvider[]).filter(
         (p) => JSON.stringify(config.oauth_apps?.[p]) !== JSON.stringify(savedBaseline?.oauth_apps?.[p])
       )
       const payload: Partial<AppConfig> = { ...slice }
@@ -293,35 +287,6 @@ export default function Settings({ onDirtyChange }: SettingsProps): React.ReactE
     }
   }
 
-  const handleOAuthReconnect = async (srv: McpServerConfig) => {
-    const entry = MCP_CATALOG.find((e) => e.id === srv.name)
-    if (!entry?.oauthTokenEnvKey) return
-    setOauthState({ serverName: srv.name, deviceFlow: null, polling: false, error: '' })
-    try {
-      const flow = await api.oauth.startDevice()
-      setOauthState({ serverName: srv.name, deviceFlow: flow, polling: true, error: '' })
-      api.oauth.pollDevice(flow.deviceCode)
-        .then(async (token) => {
-          const tokenKey = entry.oauthTokenEnvKey!
-          const updatedServers = config!.mcp_servers.map((s) =>
-            s.name !== srv.name ? s : { ...s, env: { ...(s.env ?? {}), [tokenKey]: token } }
-          )
-          const updated = { ...config!, mcp_servers: updatedServers }
-          setConfig(updated)
-          await api.config.update(updated)
-          setOauthState(null)
-          await syncDisplay()
-          toast.success(`${srv.name} connected`)
-        })
-        .catch((err: Error) =>
-          setOauthState((prev) => prev ? { ...prev, deviceFlow: null, polling: false, error: err.message } : null)
-        )
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Connection failed'
-      setOauthState((prev) => prev ? { ...prev, error: msg } : null)
-    }
-  }
-
   const handleAutoFillOwner = async () => {
     setAutoFilling(true)
     try {
@@ -354,7 +319,7 @@ export default function Settings({ onDirtyChange }: SettingsProps): React.ReactE
   }
 
   const setOAuthField = (
-    provider: 'github' | 'notion' | 'linear',
+    provider: 'notion' | 'linear',
     field: keyof OAuthAppCredential,
     value: string
   ) => {
@@ -614,22 +579,6 @@ export default function Settings({ onDirtyChange }: SettingsProps): React.ReactE
             </div>
           </div>
 
-          {usedProviders.has('github') && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>GitHub</div>
-              <div className="form-group">
-                <label className="form-label">Client ID</label>
-                <input
-                  className="form-input"
-                  type="text"
-                  placeholder="Ov23li…"
-                  value={config.oauth_apps?.github?.clientId ?? ''}
-                  onChange={(e) => setOAuthField('github', 'clientId', e.target.value)}
-                />
-              </div>
-            </div>
-          )}
-
           {usedProviders.has('notion') && (
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--text-secondary)' }}>Notion</div>
@@ -705,10 +654,6 @@ export default function Settings({ onDirtyChange }: SettingsProps): React.ReactE
         {config.mcp_servers.map((srv) => {
           const isDisabled = srv.enabled === false
           const s = status.find((x) => x.name === srv.name)
-          const entry = MCP_CATALOG.find((e) => e.id === srv.name)
-          const srvHealth = health?.servers.find((h) => h.name === srv.name)
-          const needsOAuth = !isDisabled && entry?.authType === 'oauth' && (srvHealth?.missingEnvKeys?.length ?? 0) > 0
-          const oauthActive = oauthState?.serverName === srv.name
           const dotState = isDisabled ? 'disabled' : s?.connected ? 'connected' : 'disconnected'
           const hasTools = !isDisabled && (s?.tools.length ?? 0) > 0
           const isExpanded = expandedServers.has(srv.name)
@@ -743,15 +688,6 @@ export default function Settings({ onDirtyChange }: SettingsProps): React.ReactE
                   {hasTools && (isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />)}
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  {needsOAuth && (
-                    <button
-                      className="btn btn--primary btn--sm"
-                      onClick={() => handleOAuthReconnect(srv)}
-                      disabled={oauthActive}
-                    >
-                      {oauthActive && !oauthState?.deviceFlow ? <span className="spinner" /> : 'Connect'}
-                    </button>
-                  )}
                   {!isDisabled && (
                     <button
                       className="btn btn--ghost btn--sm"
@@ -778,32 +714,6 @@ export default function Settings({ onDirtyChange }: SettingsProps): React.ReactE
               {rowError[srv.name] && (
                 <div className="alert alert--error" style={{ marginTop: 4 }}>
                   {srv.name}: {rowError[srv.name]}
-                </div>
-              )}
-              {oauthActive && oauthState!.error && (
-                <div className="alert alert--error" style={{ marginTop: 6 }}>{oauthState!.error}</div>
-              )}
-              {oauthActive && oauthState!.deviceFlow && (
-                <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', padding: '10px 12px', marginTop: 6 }}>
-                  <div style={{ fontSize: 13, marginBottom: 8 }}>
-                    Enter this code at{' '}
-                    <a
-                      href={oauthState!.deviceFlow.verificationUri}
-                      onClick={(e) => { e.preventDefault(); window.open(oauthState!.deviceFlow!.verificationUri) }}
-                      style={{ color: 'var(--accent)' }}
-                    >
-                      {oauthState!.deviceFlow.verificationUri}
-                    </a>
-                  </div>
-                  <div style={{ fontFamily: 'monospace', fontSize: 22, fontWeight: 700, letterSpacing: '0.15em', marginBottom: 8 }}>
-                    {oauthState!.deviceFlow.userCode}
-                  </div>
-                  {oauthState!.polling && (
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span className="spinner" style={{ width: 12, height: 12 }} />
-                      Waiting for authorization…
-                    </div>
-                  )}
                 </div>
               )}
               {hasTools && isExpanded && (

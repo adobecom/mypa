@@ -1,7 +1,7 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react'
 import { ArrowLeft, Check, Copy, ExternalLink, Download, FolderOpen } from 'lucide-react'
 import { MCP_CATALOG, CATALOG_CATEGORIES, type McpCatalogEntry } from '@shared/mcp-catalog'
-import type { McpServerConfig, DeviceFlowStart, OAuthProvider, OAuthAppCredential, AppConfig, DetectedMcpServer } from '@shared/types'
+import type { McpServerConfig, OAuthProvider, OAuthAppCredential, AppConfig, DetectedMcpServer } from '@shared/types'
 
 interface Props {
   onAdd: (srv: McpServerConfig) => Promise<void> | void
@@ -239,9 +239,7 @@ function ConfigurePanel({
   )
   const [oauthToken, setOauthToken] = useState<string | null>(null)
   const [patValue, setPatValue] = useState('')
-  const [deviceFlow, setDeviceFlow] = useState<DeviceFlowStart | null>(null)
   const [connecting, setConnecting] = useState(false)
-  const [polling, setPolling] = useState(false)
   const [error, setError] = useState('')
   const [inlineClientId, setInlineClientId] = useState('')
   const [inlineClientSecret, setInlineClientSecret] = useState('')
@@ -281,31 +279,8 @@ function ConfigurePanel({
     await onCredentialSave?.(provider, creds)
   }
 
-  const handleOAuthDevice = async () => {
-    setError('')
-    setConnecting(true)
-    try {
-      await saveInlineCredsIfNeeded()
-      const flow = await api.oauth.startDevice()
-      setDeviceFlow(flow)
-      setPolling(true)
-      // Start polling in background
-      api.oauth.pollDevice(flow.deviceCode)
-        .then((token) => {
-          setOauthToken(token)
-          setDeviceFlow(null)
-        })
-        .catch((err: Error) => setError(err.message))
-        .finally(() => setPolling(false))
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Connection failed')
-    } finally {
-      setConnecting(false)
-    }
-  }
-
   const handleOAuthPkce = async () => {
-    if (!provider || provider === 'github') return
+    if (!provider) return
     setError('')
     setConnecting(true)
     try {
@@ -393,7 +368,7 @@ function ConfigurePanel({
             <input
               className="form-input form-input--mono"
               type="text"
-              placeholder={provider === 'github' ? 'Ov23li…' : 'your-client-id'}
+              placeholder="your-client-id"
               value={inlineClientId}
               onChange={(e) => setInlineClientId(e.target.value)}
             />
@@ -421,24 +396,13 @@ function ConfigurePanel({
         <div style={{ marginBottom: 12 }}>
           {/* OAuth buttons — hidden once the user has a token from either source */}
           {!oauthToken && !patValue.trim() && (
-            entry.oauthProvider === 'github' ? (
-              <DeviceFlowSection
-                deviceFlow={deviceFlow}
-                oauthToken={oauthToken}
-                connecting={connecting}
-                polling={polling}
-                onConnect={handleOAuthDevice}
-                disabled={credsMissing && !inlineClientId.trim()}
-              />
-            ) : (
-              <PkceSection
-                providerName={entry.name}
-                oauthToken={oauthToken}
-                connecting={connecting}
-                onConnect={handleOAuthPkce}
-                disabled={credsMissing && !inlineClientId.trim()}
-              />
-            )
+            <PkceSection
+              providerName={entry.name}
+              oauthToken={oauthToken}
+              connecting={connecting}
+              onConnect={handleOAuthPkce}
+              disabled={credsMissing && !inlineClientId.trim()}
+            />
           )}
 
           {/* PAT alternative — always shown until OAuth token is obtained */}
@@ -612,70 +576,6 @@ function ConfigurePanel({
         </button>
       </div>
     </div>
-  )
-}
-
-// ─── GitHub Device Flow sub-component ────────────────────────────────────────
-
-function DeviceFlowSection({
-  deviceFlow,
-  oauthToken,
-  connecting,
-  polling,
-  onConnect,
-  disabled
-}: {
-  deviceFlow: DeviceFlowStart | null
-  oauthToken: string | null
-  connecting: boolean
-  polling: boolean
-  onConnect: () => void
-  disabled?: boolean
-}): React.ReactElement {
-  if (oauthToken) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--color-success, #22c55e)', fontSize: 13 }}>
-        <Check size={14} />
-        Connected to GitHub
-      </div>
-    )
-  }
-
-  if (deviceFlow) {
-    return (
-      <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', padding: '10px 12px' }}>
-        <div style={{ fontSize: 13, marginBottom: 8 }}>
-          Enter this code at{' '}
-          <a
-            href={deviceFlow.verificationUri}
-            onClick={(e) => { e.preventDefault(); window.open(deviceFlow.verificationUri) }}
-            style={{ color: 'var(--accent)' }}
-          >
-            {deviceFlow.verificationUri} <ExternalLink size={11} style={{ display: 'inline', verticalAlign: 'middle' }} />
-          </a>
-        </div>
-        <div style={{ fontFamily: 'monospace', fontSize: 22, fontWeight: 700, letterSpacing: '0.15em', marginBottom: 8 }}>
-          {deviceFlow.userCode}
-        </div>
-        {polling && (
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span className="spinner" style={{ width: 12, height: 12 }} />
-            Waiting for authorization…
-          </div>
-        )}
-      </div>
-    )
-  }
-
-  return (
-    <button
-      className="btn btn--primary btn--sm"
-      onClick={onConnect}
-      disabled={connecting || disabled}
-      style={{ width: '100%', justifyContent: 'center' }}
-    >
-      {connecting ? <span className="spinner" /> : 'Connect with GitHub'}
-    </button>
   )
 }
 

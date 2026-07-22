@@ -1,4 +1,4 @@
-export type OAuthProvider = 'github' | 'notion' | 'linear'
+export type OAuthProvider = 'notion' | 'linear'
 
 export interface EnvField {
   key: string
@@ -56,12 +56,16 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
     category: 'Development',
     command: 'npx',
     baseArgs: ['-y', '@modelcontextprotocol/server-github'],
-    authType: 'oauth',
-    oauthProvider: 'github',
-    oauthTokenEnvKey: 'GITHUB_PERSONAL_ACCESS_TOKEN',
-    patLabel: 'Personal access token',
-    patPlaceholder: 'ghp_…',
-    patHint: 'Generate at github.com/settings/tokens — grant repo and read:user scopes.'
+    requiredEnv: [
+      {
+        key: 'GITHUB_PERSONAL_ACCESS_TOKEN',
+        label: 'Personal access token',
+        placeholder: 'github_pat_… or ghp_…',
+        hint: 'Create a token at github.com/settings/tokens. Recommended: a fine-grained token — Generate new token → select the repositories mypa should see → under Repository permissions grant Read-only access to Contents, Metadata, Issues, and Pull requests. Alternatively use a classic token with the repo and read:user scopes. If your organization enforces OAuth/SSO policies, a fine-grained token must be approved by an org admin, and a classic token must be authorized for SSO (click "Configure SSO" next to the token after creating it).',
+        secret: true
+      }
+    ],
+    authType: 'api_key'
   },
   {
     id: 'filesystem',

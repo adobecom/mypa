@@ -80,12 +80,10 @@ Links external repos/projects (GitHub `owner/repo`, Jira project keys) to a loca
 
 ### `oauth`
 
-OAuth flows for GitHub, Notion, and Linear.
+OAuth flows for Notion and Linear. GitHub is not an OAuth entry — it's a plain PAT/`api_key` catalog entry (see [mcp-and-oauth.md](mcp-and-oauth.md#github--personal-access-token)).
 
 | Method | Signature | Description |
 |---|---|---|
-| `startDevice` | `() → DeviceFlowStart` | Begin GitHub device flow; returns `userCode`, `verificationUri`, `deviceCode`, `interval` |
-| `pollDevice` | `(deviceCode) → string` | Poll GitHub until token is issued; returns the access token |
 | `startPkce` | `(provider: 'notion' \| 'linear') → string` | Begin PKCE flow; returns the authorization URL to open in browser |
 
 The redirect URI for PKCE is `mypa://oauth/callback`. The `state` nonce is validated in `oauth.ts` to prevent authorization code injection.
@@ -291,6 +289,8 @@ Manage PA check-in sessions and their chat threads.
 | `openInMainWindow` | `(checkinId?) → void` | Open main window on Check-in page, expanding the given session |
 
 ## Changelog
+
+- 2026-07-22 — **Removed GitHub OAuth device-flow IPC.** `oauth:start-device`/`oauth:poll-device` channels and their preload bindings (`oauth.startDevice`/`oauth.pollDevice`) are removed — GitHub is now a PAT/`api_key` catalog entry, not OAuth (org OAuth-app access-control policies could block the device flow). `IpcApi.oauth` now only exposes `startPkce` (Notion/Linear). See [mcp-and-oauth.md](mcp-and-oauth.md#github--personal-access-token).
 
 - 2026-07-13 — **Obsidian vault knowledge source: new `knowledge` namespace + `IntentSurface`/`AppConfig` additions.** New `IpcApi.knowledge.listVaultFolders(path)` channel (`knowledge:list-vault-folders`) lists top-level subfolders for the Settings vault-folder picker. `IntentSurface` gains `'obsidian'` — a context-only surface, intentionally excluded from `VALID_SURFACES` (inference.ts) so vault notes are never a proposable action target. `AppConfig` gains `knowledge?: KnowledgeConfig` (`{ vault?: { path, folders, enabled } }`), read/written via the existing `config.get`/`config.update`. See [knowledge-graph.md](knowledge-graph.md) and [services.md](services.md).
 
