@@ -1,4 +1,5 @@
 import { homedir } from 'os'
+import { join } from 'path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -92,6 +93,20 @@ export async function connectServer(cfg: McpServerConfig): Promise<McpTool[]> {
     if (mergedEnv.GITHUB_TOKEN && !mergedEnv.GITHUB_PERSONAL_ACCESS_TOKEN) {
       mergedEnv.GITHUB_PERSONAL_ACCESS_TOKEN = mergedEnv.GITHUB_TOKEN
     }
+    // slack-mcp-server needs on-disk user/channel caches to resolve names and to make
+    // channels_list functional at all (without them it falls back to per-message
+    // lookups and channels_list is documented as non-functional). Point both at our
+    // own data dir when the user hasn't already overridden them, so they persist
+    // across restarts and don't need any onboarding step.
+    if (cfg.name === 'slack') {
+      const slackCacheDir = join(homedir(), '.mypa')
+      if (!mergedEnv.SLACK_MCP_USERS_CACHE) {
+        mergedEnv.SLACK_MCP_USERS_CACHE = join(slackCacheDir, 'slack-users-cache.json')
+      }
+      if (!mergedEnv.SLACK_MCP_CHANNELS_CACHE) {
+        mergedEnv.SLACK_MCP_CHANNELS_CACHE = join(slackCacheDir, 'slack-channels-cache.json')
+      }
+    }
     const stdioTransport = new StdioClientTransport({
       command: cfg.command!,
       args: expandTildeArgs(cfg),
@@ -184,6 +199,18 @@ export function getToolInputSchema(serverName: string, toolName: string): Record
   return tool?.inputSchema ?? null
 }
 
+const DEFAULT_TOOL_CALL_TIMEOUT_MS = 30_000
+// Per-server overrides for the default tool-call timeout. Slack's xoxp-token fallback
+// path for tools like conversations_unreads makes one Slack API call per channel and
+// is documented as slower on large workspaces — 30s isn't enough headroom there even
+// with the on-disk cache warmed up, so give it more room before mypa gives up. (Live
+// probe on an enterprise workspace hit the MCP SDK's own 60s default request timeout
+// before this override existed — see the note on the `timeout` option below — so this
+// needs real room past that, not just past our own 30s default.)
+const TOOL_CALL_TIMEOUT_MS: Record<string, number> = {
+  slack: 150_000,
+}
+
 // Shared by callTool/callToolRaw. The MCP SDK's `Client.callTool()` return type
 // widens to `{}` once piped through the generic `withTimeout<T>` wrapper (a TS
 // inference quirk with its structurally-indexed result type), so the actual
@@ -197,9 +224,16 @@ async function callToolTimed(
 ): Promise<CallToolResult> {
   const server = servers.get(serverName)
   if (!server) throw new Error(`MCP server "${serverName}" not connected`)
+  const timeoutMs = TOOL_CALL_TIMEOUT_MS[serverName] ?? DEFAULT_TOOL_CALL_TIMEOUT_MS
+  // The MCP SDK's own Client.callTool() has an internal default request timeout
+  // (DEFAULT_REQUEST_TIMEOUT_MSEC = 60_000, see protocol.js) that fires independently
+  // of our withTimeout race below — a per-server override above 60s does nothing
+  // unless it's also passed through here, since the SDK's own timer would otherwise
+  // still reject first at 60s and surface as "MCP error -32001: Request timed out"
+  // instead of ever reaching our timeoutMs.
   return (await withTimeout(
-    server.client.callTool({ name: toolName, arguments: params }),
-    30_000,
+    server.client.callTool({ name: toolName, arguments: params }, undefined, { timeout: timeoutMs }),
+    timeoutMs,
     `callTool ${serverName}::${toolName}`
   )) as CallToolResult
 }
