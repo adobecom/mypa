@@ -937,6 +937,7 @@ async function runRoutineAgentOnce(
 ): Promise<RoutineAgentResult> {
   const ac = new AbortController()
   let timedOut = false
+  let abortedForRepeatedFailure = false
   const timer = setTimeout(() => { timedOut = true; ac.abort() }, timeoutMs)
 
   let text = ''
@@ -946,6 +947,12 @@ async function runRoutineAgentOnce(
   // Maps tool_use_id → { server, tool } so a later tool_result (success or error)
   // can be labeled the way the old callTool loop labeled entries: "[server.tool]".
   const toolUseIndex = new Map<string, { server: string; tool: string }>()
+  // Counts consecutive-or-not failures per tool. A tool that is broken (e.g. a Slack
+  // call that can never finish inside its MCP-layer timeout on this workspace) fails
+  // identically every retry — bail out once we've seen it fail twice rather than
+  // burning the full run timeout on a predictable dead end.
+  const failureCounts = new Map<string, number>()
+  const MAX_REPEATED_TOOL_FAILURES = 2
 
   const hasMcp = Object.keys(mcpServers).length > 0
   const allMcpServers: Record<string, any> = { ...mcpServers }  // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -1007,6 +1014,13 @@ async function runRoutineAgentOnce(
           if (b.is_error) {
             logError('agent', `tool_result error (tool_use_id=${toolUseId}): ${contentText}`)
             failures.push({ server: ref.server, tool: ref.tool, message: contentText })
+            const failureKey = `${ref.server}::${ref.tool}`
+            const count = (failureCounts.get(failureKey) ?? 0) + 1
+            failureCounts.set(failureKey, count)
+            if (count >= MAX_REPEATED_TOOL_FAILURES) {
+              abortedForRepeatedFailure = true
+              ac.abort()
+            }
           } else {
             toolOutputs.push(`[${ref.server}.${ref.tool}]\n${contentText}`)
           }
@@ -1015,6 +1029,21 @@ async function runRoutineAgentOnce(
     }
   } catch (err) {
     clearTimeout(timer)
+    // Both the 300s wall-clock cap and the repeated-tool-failure short-circuit abort
+    // the same way (ac.abort() → the SDK query() throws). If we already gathered
+    // something useful before aborting — the exact "list, then fetch per item" shape
+    // this whole path exists for — return it as a partial result instead of discarding
+    // it behind a generic error, so the real per-tool failure (e.g. "callTool
+    // slack::conversations_unreads timed out after 30s") reaches routines.ts instead
+    // of being swallowed by an opaque "Agent timed out".
+    if ((timedOut || abortedForRepeatedFailure) && (toolOutputs.length > 0 || failures.length > 0)) {
+      return {
+        text,
+        rawOutput: toolOutputs.join('\n\n---\n\n'),
+        successCount: toolOutputs.length,
+        failures,
+      }
+    }
     if (timedOut) throw new Error('Agent timed out')
     throw err
   }
