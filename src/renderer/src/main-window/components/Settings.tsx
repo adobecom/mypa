@@ -765,7 +765,7 @@ export default function Settings({ onDirtyChange }: SettingsProps): React.ReactE
       <ReposSection />
 
       <VaultSection
-        key={discardCount}
+        key={`vault-${discardCount}`}
         vault={config.knowledge?.vault}
         onChange={(vault) => setConfig({ ...config, knowledge: { ...(config.knowledge ?? {}), vault } })}
       />
@@ -807,7 +807,7 @@ export default function Settings({ onDirtyChange }: SettingsProps): React.ReactE
 
       {/* Check-in schedule */}
       <CheckInScheduleCard
-        key={discardCount}
+        key={`checkin-${discardCount}`}
         checkin={config.checkin}
         onChange={(checkin) => setConfig({ ...config, checkin })}
       />

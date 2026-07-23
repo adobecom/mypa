@@ -105,7 +105,7 @@ export default function RoutineForm({ initial, setupDraft, onSave, onCancel }: P
               which read tools to call and how many times based on what it actually finds.
             </div>
           </div>
-          <button className="btn btn--ghost btn--sm" onClick={handleAddAction}>
+          <button className="btn btn--ghost btn--sm" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} onClick={handleAddAction}>
             + Add action
           </button>
         </div>
@@ -185,11 +185,13 @@ export default function RoutineForm({ initial, setupDraft, onSave, onCancel }: P
 
       <div className="card">
         <div className="card__header">
-          <div className="card__title">Instructions</div>
-          <div className="card__subtitle">
-            What this routine should gather and report — spell out multi-step logic here
-            (e.g. "for each open PR, fetch its CI status and changed files"), since this is
-            what the agent uses to decide which tools to call, not just how to summarize.
+          <div>
+            <div className="card__title">Instructions</div>
+            <div className="card__subtitle">
+              What this routine should gather and report — spell out multi-step logic here
+              (e.g. "for each open PR, fetch its CI status and changed files"), since this is
+              what the agent uses to decide which tools to call, not just how to summarize.
+            </div>
           </div>
         </div>
         <textarea
