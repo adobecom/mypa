@@ -1199,6 +1199,7 @@ function ReposSection(): React.ReactElement {
   const [repos, setRepos] = useState<RepoLink[]>([])
   const [addingRoot, setAddingRoot] = useState(false)
   const [rescanning, setRescanning] = useState(false)
+  const [search, setSearch] = useState('')
 
   const refresh = useCallback(() => {
     Promise.all([api.repos.getCodeRoots(), api.repos.getAll()])
@@ -1244,14 +1245,19 @@ function ReposSection(): React.ReactElement {
     refresh()
   }
 
-  async function handleJiraKeysBlur(repo: RepoLink, raw: string): Promise<void> {
-    const keys = raw.split(',').map((k) => k.trim().toUpperCase()).filter(Boolean)
-    if (JSON.stringify(keys) === JSON.stringify(repo.jiraProjectKeys)) return
-    await api.repos.update(repo.id, { jiraProjectKeys: keys })
-    refresh()
-  }
-
   const authoringCount = repos.filter((r) => r.authoringEnabled).length
+
+  const q = search.toLowerCase().trim()
+  const filteredRepos = useMemo(
+    () =>
+      !q
+        ? repos
+        : repos.filter((repo) => {
+            const name = (repo.githubRepo ?? repo.localPath.split('/').pop() ?? '').toLowerCase()
+            return name.includes(q) || repo.localPath.toLowerCase().includes(q)
+          }),
+    [repos, q]
+  )
 
   return (
     <>
@@ -1323,34 +1329,50 @@ function ReposSection(): React.ReactElement {
           </div>
         )}
 
-        {repos.map((repo) => (
-          <div key={repo.id} className="mcp-server-row" style={{ alignItems: 'flex-start' }}>
-            <div
-              className={`mcp-server-row__dot mcp-server-row__dot--${repo.authoringEnabled ? 'connected' : 'disabled'}`}
-              style={{ marginTop: 6 }}
-            />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="mcp-server-row__name">
-                {repo.githubRepo ?? repo.localPath.split('/').pop()}
-                {repo.source === 'manual' && (
-                  <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 400, color: 'var(--text-muted)' }}>manual</span>
+        {repos.length > 0 && (
+          <input
+            className="form-input"
+            placeholder="Search repos…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ marginBottom: 8 }}
+          />
+        )}
+
+        {repos.length > 0 && filteredRepos.length === 0 && (
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '8px 0' }}>
+            No repos match "{search}"
+          </div>
+        )}
+
+        <div className="repo-list">
+          {filteredRepos.map((repo) => (
+            <div key={repo.id} className="mcp-server-row" style={{ alignItems: 'flex-start' }}>
+              <div
+                className={`mcp-server-row__dot mcp-server-row__dot--${repo.authoringEnabled ? 'connected' : 'disabled'}`}
+                style={{ marginTop: 6 }}
+              />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="mcp-server-row__name">
+                  {repo.githubRepo ?? repo.localPath.split('/').pop()}
+                  {repo.source === 'manual' && (
+                    <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 400, color: 'var(--text-muted)' }}>manual</span>
+                  )}
+                </div>
+                <div className="mcp-server-row__count">{repo.localPath}</div>
+                {repo.jiraProjectKeys.length > 0 && (
+                  <div className="mcp-server-row__count" title="Inferred automatically from commit history and branch names">
+                    Jira: {repo.jiraProjectKeys.join(', ')}
+                  </div>
                 )}
               </div>
-              <div className="mcp-server-row__count">{repo.localPath}</div>
+              <label className="toggle" title={repo.authoringEnabled ? 'Authoring is on for this repo' : 'Authoring is off for this repo'}>
+                <input type="checkbox" checked={repo.authoringEnabled} onChange={() => handleToggleAuthoring(repo)} />
+                <span className="toggle__track" />
+              </label>
             </div>
-            <input
-              className="form-input"
-              style={{ width: 130, fontSize: 12 }}
-              placeholder="Jira keys"
-              defaultValue={repo.jiraProjectKeys.join(', ')}
-              onBlur={(e) => handleJiraKeysBlur(repo, e.target.value)}
-            />
-            <label className="toggle" title={repo.authoringEnabled ? 'Authoring is on for this repo' : 'Authoring is off for this repo'}>
-              <input type="checkbox" checked={repo.authoringEnabled} onChange={() => handleToggleAuthoring(repo)} />
-              <span className="toggle__track" />
-            </label>
-          </div>
-        ))}
+          ))}
+        </div>
 
         {repos.length > 0 && (
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>

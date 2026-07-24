@@ -813,8 +813,8 @@ export interface IpcApi {
   }
   repos: {
     getAll(): Promise<RepoLink[]>
-    /** Per-repo edits a user can make on a discovered (or legacy manual) RepoLink —
-     *  authoringEnabled and jiraProjectKeys. localPath/githubRepo are scanner-owned. */
+    /** Per-repo edit a user can make on a discovered (or legacy manual) RepoLink —
+     *  authoringEnabled. localPath/githubRepo/jiraProjectKeys are scanner-owned. */
     update(id: string, update: Partial<Omit<RepoLink, 'id' | 'created_at'>>): Promise<RepoLink>
     /** Parent folders mypa scans for local git checkouts. */
     getCodeRoots(): Promise<string[]>

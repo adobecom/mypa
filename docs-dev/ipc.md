@@ -74,7 +74,7 @@ Links external repos/projects (GitHub `owner/repo`, Jira project keys) to a loca
 | Method | Signature | Description |
 |---|---|---|
 | `getAll` | `() → RepoLink[]` | List all registered repo links (discovered + any legacy manual ones) |
-| `update` | `(id, update: Partial<RepoLink>) → RepoLink` | Patch a repo link — used for the per-repo `authoringEnabled` toggle and `jiraProjectKeys` edits. `localPath`/`githubRepo` are scanner-owned and not user-editable. |
+| `update` | `(id, update: Partial<RepoLink>) → RepoLink` | Patch a repo link — used for the per-repo `authoringEnabled` toggle. `localPath`/`githubRepo`/`jiraProjectKeys` are scanner-owned (re-derived on every rescan) and not user-editable. |
 | `getCodeRoots` | `() → string[]` | Parent folders mypa scans for local git checkouts |
 | `addCodeRoots` | `(paths: string[]) → { roots: string[]; repos: RepoLink[] }` | Adds code roots and immediately rescans; returns the updated roots and repo list |
 | `removeCodeRoot` | `(path: string) → { roots: string[]; repos: RepoLink[] }` | Removes a code root and immediately rescans |

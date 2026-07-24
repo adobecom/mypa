@@ -80,6 +80,53 @@ async function deriveRepoMetadata(localPath: string): Promise<{ githubRepo?: str
   return { githubRepo, defaultBaseBranch }
 }
 
+/**
+ * Technical acronyms that commonly appear as ALL-CAPS-followed-by-a-number in commit
+ * messages (hash/encoding/standards references) but are never real Jira project key
+ * prefixes — excluded so e.g. "SHA-256" or "UTF-8" mentioned twice doesn't get inferred
+ * as a Jira key.
+ */
+const NON_JIRA_KEY_ACRONYMS = new Set(['SHA', 'UTF', 'AES', 'ISO', 'RFC', 'ECMA', 'IEEE', 'DES', 'CRC'])
+
+/**
+ * Infers Jira project keys (e.g. "PROJ") from recent commit subjects/bodies and local
+ * branch names — never clones or modifies anything. Keys are surfaced automatically
+ * instead of asked for by hand, since a repo can map to zero, one, or several projects
+ * and that mapping is discoverable from history rather than something the user should
+ * have to maintain per repo.
+ */
+async function deriveJiraProjectKeys(localPath: string): Promise<string[]> {
+  const text: string[] = []
+  try {
+    text.push(await runGit(localPath, ['log', '--format=%s%n%b', '-n', '300']))
+  } catch {
+    // Shallow clone, empty repo, or unreadable history — no commits to scan.
+  }
+  try {
+    text.push(await runGit(localPath, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']))
+  } catch {
+    // No local branches to scan.
+  }
+
+  const counts = new Map<string, number>()
+  const keyPattern = /\b([A-Z][A-Z0-9]{1,9})-\d+/g
+  for (const blob of text) {
+    for (const match of blob.matchAll(keyPattern)) {
+      const key = match[1].toUpperCase()
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+  }
+
+  // Keep keys seen more than once (drop one-off stray references), excluding common
+  // technical acronyms that share the same KEY-123 shape (SHA-256, UTF-8, ISO-8601, ...)
+  // but are never real Jira project prefixes, most-frequent first.
+  return [...counts.entries()]
+    .filter(([key, count]) => count >= 2 && !NON_JIRA_KEY_ACRONYMS.has(key))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([key]) => key)
+}
+
 export function updateRepoLink(id: string, patch: Partial<Omit<RepoLink, 'id' | 'created_at'>>): RepoLink {
   const current = getAllRepoLinks()
   const idx = current.findIndex((r) => r.id === id)
@@ -269,14 +316,16 @@ async function doRescan(): Promise<RepoLink[]> {
     for (const path of await findGitRepos(root)) foundPaths.add(path)
   }
 
-  const foundMeta = new Map<string, { githubRepo?: string; defaultBaseBranch: string }>()
+  const foundMeta = new Map<string, { githubRepo?: string; defaultBaseBranch: string; jiraProjectKeys: string[] }>()
   for (const path of foundPaths) {
     const meta = await deriveRepoMetadata(path)
-    if (repoOrgInScope(meta.githubRepo)) foundMeta.set(path, meta)
+    if (!repoOrgInScope(meta.githubRepo)) continue
+    const jiraProjectKeys = await deriveJiraProjectKeys(path)
+    foundMeta.set(path, { ...meta, jiraProjectKeys })
   }
 
   // Read config fresh right before the single write below, to shrink the window
-  // in which a concurrent Settings edit (e.g. a jiraProjectKeys change) could race.
+  // in which a concurrent rescan could race.
   const existing = getAllRepoLinks()
   const manual = existing.filter((r) => r.source !== 'discovered')
   // Realpath-normalized so a manual link added before auto-discovery (which may not
@@ -291,13 +340,19 @@ async function doRescan(): Promise<RepoLink[]> {
 
     const prior = existingDiscovered.get(path)
     if (prior) {
-      nextDiscovered.push({ ...prior, githubRepo: meta.githubRepo, defaultBaseBranch: meta.defaultBaseBranch, lastSeenAt: now })
+      nextDiscovered.push({
+        ...prior,
+        githubRepo: meta.githubRepo,
+        defaultBaseBranch: meta.defaultBaseBranch,
+        jiraProjectKeys: meta.jiraProjectKeys,
+        lastSeenAt: now
+      })
     } else {
       nextDiscovered.push({
         id: randomUUID(),
         localPath: path,
         githubRepo: meta.githubRepo,
-        jiraProjectKeys: [],
+        jiraProjectKeys: meta.jiraProjectKeys,
         defaultBaseBranch: meta.defaultBaseBranch,
         authoringEnabled: false,
         source: 'discovered',

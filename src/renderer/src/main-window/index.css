@@ -665,6 +665,13 @@ html, body, #root {
 .mcp-server-row__name { font-weight: 500; flex: 1; }
 .mcp-server-row__count { font-size: 11px; color: var(--text-muted); }
 
+/* ─── Discovered repos list ─────────────────────────────────────────────────── */
+
+.repo-list {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
 /* ─── MCP tool inspector ────────────────────────────────────────────────────── */
 
 .mcp-tool-list {
