@@ -63,7 +63,20 @@ Defined in `src/shared/types.ts`. Deep-merged with `DEFAULT_CONFIG` on every rea
       "folders": ["Work"],                        // vault-relative subfolders to ingest; others are never read
       "enabled": true
     }
-  }
+  },
+  "codeRoots": ["/Users/you/Code"],   // parent folders scanned for local git checkouts, see repos.ts
+  "repos": [
+    {
+      "id":               "…",
+      "localPath":        "/Users/you/Code/my-repo",
+      "githubRepo":       "adobecom/my-repo",   // derived from `git remote get-url origin`
+      "jiraProjectKeys":  [],
+      "defaultBaseBranch": "main",
+      "authoringEnabled": false,   // opt-in per repo — a discovered repo never starts enabled
+      "source":           "discovered",
+      "lastSeenAt":       "2026-07-23T10:00:00Z"
+    }
+  ]
 }
 ```
 
@@ -76,7 +89,9 @@ Defined in `src/shared/types.ts`. Deep-merged with `DEFAULT_CONFIG` on every rea
   preferences: { widget_always_on_top: false, notification_sound: true, launch_on_login: false },
   onboarding_complete: false,
   ambient: { enabled: true, pollIntervalMs: 300000, decayHalfLifeDays: 7, confidenceFloor: 0.4, urgencyFloor: 0.5, waitingUrgencyFloor: 0.25, synthesisIntervalMs: 1800000, synthesisInitialDelayMs: 75000 },
-  knowledge: { vault: { path: '', folders: [], enabled: false } }
+  knowledge: { vault: { path: '', folders: [], enabled: false } },
+  codeRoots: [],
+  repos:     []
 }
 ```
 
@@ -172,6 +187,8 @@ Managed from the widget's Settings panel and persisted in `config.preferences`:
 | `launch_on_login` | `false` | Register as a login item (macOS / Windows) |
 
 ## Changelog
+
+- 2026-07-23 — **New `codeRoots` field; `RepoLink` gains `source`/`lastSeenAt`.** `AppConfig.codeRoots` holds parent folders the user picks in Settings; `repos.ts` `rescanRepos()` scans them and reconciles results into `AppConfig.repos`. See [services.md](services.md#changelog).
 
 - 2026-07-14 — **Removed dead `ClaudeConfig.model` field.** It was never read for model selection (that's entirely driven by `model-router.ts`); `claude` config now holds only `apiKey`.
 

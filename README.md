@@ -9,7 +9,7 @@ A local-first personal assistant for developers, built as a macOS/Linux/Windows 
 - **Routines** — schedule recurring tasks that call MCP servers, run Claude prompts, and deliver digests as OS notifications; set up routines from natural language
 - **Plan** — capture and track plan items with AI-generated breakdowns, timing, and chat threads
 - **Ambient intelligence** — background polling of GitHub, Jira, and Slack; the assistant proposes intents (actions, suggestions, flags) for you to approve or dismiss
-- **Code authoring** — link a local git checkout to a GitHub repo / Jira project; when a ticket or PR is directed at you, mypa can attempt a real fix in an isolated git worktree, then present the diff for review with a one-tap "Ship it" (push + open PR + comment the ticket + notify Slack)
+- **Code authoring** — auto-discovers local git checkouts under folders you point it at and links them to their GitHub repo / Jira project; when a ticket or PR is directed at you, mypa can attempt a real fix in an isolated git worktree (opt in per repo), then present the diff for review with a one-tap "Ship it" (push + open PR + comment the ticket + notify Slack)
 - **Autonomy / trust tiers** — per-action trust levels that adapt based on your approve/challenge/dismiss history; fully configurable and resettable
 - **Memory graph** — a visual knowledge graph of people, work items, topics, and the assistant's own decisions, built from local embeddings; inspect and edit from the Memory page
 - **Knowledge vault** — optionally ingest a local markdown vault (e.g. Obsidian), scoped to folders you choose, as read-only context; notes and `[[wikilinks]]` become graph nodes and edges alongside your observed work signals

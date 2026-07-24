@@ -69,14 +69,16 @@ Read and write app configuration; query MCP server status.
 
 ### `repos`
 
-Links external repos/projects (GitHub `owner/repo`, Jira project keys) to a local git checkout, for code authoring. `RepoLink[]` is stored in `AppConfig.repos`, not the DB — see `repos.ts` and [code-authoring.md](code-authoring.md).
+Links external repos/projects (GitHub `owner/repo`, Jira project keys) to a local git checkout, for code authoring. `RepoLink[]` is stored in `AppConfig.repos`, not the DB — see `repos.ts` and [code-authoring.md](code-authoring.md). Repos are auto-discovered by scanning user-chosen parent folders (`AppConfig.codeRoots`), not added by hand — see `getCodeRoots`/`addCodeRoots`/`removeCodeRoot`/`rescan` below.
 
 | Method | Signature | Description |
 |---|---|---|
-| `getAll` | `() → RepoLink[]` | List all registered repo links |
-| `add` | `(localPath, jiraProjectKeys) → RepoLink` | Register a local checkout. Validates it's a git repo, then reads `git remote get-url origin` and the default branch to prefill `githubRepo`/`defaultBaseBranch`. Never clones or writes to the checkout. |
-| `update` | `(id, update: Partial<RepoLink>) → RepoLink` | Patch a repo link (e.g. toggle `authoringEnabled`) |
-| `remove` | `(id) → void` | Unregister a repo link (does not touch the local checkout or any worktrees already created from it) |
+| `getAll` | `() → RepoLink[]` | List all registered repo links (discovered + any legacy manual ones) |
+| `update` | `(id, update: Partial<RepoLink>) → RepoLink` | Patch a repo link — used for the per-repo `authoringEnabled` toggle and `jiraProjectKeys` edits. `localPath`/`githubRepo` are scanner-owned and not user-editable. |
+| `getCodeRoots` | `() → string[]` | Parent folders mypa scans for local git checkouts |
+| `addCodeRoots` | `(paths: string[]) → { roots: string[]; repos: RepoLink[] }` | Adds code roots and immediately rescans; returns the updated roots and repo list |
+| `removeCodeRoot` | `(path: string) → { roots: string[]; repos: RepoLink[] }` | Removes a code root and immediately rescans |
+| `rescan` | `() → RepoLink[]` | Re-scans all configured code roots on demand (Settings "Rescan" button) |
 
 ### `oauth`
 
@@ -289,6 +291,8 @@ Manage PA check-in sessions and their chat threads.
 | `openInMainWindow` | `(checkinId?) → void` | Open main window on Check-in page, expanding the given session |
 
 ## Changelog
+
+- 2026-07-23 — **`repos` namespace switches from manual add/remove to code-root auto-discovery.** `repos.add`/`repos.remove` removed; added `repos.getCodeRoots`, `repos.addCodeRoots`, `repos.removeCodeRoot`, `repos.rescan`. `repos.getAll`/`repos.update` unchanged in shape, but discovered `RepoLink`s now default `authoringEnabled: false` and carry `source`/`lastSeenAt`. See [services.md](services.md#changelog) for the scan/reconciliation details.
 
 - 2026-07-22 — **Removed GitHub OAuth device-flow IPC.** `oauth:start-device`/`oauth:poll-device` channels and their preload bindings (`oauth.startDevice`/`oauth.pollDevice`) are removed — GitHub is now a PAT/`api_key` catalog entry, not OAuth (org OAuth-app access-control policies could block the device flow). `IpcApi.oauth` now only exposes `startPkce` (Notion/Linear). See [mcp-and-oauth.md](mcp-and-oauth.md#github--personal-access-token).
 
