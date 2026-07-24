@@ -1,6 +1,6 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { existsSync, readdirSync, realpathSync, type Dirent } from 'fs'
+import { existsSync, readdirSync, realpathSync, statSync, type Dirent } from 'fs'
 import { join, parse as parsePath } from 'path'
 import { homedir } from 'os'
 import { randomUUID } from 'crypto'
@@ -209,13 +209,15 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 /**
- * Walks `root` looking for git checkouts (a directory containing `.git`), never
- * descending into a repo it already found (avoids submodules / nested worktrees)
- * or into `SCAN_IGNORE_DIRS` / dotfolders / symlinked directories / mypa's own
- * `~/.mypa` tree. Returns realpath-resolved, deduplicated repo paths. Yields back
- * to the event loop periodically so a large root doesn't freeze the whole app —
- * Electron's main process is single-threaded and this walk is otherwise all
- * synchronous fs calls.
+ * Walks `root` looking for git checkouts (a directory whose `.git` is itself a
+ * directory), never descending past a `.git` path it finds — whether that's a real
+ * repo (added to the result) or a worktree's `gitdir:` pointer file (not added, since
+ * it isn't its own repo, but a worktree mirrors its main repo's tree so there's
+ * nothing further inside it to find either) — or into `SCAN_IGNORE_DIRS` / dotfolders
+ * / symlinked directories / mypa's own `~/.mypa` tree. Returns realpath-resolved,
+ * deduplicated repo paths. Yields back to the event loop periodically so a large root
+ * doesn't freeze the whole app — Electron's main process is single-threaded and this
+ * walk is otherwise all synchronous fs calls.
  */
 async function findGitRepos(root: string): Promise<string[]> {
   const found = new Set<string>()
@@ -233,9 +235,18 @@ async function findGitRepos(root: string): Promise<string[]> {
     dirsVisited++
     if (dirsVisited % SCAN_YIELD_EVERY === 0) await yieldToEventLoop()
 
-    if (existsSync(join(dir, '.git'))) {
-      found.add(dir)
-      continue // never descend into a repo we already found
+    const gitPath = join(dir, '.git')
+    if (existsSync(gitPath)) {
+      // A worktree's `.git` is a file containing a `gitdir:` pointer back at the
+      // main checkout, not a real repo — skip listing it, but still stop descending
+      // (a worktree mirrors its main repo's tree, so there's nothing further to find).
+      try {
+        if (statSync(gitPath).isDirectory()) found.add(dir)
+      } catch {
+        // Disappeared between the existence check and here (e.g. a concurrent
+        // `git worktree remove`) — nothing to add, but still don't descend further.
+      }
+      continue
     }
     if (depth >= SCAN_MAX_DEPTH) continue
 
