@@ -270,6 +270,10 @@ export interface AppConfig {
     notion?: string
     linear?: string
   }
+  /** ISO timestamp of the last successful device-code sign-in, keyed by catalog entry id
+   *  (e.g. 'outlook'). See oauth.startDeviceLogin — these providers manage their own
+   *  token cache/refresh, so this is display-only ("Connected on <date>"), not a credential. */
+  device_login_at?: Record<string, string>
   ambient?: AmbientConfig
   checkin?: CheckInConfig
   scope?: ScopeConfig
@@ -823,6 +827,13 @@ export interface IpcApi {
   }
   oauth: {
     startPkce(provider: 'notion' | 'linear'): Promise<string>
+    /**
+     * Runs the catalog entry's own device-code login (e.g. Outlook via ms-365-mcp-server)
+     * and resolves once sign-in completes. The device code + verification URL are pushed
+     * separately on the 'oauth:device-code' channel — this promise carries no return value
+     * because the server manages its own token cache, not mypa.
+     */
+    startDeviceLogin(entryId: string, env: Record<string, string>): Promise<void>
   }
   setup: {
     checkPrerequisites(): Promise<{ ok: boolean; source: AuthSource }>
@@ -947,7 +958,10 @@ export interface IpcApi {
       | 'update:downloaded'
       | 'update:error'
       | 'chat:tool-approval-request'
-      | 'chat:ask-question',
+      | 'chat:ask-question'
+      /** Device-code login prompt for a catalog entry (see oauth.startDeviceLogin).
+       *  Payload: { entryId: string; userCode: string; verificationUri: string } */
+      | 'oauth:device-code',
     listener: (...args: unknown[]) => void
   ): () => void
 }

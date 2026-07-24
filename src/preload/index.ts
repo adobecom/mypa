@@ -52,7 +52,9 @@ const api: IpcApi = {
     rescan: () => ipcRenderer.invoke('repos:rescan')
   },
   oauth: {
-    startPkce: (provider: 'notion' | 'linear') => ipcRenderer.invoke('oauth:start-pkce', provider)
+    startPkce: (provider: 'notion' | 'linear') => ipcRenderer.invoke('oauth:start-pkce', provider),
+    startDeviceLogin: (entryId: string, env: Record<string, string>) =>
+      ipcRenderer.invoke('oauth:start-device-login', entryId, env)
   },
   setup: {
     checkPrerequisites: () => ipcRenderer.invoke('setup:check-prerequisites'),

@@ -6,6 +6,9 @@ export interface EnvField {
   placeholder?: string
   hint?: string
   secret?: boolean
+  /** When true, the field may be left blank — used for advanced overrides
+   *  (e.g. a custom Azure app) that most users never need to fill in. */
+  optional?: boolean
 }
 
 export interface ArgInput {
@@ -26,7 +29,13 @@ export interface McpCatalogEntry {
   command: string
   baseArgs: string[]
   argInputs?: ArgInput[]
-  authType: 'oauth' | 'api_key' | 'none'
+  /**
+   * 'device_code' — the MCP server drives its own login (MSAL device-code flow)
+   * and manages token caching/refresh itself; mypa only surfaces the device code
+   * and waits for the login process to exit. Used when the provider's tokens are
+   * short-lived and mypa's PKCE flow (below) has no refresh-token support.
+   */
+  authType: 'oauth' | 'api_key' | 'none' | 'device_code'
   oauthProvider?: OAuthProvider
   oauthTokenEnvKey?: string
   requiredEnv?: EnvField[]
@@ -176,6 +185,32 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
         is_mcp_enabled: false
       }
     }
+  },
+  {
+    id: 'outlook',
+    name: 'Outlook',
+    description: 'Read Outlook email and calendar (Microsoft 365)',
+    category: 'Communication',
+    command: 'npx',
+    // --org-mode targets a work/school (Microsoft 365) account rather than a personal one.
+    baseArgs: ['-y', '@softeria/ms-365-mcp-server', '--org-mode'],
+    authType: 'device_code',
+    requiredEnv: [
+      {
+        key: 'MS365_MCP_CLIENT_ID',
+        label: 'Custom Azure app client ID',
+        placeholder: 'Only needed if your org blocks the built-in app',
+        hint: 'Leave blank to use the server\'s built-in app. If your Microsoft 365 admin blocks it, register a public-client Azure app with delegated Mail.Read / Calendars.Read scopes and paste its client ID here.',
+        optional: true
+      },
+      {
+        key: 'MS365_MCP_TENANT_ID',
+        label: 'Tenant ID',
+        placeholder: 'Leave blank to use "common"',
+        hint: 'Your organization\'s Azure AD tenant ID. Only needed alongside a custom client ID.',
+        optional: true
+      }
+    ]
   },
   // ─── Productivity ────────────────────────────────────────────────────────────
   {

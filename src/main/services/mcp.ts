@@ -107,6 +107,13 @@ export async function connectServer(cfg: McpServerConfig): Promise<McpTool[]> {
         mergedEnv.SLACK_MCP_CHANNELS_CACHE = join(slackCacheDir, 'slack-channels-cache.json')
       }
     }
+    // ms-365-mcp-server (Outlook) caches its MSAL token on disk so re-login isn't
+    // needed on every restart. Pin it under our own data dir — same convention as
+    // the Slack caches above — and to the same path startDeviceLogin (oauth.ts)
+    // uses, so the login process and the connected server share one cache.
+    if (cfg.name === 'outlook' && !mergedEnv.MS365_MCP_TOKEN_CACHE_PATH) {
+      mergedEnv.MS365_MCP_TOKEN_CACHE_PATH = join(homedir(), '.mypa', 'ms365-token-cache.json')
+    }
     const stdioTransport = new StdioClientTransport({
       command: cfg.command!,
       args: expandTildeArgs(cfg),

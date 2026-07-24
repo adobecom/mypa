@@ -1,6 +1,6 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react'
 import { ArrowLeft, Check, Copy, ExternalLink, Download, FolderOpen } from 'lucide-react'
-import { MCP_CATALOG, CATALOG_CATEGORIES, type McpCatalogEntry } from '@shared/mcp-catalog'
+import { MCP_CATALOG, CATALOG_CATEGORIES, type McpCatalogEntry, type EnvField } from '@shared/mcp-catalog'
 import type { McpServerConfig, OAuthProvider, OAuthAppCredential, AppConfig, DetectedMcpServer } from '@shared/types'
 
 interface Props {
@@ -209,8 +209,12 @@ function CatalogGrid({
 }
 
 function AuthBadge({ authType }: { authType: McpCatalogEntry['authType'] }): React.ReactElement {
-  const label = authType === 'oauth' ? 'OAuth' : authType === 'api_key' ? 'API key' : 'No auth'
-  const color = authType === 'oauth' ? 'var(--accent)' : authType === 'api_key' ? 'var(--text-muted)' : 'var(--text-muted)'
+  const label =
+    authType === 'oauth' ? 'OAuth'
+    : authType === 'device_code' ? 'Sign-in'
+    : authType === 'api_key' ? 'API key'
+    : 'No auth'
+  const color = authType === 'oauth' || authType === 'device_code' ? 'var(--accent)' : 'var(--text-muted)'
   return (
     <span style={{ fontSize: 10, color, border: `1px solid ${color}`, borderRadius: 4, padding: '1px 5px', flexShrink: 0 }}>
       {label}
@@ -246,6 +250,19 @@ function ConfigurePanel({
   const [manifestCopyState, setManifestCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const manifestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [saving, setSaving] = useState(false)
+  const [deviceCode, setDeviceCode] = useState<{ userCode: string; verificationUri: string } | null>(null)
+  const [deviceLoginConnecting, setDeviceLoginConnecting] = useState(false)
+  const [deviceLoginDone, setDeviceLoginDone] = useState(false)
+  const [codeCopyState, setCodeCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const codeCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (entry.authType !== 'device_code') return
+    return window.electron.on('oauth:device-code', (...args: unknown[]) => {
+      const payload = args[0] as { entryId: string; userCode: string; verificationUri: string }
+      if (payload.entryId === entry.id) setDeviceCode({ userCode: payload.userCode, verificationUri: payload.verificationUri })
+    })
+  }, [entry.id, entry.authType])
 
   const handleCopyManifest = async () => {
     if (!entry.appManifest) return
@@ -260,7 +277,38 @@ function ConfigurePanel({
     }
   }
 
+  const handleCopyCode = async () => {
+    if (!deviceCode) return
+    if (codeCopyTimerRef.current) clearTimeout(codeCopyTimerRef.current)
+    try {
+      await navigator.clipboard.writeText(deviceCode.userCode)
+      setCodeCopyState('copied')
+      codeCopyTimerRef.current = setTimeout(() => setCodeCopyState('idle'), 2000)
+    } catch {
+      setCodeCopyState('failed')
+      codeCopyTimerRef.current = setTimeout(() => setCodeCopyState('idle'), 2000)
+    }
+  }
+
   const api = window.electron
+
+  // Field renderer for device_code entries' optional advanced overrides — locked
+  // once sign-in succeeds so a later edit can't silently save a server config
+  // pointing at a different Azure app/tenant than the one just signed into.
+  const renderDeviceCodeEnvField = (field: EnvField) => (
+    <div key={field.key} className="form-group">
+      <label className="form-label">{field.label}{field.optional ? ' (optional)' : ''}</label>
+      <input
+        className="form-input form-input--mono"
+        type={field.secret ? 'password' : 'text'}
+        placeholder={field.placeholder}
+        value={envValues[field.key] ?? ''}
+        disabled={deviceLoginDone}
+        onChange={(e) => setEnvValues({ ...envValues, [field.key]: e.target.value })}
+      />
+      {field.hint && <div className="form-hint">{field.hint}</div>}
+    </div>
+  )
 
   const provider = entry.oauthProvider as OAuthProvider | undefined
   const savedCreds = provider ? oauthCreds?.[provider] : undefined
@@ -294,10 +342,29 @@ function ConfigurePanel({
     }
   }
 
+  const handleDeviceLogin = async () => {
+    setError('')
+    setDeviceCode(null)
+    setDeviceLoginConnecting(true)
+    try {
+      // requiredEnv holds optional overrides (custom Azure app id/tenant) for
+      // device_code entries — pass through so the login process uses the same
+      // app/tenant the server itself will connect with.
+      const env: Record<string, string> = { ...(entry.fixedEnv ?? {}), ...envValues }
+      await api.oauth.startDeviceLogin(entry.id, env)
+      setDeviceLoginDone(true)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Sign-in failed')
+    } finally {
+      setDeviceLoginConnecting(false)
+    }
+  }
+
   const isReady = (): boolean => {
     if (entry.authType === 'oauth' && !effectiveToken) return false
-    if (entry.authType === 'api_key') {
-      if (entry.requiredEnv?.some((f) => !envValues[f.key]?.trim())) return false
+    if (entry.authType === 'device_code' && !deviceLoginDone) return false
+    if (entry.authType === 'api_key' || entry.authType === 'device_code') {
+      if (entry.requiredEnv?.some((f) => !f.optional && !envValues[f.key]?.trim())) return false
     }
     if (entry.argInputs) {
       for (let i = 0; i < entry.argInputs.length; i++) {
@@ -434,6 +501,76 @@ function ConfigurePanel({
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--color-success, #22c55e)', fontSize: 13 }}>
               <Check size={14} />
               Connected to {entry.name}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Device-code sign-in — the MCP server drives its own login and manages
+          token cache/refresh (see oauth.startDeviceLogin); mypa never sees a token. */}
+      {entry.authType === 'device_code' && (
+        <div style={{ marginBottom: 12 }}>
+          {/* Advanced overrides come first — an org whose admin policy blocks the
+              built-in app needs these filled in *before* attempting sign-in. */}
+          {entry.requiredEnv && entry.requiredEnv.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
+                Advanced (optional)
+              </div>
+              {entry.requiredEnv.map(renderDeviceCodeEnvField)}
+            </>
+          )}
+
+          {!deviceLoginDone && (
+            <button
+              className="btn btn--primary btn--sm"
+              onClick={handleDeviceLogin}
+              disabled={deviceLoginConnecting}
+              style={{ width: '100%', justifyContent: 'center' }}
+            >
+              {deviceLoginConnecting ? (
+                <>
+                  <span className="spinner" />
+                  {deviceCode ? 'Waiting for sign-in…' : 'Starting sign-in…'}
+                </>
+              ) : (
+                `Connect to ${entry.name}`
+              )}
+            </button>
+          )}
+
+          {deviceCode && !deviceLoginDone && (
+            <div style={{ marginTop: 10, padding: '10px 12px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', textAlign: 'center' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
+                A browser window opened — enter this code to sign in:
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 8 }}>
+                <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '0.1em' }}>
+                  {deviceCode.userCode}
+                </div>
+                <button
+                  className="btn btn--ghost btn--sm"
+                  style={{ padding: '2px 6px' }}
+                  onClick={handleCopyCode}
+                  title="Copy code"
+                >
+                  {codeCopyState === 'copied' ? <Check size={13} /> : <Copy size={13} />}
+                </button>
+              </div>
+              <button
+                className="btn btn--ghost btn--sm"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: '0 auto' }}
+                onClick={() => window.electron.system.openExternal(deviceCode.verificationUri)}
+              >
+                Open sign-in page <ExternalLink size={12} />
+              </button>
+            </div>
+          )}
+
+          {deviceLoginDone && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--color-success, #22c55e)', fontSize: 13 }}>
+              <Check size={14} />
+              Signed in to {entry.name}
             </div>
           )}
         </div>

@@ -1,6 +1,6 @@
 import { app, BrowserWindow, nativeImage, dialog } from 'electron'
 import { fixPath } from './services/path-fix'
-import { handleOAuthCallback } from './services/oauth'
+import { handleOAuthCallback, killActiveDeviceLogins } from './services/oauth'
 import { readFileSync } from 'fs'
 import { initDb, dbRunMaintenance } from './db/index'
 import { readConfig, seedScopeIfUnset } from './services/config'
@@ -124,6 +124,7 @@ async function main(): Promise<void> {
     setQuitting()
     stopScheduler()
     stopAmbient()
+    killActiveDeviceLogins()
     try {
       await withTimeout(disconnectAllServers(), 3_000, 'disconnectAllServers on quit')
     } catch (err) {
