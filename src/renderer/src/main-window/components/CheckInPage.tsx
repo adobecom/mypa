@@ -29,7 +29,15 @@ function CheckInDetail({ checkin, onCheckinUpdated }: CheckInDetailProps): React
 
   useEffect(() => {
     setCurrent(checkin)
-    api.checkin.getThread(checkin.id).then(setThread)
+    api.checkin.getThread(checkin.id).then((msgs) => {
+      setThread(msgs)
+      // A freshly started check-in has no messages yet while the opening briefing
+      // spins up (model start + MCP tool connect) — show the thinking indicator
+      // right away instead of an empty card until the first streamed chunk lands.
+      if (checkin.status === 'active' && msgs.length === 0) {
+        setStreaming(true)
+      }
+    })
   }, [checkin.id])
 
   useEffect(() => {

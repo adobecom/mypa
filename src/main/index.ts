@@ -7,6 +7,7 @@ import { readConfig, seedScopeIfUnset } from './services/config'
 import { connectAllServers, disconnectAllServers, withTimeout } from './services/mcp'
 import { startScheduler, stopScheduler } from './services/cron'
 import { startAmbient, stopAmbient, ambientComputeTrayState } from './services/ambient'
+import { rescanRepos } from './services/repos'
 import { registerIpcHandlers } from './ipc-handlers'
 import { createTray, setTrayState, setUpdateReady, destroyTray, resolveIconPath } from './tray'
 import {
@@ -157,6 +158,9 @@ async function main(): Promise<void> {
 
   // Start ambient intelligence (fire-and-forget, same as connectAllServers)
   startAmbient(() => getWidgetWindow())
+
+  // Scan configured code roots for local git checkouts (fire-and-forget, same as above)
+  rescanRepos().catch((err) => console.error('[repos] startup scan failed:', err))
 
   // Periodic DB maintenance — prune old signals, action log, and decayed graph nodes.
   // Run once at startup (after a short delay) and then every 24 hours.

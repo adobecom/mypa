@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2, User, Power, ChevronDown, ChevronRight } from 'lucide-react'
+import { Check, AlertTriangle, XCircle, RefreshCw, Wand2, Trash2, User, Power, ChevronDown, ChevronRight, FolderPlus } from 'lucide-react'
 import type { AppConfig, McpServerConfig, McpServerStatus, OAuthAppCredential, OAuthProvider, SetupHealth, AutonomyPolicy, Tier, IntentType, ResolvedOwnerHandles, IdentitySurface, GraphNode, GraphEdge, Memory, RepoLink, VaultConfig, CheckInConfig } from '@shared/types'
 import { IDENTITY_SURFACES } from '@shared/types'
 import { MCP_CATALOG } from '@shared/mcp-catalog'
@@ -111,7 +111,8 @@ export default function Settings({ onDirtyChange }: SettingsProps): React.ReactE
   }, [config?.mcp_servers])
 
   const visibleSurfaces = useMemo(
-    () => OWNER_SURFACES.filter((s) => (config?.mcp_servers ?? []).some((m) => m.name === s)),
+    () => OWNER_SURFACES.filter((s) =>
+      (config?.mcp_servers ?? []).some((m) => m.name === s && m.enabled !== false)),
     [config?.mcp_servers]
   )
 
@@ -425,8 +426,7 @@ export default function Settings({ onDirtyChange }: SettingsProps): React.ReactE
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {OWNER_SURFACES.map((surface) => {
-              const connected = visibleSurfaces.includes(surface)
+            {visibleSurfaces.map((surface) => {
               const surfaceStatus = handleStatus[surface]
               const abbrev = surface.slice(0, 2).replace(/^(.)/, (c) => c.toUpperCase())
               return (
@@ -437,41 +437,37 @@ export default function Settings({ onDirtyChange }: SettingsProps): React.ReactE
                     background: 'var(--bg-elevated)', border: '1px solid var(--border-muted)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     flexShrink: 0, fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)',
-                    userSelect: 'none', opacity: connected ? 1 : 0.45
+                    userSelect: 'none'
                   }}>
                     {abbrev}
                   </div>
 
                   {/* Surface label */}
-                  <div style={{ width: 46, fontSize: 12, color: connected ? 'var(--text-primary)' : 'var(--text-muted)', textTransform: 'capitalize', flexShrink: 0 }}>
+                  <div style={{ width: 46, fontSize: 12, color: 'var(--text-primary)', textTransform: 'capitalize', flexShrink: 0 }}>
                     {surface}
                   </div>
 
-                  {/* Handle input — editable only when surface is connected */}
-                  {connected ? (
-                    <input
-                      className="form-input"
-                      type="text"
-                      placeholder={surface === 'jira' ? 'Display Name' : 'handle, handle2'}
-                      value={config.owner?.handles?.[surface] ?? ''}
-                      onChange={(e) => setConfig({
-                        ...config,
-                        owner: {
-                          ...(config.owner ?? {}),
-                          handles: { ...(config.owner?.handles ?? {}), [surface]: e.target.value }
-                        }
-                      })}
-                      style={{
-                        flex: 1,
-                        ...(surfaceStatus?.needsReview ? { borderColor: 'var(--color-warning, #f59e0b)' } : {})
-                      }}
-                    />
-                  ) : (
-                    <div style={{ flex: 1, fontSize: 12, color: 'var(--text-muted)' }}>not connected</div>
-                  )}
+                  {/* Handle input */}
+                  <input
+                    className="form-input"
+                    type="text"
+                    placeholder={surface === 'jira' ? 'Display Name' : 'handle, handle2'}
+                    value={config.owner?.handles?.[surface] ?? ''}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      owner: {
+                        ...(config.owner ?? {}),
+                        handles: { ...(config.owner?.handles ?? {}), [surface]: e.target.value }
+                      }
+                    })}
+                    style={{
+                      flex: 1,
+                      ...(surfaceStatus?.needsReview ? { borderColor: 'var(--color-warning, #f59e0b)' } : {})
+                    }}
+                  />
 
                   {/* Status pill */}
-                  {connected && surfaceStatus && (
+                  {surfaceStatus && (
                     <div style={{
                       display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0,
                       fontSize: 11, fontWeight: 500,
@@ -1187,49 +1183,59 @@ function HealthRow({
 // ─── Repos (code authoring) ───────────────────────────────────────────────────
 
 /**
- * Registers local git checkouts mypa may attempt code fixes in. Each RepoLink
- * maps an existing local clone to the GitHub repo / Jira project keys that
- * should route "attempt a fix" proposals there (see repos.ts resolveRepoForSignal
- * and the author_fix intent flow in authoring.ts). mypa never clones a repo
- * itself — the folder must already exist locally.
+ * mypa discovers local git checkouts by scanning user-chosen "code roots" (see
+ * repos.ts rescanRepos) instead of requiring each repo to be added by hand.
+ * Discovered repos route "attempt a fix" proposals via GitHub repo / Jira
+ * project matching (repos.ts resolveRepoForSignal, authoring.ts) but authoring
+ * is off by default — a repo only becomes eligible once its toggle is enabled
+ * here, since authoring means mypa can open real PRs against the checkout.
+ * mypa never clones a repo itself — only folders that already exist locally
+ * are ever discovered.
  */
 function ReposSection(): React.ReactElement {
   const api = window.electron
   const toast = useToast()
+  const [codeRoots, setCodeRoots] = useState<string[]>([])
   const [repos, setRepos] = useState<RepoLink[]>([])
-  const [showAdd, setShowAdd] = useState(false)
-  const [newPath, setNewPath] = useState('')
-  const [newJiraKeys, setNewJiraKeys] = useState('')
-  const [adding, setAdding] = useState(false)
-  const [addError, setAddError] = useState<string | null>(null)
+  const [addingRoot, setAddingRoot] = useState(false)
+  const [rescanning, setRescanning] = useState(false)
 
   const refresh = useCallback(() => {
-    api.repos.getAll().then(setRepos).catch(console.error)
+    Promise.all([api.repos.getCodeRoots(), api.repos.getAll()])
+      .then(([roots, links]) => { setCodeRoots(roots); setRepos(links) })
+      .catch(console.error)
   }, [api])
 
   useEffect(() => { refresh() }, [refresh])
 
-  async function handleBrowse(): Promise<void> {
-    const picked = await api.system.pickDirectory(false)
-    if (picked.length > 0) setNewPath(picked[0])
+  async function handleAddRoot(): Promise<void> {
+    const picked = await api.system.pickDirectory(true)
+    if (picked.length === 0) return
+    setAddingRoot(true)
+    try {
+      const { roots, repos: links } = await api.repos.addCodeRoots(picked)
+      setCodeRoots(roots)
+      setRepos(links)
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Could not add that folder')
+    } finally {
+      setAddingRoot(false)
+    }
   }
 
-  async function handleAdd(): Promise<void> {
-    if (!newPath.trim()) return
-    setAdding(true)
-    setAddError(null)
+  async function handleRemoveRoot(path: string): Promise<void> {
+    const { roots, repos: links } = await api.repos.removeCodeRoot(path)
+    setCodeRoots(roots)
+    setRepos(links)
+  }
+
+  async function handleRescan(): Promise<void> {
+    setRescanning(true)
     try {
-      const jiraKeys = newJiraKeys.split(',').map((k) => k.trim()).filter(Boolean)
-      await api.repos.add(newPath.trim(), jiraKeys)
-      setNewPath('')
-      setNewJiraKeys('')
-      setShowAdd(false)
+      await api.repos.rescan()
       refresh()
-      toast.success('Repo linked')
-    } catch (err: any) {
-      setAddError(err?.message ?? 'Could not link this repo')
     } finally {
-      setAdding(false)
+      setRescanning(false)
     }
   }
 
@@ -1238,87 +1244,121 @@ function ReposSection(): React.ReactElement {
     refresh()
   }
 
-  async function handleRemove(id: string): Promise<void> {
-    await api.repos.remove(id)
+  async function handleJiraKeysBlur(repo: RepoLink, raw: string): Promise<void> {
+    const keys = raw.split(',').map((k) => k.trim().toUpperCase()).filter(Boolean)
+    if (JSON.stringify(keys) === JSON.stringify(repo.jiraProjectKeys)) return
+    await api.repos.update(repo.id, { jiraProjectKeys: keys })
     refresh()
   }
 
+  const authoringCount = repos.filter((r) => r.authoringEnabled).length
+
   return (
-    <div className="card">
-      <div className="card__header">
-        <div>
-          <div className="card__title">Repos</div>
-          <div className="card__subtitle">Local checkouts mypa may attempt code fixes in</div>
-        </div>
-        <button className="btn btn--ghost btn--sm" onClick={() => setShowAdd(true)}>
-          + Add repo
-        </button>
-      </div>
-
-      {repos.length === 0 && !showAdd && (
-        <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '8px 0' }}>
-          No repos linked. Link a local checkout to let mypa attempt fixes for tickets in that project.
-        </div>
-      )}
-
-      {repos.map((repo) => (
-        <div key={repo.id} className="mcp-server-row">
-          <div className={`mcp-server-row__dot mcp-server-row__dot--${repo.authoringEnabled ? 'connected' : 'disabled'}`} />
-          <div className="mcp-server-row__name">{repo.githubRepo ?? repo.localPath.split('/').pop()}</div>
-          <div className="mcp-server-row__count">
-            {repo.localPath}{repo.jiraProjectKeys.length > 0 ? ` · ${repo.jiraProjectKeys.join(', ')}` : ''}
+    <>
+      <div className="card">
+        <div className="card__header">
+          <div>
+            <div className="card__title">Code roots</div>
+            <div className="card__subtitle">Parent folders mypa scans for local git repos</div>
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
+            {codeRoots.length > 0 && (
+              <button
+                className="btn btn--ghost btn--sm"
+                onClick={handleRescan}
+                disabled={rescanning}
+                style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+              >
+                <RefreshCw size={13} />
+                {rescanning ? 'Rescanning…' : 'Rescan'}
+              </button>
+            )}
             <button
               className="btn btn--ghost btn--sm"
-              onClick={() => handleToggleAuthoring(repo)}
+              onClick={handleAddRoot}
+              disabled={addingRoot}
               style={{ display: 'flex', alignItems: 'center', gap: 4 }}
             >
-              <Power size={13} />
-              {repo.authoringEnabled ? 'Disable' : 'Enable'}
-            </button>
-            <button className="btn btn--danger btn--sm" onClick={() => handleRemove(repo.id)}>
-              Remove
+              <FolderPlus size={13} />
+              {addingRoot ? 'Adding…' : 'Add folder'}
             </button>
           </div>
         </div>
-      ))}
 
-      {showAdd && (
-        <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', padding: 12, marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div className="form-group">
-            <label className="form-label">Local path</label>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <input
-                className="form-input"
-                value={newPath}
-                onChange={(e) => setNewPath(e.target.value)}
-                placeholder="/Users/you/Code/my-repo"
-                style={{ flex: 1 }}
-              />
-              <button className="btn btn--ghost btn--sm" onClick={handleBrowse}>Browse…</button>
-            </div>
-            <div className="form-hint">Must already be a git checkout — mypa never clones a repo on its own.</div>
+        {codeRoots.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '8px 0' }}>
+            No code roots yet. Add a parent folder to let mypa discover your local repos.
           </div>
-          <div className="form-group">
-            <label className="form-label">Jira project keys (comma-separated, optional)</label>
+        ) : (
+          codeRoots.map((root) => (
+            <div key={root} className="mcp-server-row">
+              <div className="mcp-server-row__name" style={{ fontWeight: 400 }}>{root}</div>
+              <button className="btn btn--ghost btn--sm" onClick={() => handleRemoveRoot(root)}>
+                <Trash2 size={13} />
+              </button>
+            </div>
+          ))
+        )}
+        <div className="form-hint" style={{ marginTop: 8 }}>
+          mypa never clones a repo — it only reads existing checkouts already under these folders.
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card__header">
+          <div>
+            <div className="card__title">Discovered repos</div>
+            <div className="card__subtitle">Authoring is off by default — enable it per repo to let mypa open PRs there</div>
+          </div>
+        </div>
+
+        {repos.length === 0 && codeRoots.length === 0 && (
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '8px 0' }}>
+            No repos discovered yet. Add a code root above.
+          </div>
+        )}
+        {repos.length === 0 && codeRoots.length > 0 && (
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '8px 0' }}>
+            No repos found under your code roots — check that they contain git checkouts in your scope.
+          </div>
+        )}
+
+        {repos.map((repo) => (
+          <div key={repo.id} className="mcp-server-row" style={{ alignItems: 'flex-start' }}>
+            <div
+              className={`mcp-server-row__dot mcp-server-row__dot--${repo.authoringEnabled ? 'connected' : 'disabled'}`}
+              style={{ marginTop: 6 }}
+            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="mcp-server-row__name">
+                {repo.githubRepo ?? repo.localPath.split('/').pop()}
+                {repo.source === 'manual' && (
+                  <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 400, color: 'var(--text-muted)' }}>manual</span>
+                )}
+              </div>
+              <div className="mcp-server-row__count">{repo.localPath}</div>
+            </div>
             <input
               className="form-input"
-              value={newJiraKeys}
-              onChange={(e) => setNewJiraKeys(e.target.value)}
-              placeholder="PROJ, ABC"
+              style={{ width: 130, fontSize: 12 }}
+              placeholder="Jira keys"
+              defaultValue={repo.jiraProjectKeys.join(', ')}
+              onBlur={(e) => handleJiraKeysBlur(repo, e.target.value)}
             />
+            <label className="toggle" title={repo.authoringEnabled ? 'Authoring is on for this repo' : 'Authoring is off for this repo'}>
+              <input type="checkbox" checked={repo.authoringEnabled} onChange={() => handleToggleAuthoring(repo)} />
+              <span className="toggle__track" />
+            </label>
           </div>
-          {addError && <div className="alert alert--error">{addError}</div>}
-          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-            <button className="btn btn--ghost btn--sm" onClick={() => { setShowAdd(false); setAddError(null) }}>Cancel</button>
-            <button className="btn btn--primary btn--sm" onClick={handleAdd} disabled={adding || !newPath.trim()}>
-              {adding ? 'Linking…' : 'Link repo'}
-            </button>
+        ))}
+
+        {repos.length > 0 && (
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
+            {repos.length} repo{repos.length === 1 ? '' : 's'} discovered, {authoringCount} authoring-enabled
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </>
   )
 }
 

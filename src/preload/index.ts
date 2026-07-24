@@ -45,9 +45,11 @@ const api: IpcApi = {
   },
   repos: {
     getAll: () => ipcRenderer.invoke('repos:get-all'),
-    add: (localPath, jiraProjectKeys) => ipcRenderer.invoke('repos:add', localPath, jiraProjectKeys),
     update: (id, update) => ipcRenderer.invoke('repos:update', id, update),
-    remove: (id) => ipcRenderer.invoke('repos:remove', id)
+    getCodeRoots: () => ipcRenderer.invoke('repos:get-code-roots'),
+    addCodeRoots: (paths) => ipcRenderer.invoke('repos:add-code-roots', paths),
+    removeCodeRoot: (path) => ipcRenderer.invoke('repos:remove-code-root', path),
+    rescan: () => ipcRenderer.invoke('repos:rescan')
   },
   oauth: {
     startPkce: (provider: 'notion' | 'linear') => ipcRenderer.invoke('oauth:start-pkce', provider)

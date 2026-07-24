@@ -34,7 +34,7 @@ import {
   dbGetRecentUsage
 } from './db/index'
 import { readConfig, updateConfig, clearClaudeApiKey, resetConfig } from './services/config'
-import { getAllRepoLinks, addRepoLink, updateRepoLink, removeRepoLink } from './services/repos'
+import { getAllRepoLinks, updateRepoLink, getCodeRoots, addCodeRoots, removeCodeRoot, rescanRepos } from './services/repos'
 import { startAuthoring, getWorkProductForIntent, shipWorkProduct, discardWorkProduct } from './services/authoring'
 import { reconnectServer, getServerStatus, connectAllServers, disconnectAllServers, resolveOwnerHandles, withTimeout } from './services/mcp'
 import { startPkceFlow } from './services/oauth'
@@ -297,16 +297,28 @@ export function registerIpcHandlers(
     return getAllRepoLinks()
   })
 
-  ipcMain.handle('repos:add', async (_e, localPath: string, jiraProjectKeys: string[]) => {
-    return addRepoLink(localPath, jiraProjectKeys)
-  })
-
   ipcMain.handle('repos:update', async (_e, id: string, update: Record<string, unknown>) => {
     return updateRepoLink(id, update)
   })
 
-  ipcMain.handle('repos:remove', async (_e, id: string) => {
-    removeRepoLink(id)
+  ipcMain.handle('repos:get-code-roots', async () => {
+    return getCodeRoots()
+  })
+
+  ipcMain.handle('repos:add-code-roots', async (_e, paths: string[]) => {
+    addCodeRoots(paths)
+    await rescanRepos()
+    return { roots: getCodeRoots(), repos: getAllRepoLinks() }
+  })
+
+  ipcMain.handle('repos:remove-code-root', async (_e, path: string) => {
+    removeCodeRoot(path)
+    await rescanRepos()
+    return { roots: getCodeRoots(), repos: getAllRepoLinks() }
+  })
+
+  ipcMain.handle('repos:rescan', async () => {
+    return rescanRepos()
   })
 
   // ─── OAuth ─────────────────────────────────────────────────────────────────

@@ -274,6 +274,8 @@ export interface AppConfig {
   checkin?: CheckInConfig
   scope?: ScopeConfig
   repos?: RepoLink[]
+  /** Parent folders mypa scans for local git checkouts (see repos.ts rescanRepos). */
+  codeRoots?: string[]
   knowledge?: KnowledgeConfig
 }
 
@@ -301,6 +303,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     scheduleEnabled: false
   },
   repos: [],
+  codeRoots: [],
   knowledge: {
     vault: { path: '', folders: [], enabled: false }
   }
@@ -331,7 +334,9 @@ export interface KnowledgeConfig {
 /**
  * Links an external work surface (GitHub repo / Jira project) to a repo already
  * checked out on the local machine, so mypa knows where to run code-authoring work.
- * Registered manually in Settings — mypa never clones a repo on the user's behalf.
+ * Auto-discovered by scanning the user's configured `codeRoots` (see repos.ts
+ * rescanRepos) — mypa never clones a repo on the user's behalf. A `source: 'manual'`
+ * link may also exist from before auto-discovery shipped; the scanner never touches those.
  */
 export interface RepoLink {
   id: string
@@ -345,8 +350,14 @@ export interface RepoLink {
   /** Branch new worktrees are created from. Defaults to the repo's current default branch. */
   defaultBaseBranch: string
   /** When false, mypa may still comment/label/etc. on items in this repo but will never
-   *  propose or run authoring work against it. Defaults to true once linked. */
+   *  propose or run authoring work against it. Defaults to false — authoring is opt-in
+   *  per repo, since it means mypa can open real PRs against the checkout. */
   authoringEnabled: boolean
+  /** 'discovered' repos are managed by rescanRepos and reconciled automatically; absent
+   *  or 'manual' means it predates auto-discovery and is never touched by the scanner. */
+  source?: 'discovered' | 'manual'
+  /** ISO timestamp of the most recent scan that found this repo on disk. */
+  lastSeenAt?: string
   created_at: string
 }
 
@@ -798,11 +809,17 @@ export interface IpcApi {
   }
   repos: {
     getAll(): Promise<RepoLink[]>
-    /** Registers a local repo. Reads `git remote get-url origin` and the current
-     *  branch to prefill githubRepo/defaultBaseBranch when not provided. */
-    add(localPath: string, jiraProjectKeys: string[]): Promise<RepoLink>
+    /** Per-repo edits a user can make on a discovered (or legacy manual) RepoLink —
+     *  authoringEnabled and jiraProjectKeys. localPath/githubRepo are scanner-owned. */
     update(id: string, update: Partial<Omit<RepoLink, 'id' | 'created_at'>>): Promise<RepoLink>
-    remove(id: string): Promise<void>
+    /** Parent folders mypa scans for local git checkouts. */
+    getCodeRoots(): Promise<string[]>
+    /** Adds code roots and immediately rescans; returns the updated roots and repos. */
+    addCodeRoots(paths: string[]): Promise<{ roots: string[]; repos: RepoLink[] }>
+    /** Removes a code root and immediately rescans; returns the updated roots and repos. */
+    removeCodeRoot(path: string): Promise<{ roots: string[]; repos: RepoLink[] }>
+    /** Re-scans all configured code roots on demand (e.g. a "Rescan" button). */
+    rescan(): Promise<RepoLink[]>
   }
   oauth: {
     startPkce(provider: 'notion' | 'linear'): Promise<string>

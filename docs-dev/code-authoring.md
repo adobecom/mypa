@@ -48,14 +48,16 @@ interface RepoLink {
   githubRepo?: string        // "owner/name", derived from `git remote get-url origin`
   jiraProjectKeys: string[]  // e.g. ["PROJ"]
   defaultBaseBranch: string  // derived from origin/HEAD
-  authoringEnabled: boolean
+  authoringEnabled: boolean  // opt-in per repo; defaults to false for discovered repos
+  source?: 'discovered' | 'manual'
+  lastSeenAt?: string        // ISO timestamp of the most recent scan that found this repo
   created_at: string
 }
 ```
 
-Stored in `AppConfig.repos` (config.json), not the DB — registration is a config mutation, mirroring how MCP servers are configured. Managed via the `repos` IPC namespace (`repos.ts`) and the Settings "Repos" section (`ReposSection` in `Settings.tsx`). mypa **never clones a repo itself** — `addRepoLink` validates `.git` is present and only reads (`git remote get-url origin`, `git symbolic-ref .../HEAD`).
+Stored in `AppConfig.repos` (config.json), not the DB — registration is a config mutation, mirroring how MCP servers are configured. `RepoLink`s are **auto-discovered**, not hand-registered: the user configures one or more parent folders (`AppConfig.codeRoots`) in Settings, and `repos.ts` `rescanRepos()` walks each for git checkouts, deriving `githubRepo`/`defaultBaseBranch` and filtering to the configured GitHub-org scope. New discoveries default `authoringEnabled: false` — authoring (mypa opening a real PR against the checkout) is an explicit per-repo opt-in, toggled in the Settings "Repos" section (`ReposSection` in `Settings.tsx`). mypa **never clones a repo itself** — the scanner only reads (`.git` presence, `git remote get-url origin`, `git symbolic-ref .../HEAD`). A `source: 'manual'` link may still exist from before auto-discovery shipped; the scanner never edits or removes those.
 
-`resolveRepoForSignal(signal)` / `resolveRepoForNode(key, url?)` match a signal or graph-node key to a `RepoLink`, reusing the same owner/repo and Jira-project-key parsing as `deriveContainer` in `memory-graph.ts`.
+`resolveRepoForSignal(signal)` / `resolveRepoForNode(key, url?)` match a signal or graph-node key to a `RepoLink` with `authoringEnabled`, reusing the same owner/repo and Jira-project-key parsing as `deriveContainer` in `memory-graph.ts`.
 
 ## Isolated worktrees
 
@@ -109,5 +111,6 @@ A `WorkProduct` (`work_products` table, see [database.md](database.md)) is the d
 
 ## Changelog
 
+- 2026-07-23 — **Repo links are auto-discovered from user-chosen code roots instead of added by hand.** See [services.md](services.md#changelog) for the full scan/reconciliation writeup. Summary here: `RepoLink` gains `source`/`lastSeenAt`; `authoringEnabled` now defaults to `false` for every newly discovered repo (was `true` on manual add) — a repo only becomes an authoring target once the user flips its toggle in Settings.
 - 2026-07-09 — **Security review pass before first release: closed a model-controlled action-redirection gap and hardened the authoring sandbox.** `inference.ts` no longer lets the author-fix decision model choose the ticket/Slack destination for the ship-time comment — new `deriveTrustedTicketRouting` derives it from the trusted triggering graph node instead (mirroring `enrichPayloadForRouting` in `ambient.ts`); the Slack-notification step and `reviewers` field were removed entirely rather than shipped with an unvalidated model-chosen destination. `agent.ts`'s `canUseTool` now also confines `Grep`/`Glob` to the worktree by path (previously unconditionally allowed — a de facto arbitrary-file-read); `BASH_DENY_RE` expanded to cover `git ls-remote` and common network/DNS tools with no legitimate use in a build/test workflow. See "The authoring agent" above for the residual, honestly-documented limits (Bash is not fully path-confined; a live Anthropic credential is present in the agent's environment).
 - 2026-07-09 — Initial slice: `RepoLink`/`WorkProduct` types, `repos.ts`, `worktree.ts`, `authoring.ts`, `runAuthoringAgent` in `agent.ts`, `work_products` table, `author_fix` proposal path in `inferDeepIntent`, `repos`/`ambient.*` IPC, `WorkProductCard.tsx`, Settings `ReposSection`.
