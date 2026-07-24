@@ -37,7 +37,7 @@ import { readConfig, updateConfig, clearClaudeApiKey, resetConfig } from './serv
 import { getAllRepoLinks, updateRepoLink, getCodeRoots, addCodeRoots, removeCodeRoot, rescanRepos } from './services/repos'
 import { startAuthoring, getWorkProductForIntent, shipWorkProduct, discardWorkProduct } from './services/authoring'
 import { reconnectServer, getServerStatus, connectAllServers, disconnectAllServers, resolveOwnerHandles, withTimeout } from './services/mcp'
-import { startPkceFlow } from './services/oauth'
+import { startPkceFlow, startDeviceLogin } from './services/oauth'
 import { detectClaudeMcpServers } from './services/claude-import'
 import { executeRoutine, handleRunMessage } from './services/routines'
 import { createPlanDraft, confirmPlanDraft, updatePlanItemStatus, deletePlanItem, handlePlanMessage, approvePlanAction, dismissPlanAction } from './services/plan'
@@ -325,6 +325,12 @@ export function registerIpcHandlers(
 
   ipcMain.handle('oauth:start-pkce', async (_e, provider: 'notion' | 'linear') => {
     return startPkceFlow(provider)
+  })
+
+  ipcMain.handle('oauth:start-device-login', async (_e, entryId: string, env: Record<string, string>) => {
+    const entry = MCP_CATALOG.find((e) => e.id === entryId)
+    if (!entry) throw new Error(`Unknown catalog entry: ${entryId}`)
+    return startDeviceLogin(entryId, entry.command, [...entry.baseArgs, '--login'], env)
   })
 
   // ─── Setup / Health ────────────────────────────────────────────────────────

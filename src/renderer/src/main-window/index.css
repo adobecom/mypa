@@ -355,6 +355,13 @@ html, body, #root {
   animation: shimmer 600ms ease forwards;
 }
 
+/* Insights (`.routine-card`, shared with the widget popup via components.css) uses a
+   3px vertical margin sized for the widget's compact layout — too tight for the main
+   window, so widen it here to match `.card`'s 14px rhythm without touching the popup. */
+.routine-card {
+  margin: 3px 10px 14px;
+}
+
 .card__header {
   display: flex;
   align-items: center;
@@ -664,6 +671,13 @@ html, body, #root {
 
 .mcp-server-row__name { font-weight: 500; flex: 1; }
 .mcp-server-row__count { font-size: 11px; color: var(--text-muted); }
+
+/* ─── Discovered repos list ─────────────────────────────────────────────────── */
+
+.repo-list {
+  max-height: 300px;
+  overflow-y: auto;
+}
 
 /* ─── MCP tool inspector ────────────────────────────────────────────────────── */
 

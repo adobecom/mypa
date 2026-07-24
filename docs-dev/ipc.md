@@ -74,7 +74,7 @@ Links external repos/projects (GitHub `owner/repo`, Jira project keys) to a loca
 | Method | Signature | Description |
 |---|---|---|
 | `getAll` | `() → RepoLink[]` | List all registered repo links (discovered + any legacy manual ones) |
-| `update` | `(id, update: Partial<RepoLink>) → RepoLink` | Patch a repo link — used for the per-repo `authoringEnabled` toggle and `jiraProjectKeys` edits. `localPath`/`githubRepo` are scanner-owned and not user-editable. |
+| `update` | `(id, update: Partial<RepoLink>) → RepoLink` | Patch a repo link — used for the per-repo `authoringEnabled` toggle. `localPath`/`githubRepo`/`jiraProjectKeys` are scanner-owned (re-derived on every rescan) and not user-editable. |
 | `getCodeRoots` | `() → string[]` | Parent folders mypa scans for local git checkouts |
 | `addCodeRoots` | `(paths: string[]) → { roots: string[]; repos: RepoLink[] }` | Adds code roots and immediately rescans; returns the updated roots and repo list |
 | `removeCodeRoot` | `(path: string) → { roots: string[]; repos: RepoLink[] }` | Removes a code root and immediately rescans |
@@ -82,13 +82,14 @@ Links external repos/projects (GitHub `owner/repo`, Jira project keys) to a loca
 
 ### `oauth`
 
-OAuth flows for Notion and Linear. GitHub is not an OAuth entry — it's a plain PAT/`api_key` catalog entry (see [mcp-and-oauth.md](mcp-and-oauth.md#github--personal-access-token)).
+OAuth/sign-in flows. PKCE for Notion and Linear; device-code sign-in for Outlook. GitHub is not an OAuth entry — it's a plain PAT/`api_key` catalog entry (see [mcp-and-oauth.md](mcp-and-oauth.md#github--personal-access-token)).
 
 | Method | Signature | Description |
 |---|---|---|
 | `startPkce` | `(provider: 'notion' \| 'linear') → string` | Begin PKCE flow; returns the authorization URL to open in browser |
+| `startDeviceLogin` | `(entryId: string, env: Record<string, string>) → void` | Run a catalog entry's own device-code login (currently `outlook`); resolves once sign-in completes. No token is returned — the MCP server manages its own token cache. See [mcp-and-oauth.md](mcp-and-oauth.md#outlook--device-code-flow) |
 
-The redirect URI for PKCE is `mypa://oauth/callback`. The `state` nonce is validated in `oauth.ts` to prevent authorization code injection.
+The redirect URI for PKCE is `mypa://oauth/callback`. The `state` nonce is validated in `oauth.ts` to prevent authorization code injection. The device-code user code and verification URL are delivered separately via the `oauth:device-code` push channel (below), not this method's return value.
 
 ### `setup`
 
@@ -209,6 +210,7 @@ Subscribed with `window.electron.on(channel, listener)`. Returns an unsubscribe 
 | `ambient:chat-message` | `{ intentId: string; chunk: string; done: boolean; error?: string }` | Streaming chunk for an intent's "Chat about it" reply. `done: true` signals completion or error. | **widget + main** |
 | `chat:tool-approval-request` | `PendingToolApproval` | An agent stream reached a write tool and is paused waiting for user approval. The renderer should show an inline approval UI. Resolved by calling `window.electron.chat.resolveToolApproval(approvalId, allow, editedInput?)`. | **widget + main** |
 | `chat:ask-question` | `PendingQuestion` | The model called the `ask_user` tool and the stream is paused waiting for the user's selection. The renderer shows clickable option chips. Resolved by calling `window.electron.chat.answerQuestion(questionId, answer)`. | **widget + main** |
+| `oauth:device-code` | `{ entryId: string; userCode: string; verificationUri: string }` | A device-code login (`oauth.startDeviceLogin`) reached its MSAL device-code prompt. The renderer shows the code and opens `verificationUri` (also auto-opened in the system browser by the main process). | main only |
 
 **`routine:run-started` and `routine:run-completed` are broadcast to both windows** via `broadcast()` in `src/main/windows.ts`. The main window uses them to drive in-app toast notifications. The widget uses them to update its inline run card. All other events remain window-specific.
 
@@ -291,6 +293,8 @@ Manage PA check-in sessions and their chat threads.
 | `openInMainWindow` | `(checkinId?) → void` | Open main window on Check-in page, expanding the given session |
 
 ## Changelog
+
+- 2026-07-23 — **Add Outlook device-code sign-in: `oauth.startDeviceLogin` + `oauth:device-code` push channel.** New `IpcApi.oauth.startDeviceLogin(entryId, env)` (channel `oauth:start-device-login`) runs a catalog entry's own login command and resolves once it exits — used by the new `outlook` connector, whose MCP server manages its own Microsoft token cache/refresh rather than mypa performing an OAuth handshake. New push channel `oauth:device-code` (`{ entryId, userCode, verificationUri }`) delivers the MSAL device code to the renderer as it appears in the login process's output. `AppConfig` gains `device_login_at?: Record<string, string>` (display-only "Connected on <date>" timestamp, not a credential). See [mcp-and-oauth.md](mcp-and-oauth.md#outlook--device-code-flow).
 
 - 2026-07-23 — **`repos` namespace switches from manual add/remove to code-root auto-discovery.** `repos.add`/`repos.remove` removed; added `repos.getCodeRoots`, `repos.addCodeRoots`, `repos.removeCodeRoot`, `repos.rescan`. `repos.getAll`/`repos.update` unchanged in shape, but discovered `RepoLink`s now default `authoringEnabled: false` and carry `source`/`lastSeenAt`. See [services.md](services.md#changelog) for the scan/reconciliation details.
 

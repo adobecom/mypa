@@ -16,7 +16,7 @@ A local-first personal assistant for developers, built as a macOS/Linux/Windows 
 - **Owner identity** — set your name and per-surface handles (GitHub, Slack, Jira, Linear, Notion) so the assistant addresses you as "you" rather than by handle; auto-fills from connected MCP servers with one click
 - **Usage dashboard** — detailed token usage and estimated cost breakdown by feature, model, and time period; powered by data the Claude Agent SDK already reports
 - **MCP integration** — connect to any MCP server (local stdio process) from a built-in catalog or custom config; auto-import from an existing Claude Code config
-- **OAuth integrations** — Notion PKCE and Linear PKCE for enriching routines with live data; GitHub connects via a personal access token instead of OAuth, since org OAuth-app access-control policies can block a device-flow connection
+- **OAuth integrations** — Notion PKCE and Linear PKCE for enriching routines with live data; GitHub connects via a personal access token instead of OAuth, since org OAuth-app access-control policies can block a device-flow connection; Outlook (Microsoft 365 email + calendar) connects via a device-code sign-in that the MCP server manages end-to-end, including token refresh
 
 ## Prerequisites
 

@@ -1,6 +1,6 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { existsSync, readdirSync, realpathSync, type Dirent } from 'fs'
+import { existsSync, readdirSync, realpathSync, statSync, type Dirent } from 'fs'
 import { join, parse as parsePath } from 'path'
 import { homedir } from 'os'
 import { randomUUID } from 'crypto'
@@ -78,6 +78,53 @@ async function deriveRepoMetadata(localPath: string): Promise<{ githubRepo?: str
   }
 
   return { githubRepo, defaultBaseBranch }
+}
+
+/**
+ * Technical acronyms that commonly appear as ALL-CAPS-followed-by-a-number in commit
+ * messages (hash/encoding/standards references) but are never real Jira project key
+ * prefixes — excluded so e.g. "SHA-256" or "UTF-8" mentioned twice doesn't get inferred
+ * as a Jira key.
+ */
+const NON_JIRA_KEY_ACRONYMS = new Set(['SHA', 'UTF', 'AES', 'ISO', 'RFC', 'ECMA', 'IEEE', 'DES', 'CRC'])
+
+/**
+ * Infers Jira project keys (e.g. "PROJ") from recent commit subjects/bodies and local
+ * branch names — never clones or modifies anything. Keys are surfaced automatically
+ * instead of asked for by hand, since a repo can map to zero, one, or several projects
+ * and that mapping is discoverable from history rather than something the user should
+ * have to maintain per repo.
+ */
+async function deriveJiraProjectKeys(localPath: string): Promise<string[]> {
+  const text: string[] = []
+  try {
+    text.push(await runGit(localPath, ['log', '--format=%s%n%b', '-n', '300']))
+  } catch {
+    // Shallow clone, empty repo, or unreadable history — no commits to scan.
+  }
+  try {
+    text.push(await runGit(localPath, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']))
+  } catch {
+    // No local branches to scan.
+  }
+
+  const counts = new Map<string, number>()
+  const keyPattern = /\b([A-Z][A-Z0-9]{1,9})-\d+/g
+  for (const blob of text) {
+    for (const match of blob.matchAll(keyPattern)) {
+      const key = match[1].toUpperCase()
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+  }
+
+  // Keep keys seen more than once (drop one-off stray references), excluding common
+  // technical acronyms that share the same KEY-123 shape (SHA-256, UTF-8, ISO-8601, ...)
+  // but are never real Jira project prefixes, most-frequent first.
+  return [...counts.entries()]
+    .filter(([key, count]) => count >= 2 && !NON_JIRA_KEY_ACRONYMS.has(key))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([key]) => key)
 }
 
 export function updateRepoLink(id: string, patch: Partial<Omit<RepoLink, 'id' | 'created_at'>>): RepoLink {
@@ -162,13 +209,15 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 /**
- * Walks `root` looking for git checkouts (a directory containing `.git`), never
- * descending into a repo it already found (avoids submodules / nested worktrees)
- * or into `SCAN_IGNORE_DIRS` / dotfolders / symlinked directories / mypa's own
- * `~/.mypa` tree. Returns realpath-resolved, deduplicated repo paths. Yields back
- * to the event loop periodically so a large root doesn't freeze the whole app —
- * Electron's main process is single-threaded and this walk is otherwise all
- * synchronous fs calls.
+ * Walks `root` looking for git checkouts (a directory whose `.git` is itself a
+ * directory), never descending past a `.git` path it finds — whether that's a real
+ * repo (added to the result) or a worktree's `gitdir:` pointer file (not added, since
+ * it isn't its own repo, but a worktree mirrors its main repo's tree so there's
+ * nothing further inside it to find either) — or into `SCAN_IGNORE_DIRS` / dotfolders
+ * / symlinked directories / mypa's own `~/.mypa` tree. Returns realpath-resolved,
+ * deduplicated repo paths. Yields back to the event loop periodically so a large root
+ * doesn't freeze the whole app — Electron's main process is single-threaded and this
+ * walk is otherwise all synchronous fs calls.
  */
 async function findGitRepos(root: string): Promise<string[]> {
   const found = new Set<string>()
@@ -186,9 +235,18 @@ async function findGitRepos(root: string): Promise<string[]> {
     dirsVisited++
     if (dirsVisited % SCAN_YIELD_EVERY === 0) await yieldToEventLoop()
 
-    if (existsSync(join(dir, '.git'))) {
-      found.add(dir)
-      continue // never descend into a repo we already found
+    const gitPath = join(dir, '.git')
+    if (existsSync(gitPath)) {
+      // A worktree's `.git` is a file containing a `gitdir:` pointer back at the
+      // main checkout, not a real repo — skip listing it, but still stop descending
+      // (a worktree mirrors its main repo's tree, so there's nothing further to find).
+      try {
+        if (statSync(gitPath).isDirectory()) found.add(dir)
+      } catch {
+        // Disappeared between the existence check and here (e.g. a concurrent
+        // `git worktree remove`) — nothing to add, but still don't descend further.
+      }
+      continue
     }
     if (depth >= SCAN_MAX_DEPTH) continue
 
@@ -269,14 +327,16 @@ async function doRescan(): Promise<RepoLink[]> {
     for (const path of await findGitRepos(root)) foundPaths.add(path)
   }
 
-  const foundMeta = new Map<string, { githubRepo?: string; defaultBaseBranch: string }>()
+  const foundMeta = new Map<string, { githubRepo?: string; defaultBaseBranch: string; jiraProjectKeys: string[] }>()
   for (const path of foundPaths) {
     const meta = await deriveRepoMetadata(path)
-    if (repoOrgInScope(meta.githubRepo)) foundMeta.set(path, meta)
+    if (!repoOrgInScope(meta.githubRepo)) continue
+    const jiraProjectKeys = await deriveJiraProjectKeys(path)
+    foundMeta.set(path, { ...meta, jiraProjectKeys })
   }
 
   // Read config fresh right before the single write below, to shrink the window
-  // in which a concurrent Settings edit (e.g. a jiraProjectKeys change) could race.
+  // in which a concurrent rescan could race.
   const existing = getAllRepoLinks()
   const manual = existing.filter((r) => r.source !== 'discovered')
   // Realpath-normalized so a manual link added before auto-discovery (which may not
@@ -291,13 +351,19 @@ async function doRescan(): Promise<RepoLink[]> {
 
     const prior = existingDiscovered.get(path)
     if (prior) {
-      nextDiscovered.push({ ...prior, githubRepo: meta.githubRepo, defaultBaseBranch: meta.defaultBaseBranch, lastSeenAt: now })
+      nextDiscovered.push({
+        ...prior,
+        githubRepo: meta.githubRepo,
+        defaultBaseBranch: meta.defaultBaseBranch,
+        jiraProjectKeys: meta.jiraProjectKeys,
+        lastSeenAt: now
+      })
     } else {
       nextDiscovered.push({
         id: randomUUID(),
         localPath: path,
         githubRepo: meta.githubRepo,
-        jiraProjectKeys: [],
+        jiraProjectKeys: meta.jiraProjectKeys,
         defaultBaseBranch: meta.defaultBaseBranch,
         authoringEnabled: false,
         source: 'discovered',

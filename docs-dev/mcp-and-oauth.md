@@ -119,6 +119,16 @@ This mirrors the Slack entry's pattern of a `requiredEnv` field with a detailed 
 
 ---
 
+#### Outlook — device-code sign-in, no OAuth handshake
+
+The `outlook` catalog entry (`id: 'outlook'`, `@softeria/ms-365-mcp-server --org-mode`) is `authType: 'device_code'` — a third auth mode alongside `oauth`/`api_key`/`none`. Unlike Notion/Linear, mypa does **not** perform the Microsoft OAuth handshake itself: Microsoft Graph access tokens expire in about an hour and mypa's PKCE flow (below) has no refresh-token support, so implementing it directly would mean re-authenticating constantly. Instead the MCP server owns its own login end-to-end — it runs Microsoft's MSAL device-code flow and caches (and silently refreshes) the token on disk. mypa's only job is to run the server's `--login` step, surface the device code it prints, and wait for the process to exit.
+
+`requiredEnv` on this entry (`MS365_MCP_CLIENT_ID`, `MS365_MCP_TENANT_ID`) are both `optional: true` — the server ships with a built-in multi-tenant Azure app that works out of the box for personal and most work accounts. They only need to be filled in when an org's conditional access / admin consent policy blocks that built-in app, in which case the user registers their own public-client Azure app and pastes its client ID (and tenant ID) here.
+
+See [Outlook — device-code flow](#outlook--device-code-flow) below for the full mechanism.
+
+---
+
 ### Claude Code config import (`claude-import.ts`)
 
 `detectClaudeMcp()` (called from `setup.detectClaudeMcp()` IPC) looks for an existing Claude Code configuration file at known paths and returns `DetectedMcpServer[]` that can be imported into mypa with one click:
@@ -185,6 +195,25 @@ Provider configurations (client IDs, scopes, token endpoints) live in `src/share
 
 ---
 
+### Outlook — device-code flow
+
+Used for the `outlook` catalog entry ([above](#outlook--device-code-sign-in-no-oauth-handshake)), where mypa never handles a Microsoft token directly — the MCP server's own login command does.
+
+```
+startDeviceLogin(entryId: string, env: Record<string, string>) → void
+```
+
+Steps (`oauth.ts`):
+1. `ipc-handlers.ts` looks up the catalog entry and spawns `<command> [...baseArgs, '--login']` (e.g. `npx -y @softeria/ms-365-mcp-server --org-mode --login`) with the user's optional client-id/tenant-id overrides merged into its env, plus a pinned `MS365_MCP_TOKEN_CACHE_PATH` (`~/.mypa/ms365-token-cache.json`, same path `mcp.ts` injects when connecting the server, so login and the live server share one cache). The spawned child is tracked in a module-level `activeLogins` set purely so `killActiveDeviceLogins()` can terminate any still-running login on app quit (mirroring `mcp.ts`'s `disconnectAllServers` on the same quit path) — it plays no role in the login flow itself.
+2. `startDeviceLogin` watches the child's combined stdout/stderr for MSAL's device-code prompt (`open the page <url> ... enter the code <code>`) via a tolerant regex — not an exact string match, since the prompt text is MSAL-owned. `--login` always initiates a fresh MSAL device-code request — the CLI login step has no cache-first shortcut, so every click of "Connect" requires the user to complete the browser step once, even if a still-valid cached token already exists. (The cache pays off afterward: the *connected* MCP server process reads it silently on every tool call without ever needing to re-run `--login`.)
+3. On first match, it broadcasts `oauth:device-code` (`{ entryId, userCode, verificationUri }`) to all windows and — after checking the captured URL starts with `https://` or `http://`, mirroring the same scheme guard `system:open-external` applies to renderer-supplied URLs, since this one instead comes from parsing subprocess output — opens it in the system browser.
+4. The renderer (`ServerCatalogPicker`'s `device_code` branch) shows the code (with a copy button) and a manual "Open sign-in page" fallback link. Any optional advanced fields (custom Azure client/tenant id) render *above* the Connect button, not below, so an org that needs them sees them before the first sign-in attempt; they're disabled once sign-in succeeds so a later edit can't silently save a server config pointing at a different app/tenant than the one just signed into.
+5. The promise resolves when the child process exits 0 and records `device_login_at[entryId]` in config for a "Connected on <date>" display. A non-zero exit or a 15-minute timeout rejects with the process's recent output.
+
+No token is ever returned to or stored by mypa — `handleAdd` in `ServerCatalogPicker` saves the server config as-is (command/args/optional env overrides only) once `deviceLoginDone` is true.
+
+---
+
 ### Connection status
 
 `SetupHealth.servers[]` (from `setup.getHealth()`) reports per-server health:
@@ -236,6 +265,8 @@ The in-process `ask_user` MCP server (created by `buildAskUserServer`) is regist
 This blocking wait (and the equivalent one in `ask_user`) is covered by a human-wait latch in `streamAgentChatOnce` that keeps the idle timer from mistaking a slow human for a stalled model/tool — see [claude-integration.md](claude-integration.md#streamagentchat--streaming-multi-turn-chat) for the full mechanism and its 30-minute absolute cap.
 
 ## Changelog
+
+- 2026-07-23 — **Add Outlook connector via device-code sign-in (`mcp-catalog.ts`, `oauth.ts`, `mcp.ts`, `ipc-handlers.ts`, `preload/index.ts`, `types.ts`, `index.ts`, `ServerCatalogPicker.tsx`):** New `outlook` catalog entry (`@softeria/ms-365-mcp-server --org-mode`) for Microsoft 365 email/calendar. Added a third `McpCatalogEntry.authType`, `'device_code'`, alongside `oauth`/`api_key`/`none` — used because Microsoft Graph tokens expire hourly and mypa's PKCE flow has no refresh-token support, so the MCP server (not mypa) owns the full Microsoft login/refresh lifecycle via its own `--login` MSAL device-code flow. New `oauth.ts` export `startDeviceLogin(entryId, command, args, env)` spawns that login command, parses the device code + verification URL from its stdout/stderr via a tolerant regex, broadcasts `oauth:device-code` and opens the browser (after a `https://`/`http://` scheme check — the URL comes from parsing subprocess output, not a URL mypa built itself, so it gets the same guard `system:open-external` already applies to renderer-supplied URLs), then resolves on process exit 0 (recording `device_login_at[entryId]` in config) or rejects on failure/15-min timeout. The spawned child is tracked in a module-level set; new export `killActiveDeviceLogins()` terminates any still running and is called from `index.ts`'s `cleanupAndExit` (alongside `disconnectAllServers`) so a login started but abandoned mid-flow can't outlive the app on quit. New `oauth:start-device-login` IPC handler resolves the command from `MCP_CATALOG` by entry id. `mcp.ts` pins `MS365_MCP_TOKEN_CACHE_PATH` to `~/.mypa/ms365-token-cache.json` for the `outlook` server (mirroring the Slack cache-file pattern) so the login process and the connected server share one token cache. `EnvField` gains `optional?: boolean` — the outlook entry's `MS365_MCP_CLIENT_ID`/`MS365_MCP_TENANT_ID` fields use it for the (rarely-needed) custom-Azure-app override. `ServerCatalogPicker` adds a `device_code` UI branch: the optional advanced fields render *above* the "Connect to <name>" button (so an org that needs a custom app sees the fields before its first, otherwise-doomed sign-in attempt) and are disabled once sign-in succeeds (previously they stayed editable post-login, which could silently save a server config against a different Azure app/tenant than the one actually signed into); a device-code display card (with a copy-to-clipboard button, matching the existing Slack-manifest copy pattern) shows the code with a manual "Open sign-in page" fallback; a connected state closes the branch — structurally parallel to the existing `oauth`/PKCE branch but with no token ever handled by the renderer. `OAuthProvider`, `oauth_apps`, and `oauth_connected_at` are untouched — Outlook doesn't use the PKCE machinery at all.
 
 - 2026-07-23 — **Slack: inject cache-file env vars, give Slack tool calls a real longer timeout (`mcp.ts`).** `slack-mcp-server` needs `SLACK_MCP_USERS_CACHE`/`SLACK_MCP_CHANNELS_CACHE` to resolve names — without them `channels_list` is documented upstream as non-functional, and with an `xoxp` token `conversations_unreads` falls back to a slow one-call-per-channel path. `connectServer` now injects both cache paths (under `~/.mypa`) for the `slack` server when not already set in its config, and `callToolTimed` now resolves its timeout from a per-server override map instead of a flat 30 s — Slack gets 150 s, everything else keeps the 30 s default. First attempt at the override (90 s) turned out to be a no-op in practice: it only widened the `withTimeout` race, but never passed a `timeout` to `client.callTool()` itself, so the MCP SDK's own internal 60 s default request timeout fired first regardless — confirmed live against a real enterprise Slack workspace, which surfaced `MCP error -32001: Request timed out` at ~60 s instead of our own message. Fixed by passing `{ timeout: timeoutMs }` as `client.callTool()`'s third argument so the override actually reaches the SDK's own timer, not just our wrapper's. Fixes a routine that was reliably timing out on every run; see [services.md](services.md#changelog) for the full trace and [claude-integration.md](claude-integration.md#changelog) for the accompanying routine-agent fail-fast fix.
 

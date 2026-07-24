@@ -46,7 +46,7 @@ interface RepoLink {
   id: string
   localPath: string          // absolute path to an existing git checkout
   githubRepo?: string        // "owner/name", derived from `git remote get-url origin`
-  jiraProjectKeys: string[]  // e.g. ["PROJ"]
+  jiraProjectKeys: string[]  // e.g. ["PROJ"] — auto-derived from git history, not user-entered
   defaultBaseBranch: string  // derived from origin/HEAD
   authoringEnabled: boolean  // opt-in per repo; defaults to false for discovered repos
   source?: 'discovered' | 'manual'
@@ -55,7 +55,7 @@ interface RepoLink {
 }
 ```
 
-Stored in `AppConfig.repos` (config.json), not the DB — registration is a config mutation, mirroring how MCP servers are configured. `RepoLink`s are **auto-discovered**, not hand-registered: the user configures one or more parent folders (`AppConfig.codeRoots`) in Settings, and `repos.ts` `rescanRepos()` walks each for git checkouts, deriving `githubRepo`/`defaultBaseBranch` and filtering to the configured GitHub-org scope. New discoveries default `authoringEnabled: false` — authoring (mypa opening a real PR against the checkout) is an explicit per-repo opt-in, toggled in the Settings "Repos" section (`ReposSection` in `Settings.tsx`). mypa **never clones a repo itself** — the scanner only reads (`.git` presence, `git remote get-url origin`, `git symbolic-ref .../HEAD`). A `source: 'manual'` link may still exist from before auto-discovery shipped; the scanner never edits or removes those.
+Stored in `AppConfig.repos` (config.json), not the DB — registration is a config mutation, mirroring how MCP servers are configured. `RepoLink`s are **auto-discovered**, not hand-registered: the user configures one or more parent folders (`AppConfig.codeRoots`) in Settings, and `repos.ts` `rescanRepos()` walks each for git checkouts, deriving `githubRepo`/`defaultBaseBranch`/`jiraProjectKeys` and filtering to the configured GitHub-org scope. `jiraProjectKeys` is inferred, not typed in by the user — `deriveJiraProjectKeys` scans recent commit subjects/bodies and local branch names for `KEY-123`-style references and keeps any key seen more than once, since a one-off stray mention shouldn't route a whole repo. New discoveries default `authoringEnabled: false` — authoring (mypa opening a real PR against the checkout) is an explicit per-repo opt-in, toggled in the Settings "Repos" section (`ReposSection` in `Settings.tsx`). mypa **never clones a repo itself** — the scanner only reads (`.git` presence, `git remote get-url origin`, `git symbolic-ref .../HEAD`, `git log`, `git for-each-ref`). A `source: 'manual'` link may still exist from before auto-discovery shipped; the scanner never edits or removes those.
 
 `resolveRepoForSignal(signal)` / `resolveRepoForNode(key, url?)` match a signal or graph-node key to a `RepoLink` with `authoringEnabled`, reusing the same owner/repo and Jira-project-key parsing as `deriveContainer` in `memory-graph.ts`.
 
