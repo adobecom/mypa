@@ -16,6 +16,9 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.preload.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "postinstall": "electron-rebuild -f -w better-sqlite3",
     "pack": "electron-builder --dir",
     "dist": "electron-vite build && electron-builder --publish=never"
@@ -43,11 +46,13 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^5.2.0",
+    "@vitest/coverage-v8": "^3.0.0",
     "electron": "^33.2.0",
     "electron-builder": "^26.15.2",
     "electron-vite": "^5.0.0",
     "typescript": "^5.7.2",
-    "vite": "^7.3.5"
+    "vite": "^7.3.5",
+    "vitest": "^3.0.0"
   },
   "overrides": {
     "uuid": "^11.1.1"

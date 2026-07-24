@@ -9,6 +9,9 @@ npm run dev        # Start in dev mode (Electron + Vite HMR)
 npm run build      # Compile TypeScript and bundle for production
 npm run pack       # Package app into a directory (no installer)
 npm run dist       # Build distributable installer (dmg/AppImage/nsis)
+npm test           # Run the Vitest suite once (CI mode)
+npm run test:watch     # Run the Vitest suite in watch mode
+npm run test:coverage  # Run the Vitest suite with a coverage report
 ```
 
 After changing native dependencies, rebuild them:
@@ -16,7 +19,16 @@ After changing native dependencies, rebuild them:
 npm run postinstall   # Runs electron-rebuild for better-sqlite3
 ```
 
-There are no test commands — the project has no test suite.
+## Testing
+
+The suite (Vitest, in `test/`) covers the main process's logic layer — pure functions
+and service decision-logic (autonomy tiers, trigger evaluators, intent parsing, config
+clauses) — with `electron` and `@main/db/index` mocked rather than real, because (1)
+many services import `electron` at the top purely for definitions and (2)
+`better-sqlite3` is compiled for Electron's ABI, which mismatches the system Node that
+runs Vitest. It intentionally excludes orchestration glue (cron, oauth, worktree git
+ops, LLM subprocess spawning) and has no renderer/UI layer. Full rationale and the
+mocking pattern to follow when adding a test: [`docs-dev/testing.md`](docs-dev/testing.md).
 
 ## UI conventions
 

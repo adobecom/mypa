@@ -18,6 +18,7 @@ This folder contains the full reference documentation for mypa contributors and 
 | [configuration.md](configuration.md) | `~/.mypa/config.json` shape, secret encryption, DB location, build targets |
 | [renderer.md](renderer.md) | UI map of both Electron windows and their React components |
 | [dependencies.md](dependencies.md) | Transitive npm deprecation warnings — why they appear and why they cannot be safely removed |
+| [testing.md](testing.md) | Vitest test suite — scope, the `electron`/DB mocking strategy, layout, and how to add a test |
 
 ## Documentation maintenance convention
 
@@ -36,6 +37,7 @@ This table mirrors the rule in [CLAUDE.md](../CLAUDE.md#documentation-maintenanc
 
 ## Changelog
 
+- 2026-07-23 — added [testing.md](testing.md) for the new Vitest test suite (`npm test`) covering main-process logic and shared pure functions
 - 2026-07-13 — expanded [knowledge-graph.md](knowledge-graph.md) with the new Obsidian vault knowledge source (local markdown ingestion, `document` nodes, `[[wikilink]]` edges)
 - 2026-07-09 — added [code-authoring.md](code-authoring.md) for the new code-authoring subsystem (repos, worktrees, `author_fix` intents, work products, ship pipeline); fixed stale table count (19 → 20)
 - 2026-06-06 — initial documentation suite created
